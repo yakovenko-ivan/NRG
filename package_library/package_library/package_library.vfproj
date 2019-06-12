@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VisualStudioProject ProjectType="typeStaticLibrary" ProjectCreator="Intel Fortran" Keyword="Static Library" Version="11.0" ProjectIdGuid="{4E9554B5-4194-4C58-94B1-6B2B52ABEE58}">
+	<Platforms>
+		<Platform Name="Win32"/></Platforms>
+	<Configurations>
+		<Configuration Name="Debug|Win32" ConfigurationType="typeStaticLibrary">
+				<Tool Name="VFFortranCompilerTool" SuppressStartupBanner="true" DebugInformationFormat="debugEnabled" Optimization="optimizeDisabled" Preprocess="preprocessYes" PreprocessorDefinitions="WIN" WarnInterfaces="true" Traceback="true" BoundsCheck="true" StackFrameCheck="true" RuntimeLibrary="rtMultiThreadedDebugDLL"/>
+				<Tool Name="VFLibrarianTool"/>
+				<Tool Name="VFResourceCompilerTool"/>
+				<Tool Name="VFMidlTool" SuppressStartupBanner="true"/>
+				<Tool Name="VFCustomBuildTool"/>
+				<Tool Name="VFPreLinkEventTool"/>
+				<Tool Name="VFPreBuildEventTool"/>
+				<Tool Name="VFPostBuildEventTool"/></Configuration>
+		<Configuration Name="Release|Win32" ConfigurationType="typeStaticLibrary">
+				<Tool Name="VFFortranCompilerTool" SuppressStartupBanner="true" RuntimeLibrary="rtMultiThreadedDLL"/>
+				<Tool Name="VFLibrarianTool"/>
+				<Tool Name="VFResourceCompilerTool"/>
+				<Tool Name="VFMidlTool" SuppressStartupBanner="true"/>
+				<Tool Name="VFCustomBuildTool"/>
+				<Tool Name="VFPreLinkEventTool"/>
+				<Tool Name="VFPreBuildEventTool"/>
+				<Tool Name="VFPostBuildEventTool"/></Configuration></Configurations>
+	<Files>
+		<Filter Name="Header Files" Filter="fi;fd"/>
+		<Filter Name="Resource Files" Filter="rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe"/>
+		<Filter Name="Source Files" Filter="f90;for;f;fpp;ftn;def;odl;idl">
+		<File RelativePath="..\src\boundary_conditions_class.f90"/>
+		<File RelativePath="..\src\boundary_type_class.f90"/>
+		<File RelativePath="..\src\chemical_properties_class.f90"/>
+		<File RelativePath="..\src\computational_domain_class.f90"/>
+		<File RelativePath="..\src\computational_mesh_class.f90"/>
+		<File RelativePath="..\src\data_io_class.f90"/>
+		<File RelativePath="..\src\data_manager_class.f90"/>
+		<File RelativePath="..\src\data_save_class.f90"/>
+		<File RelativePath="..\src\field_pointers.f90"/>
+		<File RelativePath="..\src\field_scalar_class.f90"/>
+		<File RelativePath="..\src\field_tensor_class.f90"/>
+		<File RelativePath="..\src\field_vector_class.f90"/>
+		<File RelativePath="..\src\global_data.f90"/>
+		<File RelativePath="..\src\kind_parameters.f90"/>
+		<File RelativePath="..\src\mpi_communications_class.f90"/>
+		<File RelativePath="..\src\post_processor_class.f90"/>
+		<File RelativePath="..\src\post_processor_manager_class.f90"/>
+		<File RelativePath="..\src\post_processor_operation_class.f90"/>
+		<File RelativePath="..\src\solver_options_class.f90"/>
+		<File RelativePath="..\src\thermophysical_properties_class.f90"/></Filter></Files>
+	<Globals/></VisualStudioProject>
