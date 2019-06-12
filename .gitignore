@@ -1,0 +1,8 @@
+computing_module/computing_module
+computing_module/src/third_party/soot
+computing_module/src/third_party/dvode
+computing_module/src/third_party/cvode
+computing_module/src/test_versions
+computing_module/src/old_versions
+package_library/package_library
+NRG_GIT_stable_1/
