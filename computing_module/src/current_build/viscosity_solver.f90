@@ -162,7 +162,7 @@ contains
 
 		call this%mpi_support%exchange_conservative_tensor_field(sigma)
 				
-	!$omp parallel default(none)  private(i,j,k,dim1,dim2,plus,sign,div_sigma_v,div_sigma,av_sigma1,av_velocity1,av_sigma2,av_velocity2) , &
+	!$omp parallel default(none)  private(i,j,k,dim1,dim2,plus,sign,div_sigma_v,div_sigma,av_sigma1,av_velocity1,av_sigma2,av_velocity2,lame_coeffs) , &
 	!$omp& firstprivate(this)	,&
 	!$omp& shared(bc,mesh,v_prod,v,rho,E_f_prod,sigma,time_step,cons_inner_loop,dimensions,cell_size,coordinate_system) 
 	!$omp do collapse(3) schedule(static)
@@ -282,7 +282,7 @@ contains
 
 		call this%mpi_support%exchange_conservative_vector_field(v)					
 					
-		!$omp parallel default(none)  private(i,j,k,dim1,dim2,dim3,div_v) , &
+		!$omp parallel default(none)  private(i,j,k,dim1,dim2,dim3,div_v,nu_node,v_face_h1,v_face_l1,v_face_h2,v_face_l2,lame_coeffs) , &
 		!$omp& firstprivate(this)	,&
 		!$omp& shared(mesh,sigma,v,nu,cons_inner_loop,cell_size,dimensions,coordinate_system) 
 		!$omp do collapse(3) schedule(static)
