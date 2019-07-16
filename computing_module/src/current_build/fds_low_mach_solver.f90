@@ -334,6 +334,9 @@ contains
 		call this%calculate_interm_Y_predictor(this%time_step)
 		call this%state_eq%apply_state_equation_low_mach_fds(this%time_step,predictor=.true.)		
 		call this%apply_boundary_conditions(this%time_step,predictor=.true.)		
+		
+		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
+
 		call this%calculate_divergence_v		(this%time_step,predictor=.true.)
 		call this%calculate_pressure_poisson	(this%time_step,predictor=.true.)
 		call this%calculate_velocity			(this%time_step,predictor=.true.)
@@ -378,9 +381,12 @@ contains
 		
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
-
+		
+		real(dkind), dimension (3,3)	:: lame_coeffs
+		character(len=20)				:: coordinate_system
+		
 		integer	:: bound_number
-		integer :: i,j,k,dim,spec
+		integer :: i,j,k,dim,spec,droplets_phase_counter
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -388,6 +394,8 @@ contains
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		
+		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		allocate(Y_rho_int(species_number))
 		
@@ -398,17 +406,36 @@ contains
 					Y_int			=> this%Y_int%v_ptr			, &
 					Y_prod_diff		=> this%Y_prod_diff%v_ptr	, &
 					Y_prod_chem		=> this%Y_prod_chem%v_ptr	, &
+					Y_prod_droplets	=> this%Y_prod_droplets	, &
+					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 					
-			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,Y_rho_int,rhs,flux_right,flux_left) , &
+			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,Y_rho_int,rhs,flux_right,flux_left,lame_coeffs) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(v_f,Y_prod_diff,Y_prod_chem,Y,Y_old,Y_int,rho,rho_old,rho_int,bc,cons_inner_loop,species_number,dimensions,cell_size,time_step)					
+			!$omp& shared(v_f,Y_prod_diff,Y_prod_chem,Y,Y_old,Y_int,rho,rho_old,rho_int,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,time_step)					
 			!$omp do collapse(3) schedule(guided)	
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then	
 
+					lame_coeffs		= 1.0_dkind				
+				
+					select case(coordinate_system)
+						case ('cartesian')	
+							lame_coeffs			= 1.0_dkind
+						case ('cylindrical')
+							! x -> z, y -> r
+							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+						case ('spherical')
+							! x -> r
+							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+					end select					
+				
 					do spec = 1, species_number
 					
 						Y_rho_int(spec) = rho%cells(i,j,k)*Y%pr(spec)%cells(i,j,k) 
@@ -440,9 +467,9 @@ contains
 									flux_left = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
 								end if
 							end if
-							
-							rhs = rhs -(	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	&
-										-	flux_left  * v_f%pr(dim)%cells(dim,i,j,k)) / cell_size(1) 
+
+							rhs = rhs -(	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3) &
+										-	flux_left  * v_f%pr(dim)%cells(dim,i,j,k) * lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2)
 						
 							continue			
 						end do
@@ -451,6 +478,12 @@ contains
 						
 						if (this%diffusion_flag)	Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_diff%pr(spec)%cells(i,j,k) * time_step
 						if (this%reactive_flag)		Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_chem%pr(spec)%cells(i,j,k) * time_step						
+						
+						if (this%additional_droplets_phases_number /= 0) then
+							do droplets_phase_counter = 1, this%additional_droplets_phases_number
+								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_droplets(droplets_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
+							end do		
+						end if						
 						
 					end do	
 					
@@ -514,7 +547,7 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 	
-		real(dkind)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, dp_dt, D_sum, P_sum, U_sum
+		real(dkind)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, dp_dt, D_sum, P_sum, U_sum, div_sum
 		
 		real(dkind)					:: cell_volume
 		real(dkind)	,dimension(3)	:: cell_size		
@@ -522,20 +555,26 @@ contains
 		real(dkind)					:: energy_source = 1.0e06_dkind
 		real(dkind)	,save			:: energy_duration
 		integer		,save			:: iter = 1
+
+		real(dkind), dimension (3,3)	:: lame_coeffs
+		character(len=20)				:: coordinate_system	
 		
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
 
 		integer	:: bound_number, plus, sign
-		integer :: i,j,k,dim,spec
+		integer :: i,j,k,dim,spec,droplets_phase_counter
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
+		
+		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 		cell_volume		= this%mesh%mesh_ptr%get_cell_volume()
+		
 		
 		associate (	div_v_int		=> this%div_v_int%s_ptr		, &
 					T				=> this%T%s_ptr				, &
@@ -554,11 +593,15 @@ contains
 					E_f_prod_gd 	=> this%E_f_prod_gd%s_ptr	, &
 					E_f_prod_visc	=> this%E_f_prod_visc%s_ptr	, &
 					E_f_prod_diff	=> this%E_f_prod_diff%s_ptr	, &	
+					E_f_prod_droplets	=> this%E_f_prod_droplets, &
+					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 
 			D_sum = 0.0_dkind
 			P_sum = 0.0_dkind		
 			U_sum = 0.0_dkind
+			
+			div_sum = 0.0_dkind
 			
 			energy_duration = energy_duration + 0.5_dkind*time_step
 			
@@ -566,14 +609,32 @@ contains
 			
 		!	print *, '2', div_v_int%cells(50,20,1),T%cells(50,20,1),D_sum,P_sum
 			
-			!$omp parallel default(none)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number) , &
+			!$omp parallel default(none)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,lame_coeffs) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(D_sum,P_sum,U_sum,div_v_int,p_stat,dp_stat_dt,v_f,h_s,E_f_prod_visc,E_f_prod_heat,E_f_prod_diff,E_f_prod_chem,Y_prod_diff,Y_prod_chem,T,Y,rho,mol_mix_conc,bc,cons_inner_loop,species_number,dimensions,cell_volume,cell_size,iter)					
+			!$omp& shared(D_sum,P_sum,U_sum,div_v_int,p_stat,dp_stat_dt,v_f,h_s,E_f_prod_visc,E_f_prod_heat,E_f_prod_diff,E_f_prod_chem,Y_prod_diff,Y_prod_chem,T,Y,rho,mol_mix_conc,bc,cons_inner_loop,species_number,dimensions,cell_volume,cell_size,coordinate_system,mesh,iter)					
 			!$omp do collapse(3) schedule(guided)	reduction(+:D_sum,P_sum)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then	
+				
+					lame_coeffs		= 1.0_dkind				
+				
+					select case(coordinate_system)
+						case ('cartesian')	
+							lame_coeffs			= 1.0_dkind
+						case ('cylindrical')
+							! x -> z, y -> r
+							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+						case ('spherical')
+							! x -> r
+							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+					end select					
+
 					div_v_int%cells(i,j,k) = 0.0_dkind
 					
 					if (this%viscosity_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_visc%cells(i,j,k)
@@ -581,6 +642,12 @@ contains
 					if (this%diffusion_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_diff%cells(i,j,k)
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)
 
+					if (this%additional_droplets_phases_number /= 0) then
+						do droplets_phase_counter = 1, this%additional_droplets_phases_number
+							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + E_f_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)
+						end do		
+					end if
+					
 					mixture_cp = 0.0
 					do spec = 1, species_number
 						mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec)	*Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
@@ -613,8 +680,8 @@ contains
 							end if
 						end if					
 						
-						div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k)  -  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* (flux_right	-  rho%cells(i,j,k) * h_s%cells(i,j,k)) / cell_size(1)	&
-																			  -	v_f%pr(dim)%cells(dim,i,j,k)									* (flux_left	-  rho%cells(i,j,k) * h_s%cells(i,j,k)) / cell_size(1))	
+						div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k)  -  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* lame_coeffs(dim,3) * (flux_right	-  rho%cells(i,j,k) * h_s%cells(i,j,k)) / cell_size(1)	&
+																			  -	v_f%pr(dim)%cells(dim,i,j,k)									* lame_coeffs(dim,1) * (flux_left	-  rho%cells(i,j,k) * h_s%cells(i,j,k)) / cell_size(1)) / lame_coeffs(dim,2)	
 						continue
 					end do					
 					
@@ -651,8 +718,8 @@ contains
 							end if					
 
 							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp))	* &
-																			  (	-  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* (flux_right	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)	&
-																					 -	v_f%pr(dim)%cells(dim,i,j,k)									* (flux_left	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)))
+																			  (	-  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* lame_coeffs(dim,3) * (flux_right	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)	&
+																					 -	v_f%pr(dim)%cells(dim,i,j,k)									* lame_coeffs(dim,1) * (flux_left	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)) / lame_coeffs(dim,2))
 							continue													 
 						end do							
 						
@@ -691,7 +758,7 @@ contains
 			end do
 			end do
 			!$omp end do			
-			
+
 			!$omp do collapse(3) schedule(guided)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -702,11 +769,13 @@ contains
 					do spec = 1, species_number
 						mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec)*Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
 					end do
-
-					dp_stat_dt%cells(i,j,k) = 0.0_dkind !(D_sum - U_sum)/ P_sum
 					
-					div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) !- (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp )) * dp_stat_dt%cells(i,j,k)
-				
+
+					dp_stat_dt%cells(i,j,k) = (D_sum - U_sum)/ P_sum!0.0_dkind !(D_sum - U_sum)/ P_sum
+					
+					div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp )) * dp_stat_dt%cells(i,j,k)!div_v_int%cells(i,j,k) !- (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp )) * dp_stat_dt%cells(i,j,k)
+
+				!	div_sum = div_sum + div_v_int%cells(i,j,k)
 				end if
 			end do
 			end do
@@ -731,11 +800,15 @@ contains
 		logical				,intent(in)		:: predictor
 		
 		real(dkind)	:: H_center, H_left, H_right, F_a_left, F_a_right, F_b_left, F_b_right
-		real(dkind)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm
+		real(dkind)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm, H_summ, sum_ddiv_v_dt
 		real(dkind)	:: farfield_density, farfield_pressure, farfield_velocity
+		
+		real(dkind), dimension (3,3)	:: lame_coeffs
+		real(dkind), dimension (3)		:: pois_coeffs
+		character(len=20)				:: coordinate_system
+		
 		integer		:: r_i, r_j, r_k
 
-		
 		real(dkind)	,dimension(3)	:: cell_size		
 		real(dkind)	:: time_step_adj, beta, beta_old, spectral_radii_jacobi
 		
@@ -755,6 +828,8 @@ contains
 		logical			:: pressure_converged = .false.
 		
 		dimensions		= this%domain%get_domain_dimensions()
+		
+		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 		cons_utter_loop = this%domain%get_local_utter_cells_bounds()
@@ -781,9 +856,12 @@ contains
 					v_f_old			=> this%v_f_old%v_ptr		, &
 					v_prod_visc		=> this%v_prod_visc%v_ptr	, &
 					v_prod_droplets	=> this%v_prod_droplets		, &
+					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
-					
-			ddiv_v_dt%cells	= 0.0_dkind		
+
+		
+			ddiv_v_dt%cells	= 0.0_dkind	
+			sum_ddiv_v_dt	= 0.0_dkind
 			vorticity		= 0.0_dkind	
 			F_a%cells		= 0.0_dkind		
 			F_b%cells		= 0.0_dkind		
@@ -796,35 +874,71 @@ contains
 			
 			spectral_radii_jacobi = 0.0_dkind
 			do dim = 1, dimensions
-				spectral_radii_jacobi = spectral_radii_jacobi + cell_size(1)**2 * cos(Pi/cons_utter_loop(dim,2)) / (dimensions * cell_size(1)**2)
+				spectral_radii_jacobi = spectral_radii_jacobi + cell_size(1)**2 * cos(2.0_dkind*Pi/cons_utter_loop(dim,2)) / (dimensions * cell_size(1)**2)
 			end do
 			
 			
-			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop) , &
+			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,pois_coeffs) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,time_step)					
-			!$omp do collapse(3) schedule(guided)	
+			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,mesh,time_step)					
+			!$omp do collapse(3) schedule(guided)	reduction(+:sum_ddiv_v_dt)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
+				
+					lame_coeffs		= 1.0_dkind				
+					pois_coeffs		= 0.0_dkind	
+			
+					select case(coordinate_system)
+						case ('cartesian')	
+							lame_coeffs			= 1.0_dkind
+							pois_coeffs			= 0.0_dkind
+						case ('cylindrical')
+							! x -> z, y -> r
+							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+							pois_coeffs(2)		=  cell_size(1) / lame_coeffs(2,2)
+					
+						case ('spherical')
+							! x -> r
+							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+					end select					
+				
 					if (predictor) then
 						ddiv_v_dt%cells(i,j,k)	= div_v_int%cells(i,j,k) / time_step
 						
 						do dim = 1, dimensions
-							ddiv_v_dt%cells(i,j,k)	= ddiv_v_dt%cells(i,j,k) - (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_f%pr(dim)%cells(dim,i,j,k)) / cell_size(1) / time_step
+							ddiv_v_dt%cells(i,j,k)	= ddiv_v_dt%cells(i,j,k) - (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3)  - v_f%pr(dim)%cells(dim,i,j,k) * lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2) / time_step
 						end do
 					else
 						ddiv_v_dt%cells(i,j,k)	= div_v_int%cells(i,j,k) / (0.5_dkind * time_step)
 						
 						do dim = 1, dimensions
-							ddiv_v_dt%cells(i,j,k)	= ddiv_v_dt%cells(i,j,k)  - 0.5_dkind * ( (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_f%pr(dim)%cells(dim,i,j,k)) / cell_size(1)	&
-																							+ (v_f_old%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_f_old%pr(dim)%cells(dim,i,j,k)) / cell_size(1)) / (0.5_dkind * time_step)
+							ddiv_v_dt%cells(i,j,k)	= ddiv_v_dt%cells(i,j,k)  - 0.5_dkind * ( (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3) - v_f%pr(dim)%cells(dim,i,j,k) * lame_coeffs(dim,1)) / cell_size(1)	&
+																							+ (v_f_old%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3) - v_f_old%pr(dim)%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2) / cell_size(1)) / (0.5_dkind * time_step)
 						end do
 					end if
 					
+					sum_ddiv_v_dt = sum_ddiv_v_dt + ddiv_v_dt%cells(i,j,k)  / (cons_inner_loop(1,2) ) / (cons_inner_loop(2,2) )
 				!	ddiv_v_dt%cells(i,j,k)	= - 4.0_dkind*exp(-8.0**2*(i*1e-05 - 0.25)**2)
 					
+				end if
+			end do
+			end do
+			end do		
+			!$omp end do
+			
+			!$omp do collapse(3) schedule(guided)
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+				if(bc%bc_markers(i,j,k) == 0) then
+					ddiv_v_dt%cells(i,j,k)	= ddiv_v_dt%cells(i,j,k) - sum_ddiv_v_dt
 				end if
 			end do
 			end do
@@ -835,9 +949,10 @@ contains
 			do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
 			do j = flow_inner_loop(2,1),flow_inner_loop(2,2)
 			do i = flow_inner_loop(1,1),flow_inner_loop(1,2)
-					do dim =  1, 3
-					do dim1 = 1, dimensions
-					do dim2 = 1, dimensions
+				do dim =  1, 3
+				do dim1 = 1, dimensions
+				do dim2 = 1, dimensions
+					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) == 0).or.(bc%bc_markers(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3)) == 0)) then 
 						if ((dim1 /= dim).and.(dim2 /= dim1).and.(dim2 /= dim)) then
 							if(((dim1-dim) == 1).or.((dim1-dim) == -2)) then
 								vorticity(dim,i,j,k) = vorticity(dim,i,j,k) - (v_f%pr(dim1)%cells(dim1,i,j,k) - v_f%pr(dim1)%cells(dim1,i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / cell_size(1)
@@ -845,9 +960,10 @@ contains
 								vorticity(dim,i,j,k) = vorticity(dim,i,j,k) + (v_f%pr(dim1)%cells(dim1,i,j,k) - v_f%pr(dim1)%cells(dim1,i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / cell_size(1)
 							end if
 						end if
-					end do
-					end do
-					end do
+					end if
+				end do
+				end do
+				end do
 			end do
 			end do
 			end do
@@ -856,10 +972,10 @@ contains
 			do dim = 1, dimensions
 				loop(3,1) = cons_inner_loop(3,1)
 				loop(3,2) = cons_utter_loop(3,2)*I_m(dim,3) + cons_inner_loop(3,2)*(1 - I_m(dim,3))
-
+	
 				loop(2,1) = cons_inner_loop(2,1)
 				loop(2,2) = cons_utter_loop(2,2)*I_m(dim,2) + cons_inner_loop(2,2)*(1 - I_m(dim,2))	
-
+	
 				loop(1,1) = cons_inner_loop(1,1)
 				loop(1,2) = cons_utter_loop(1,2)*I_m(dim,1) + cons_inner_loop(1,2)*(1 - I_m(dim,1))
 				
@@ -897,6 +1013,13 @@ contains
 							F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* g(dim))
 
 							if (this%viscosity_flag)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(0.5_dkind*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+							
+							if (this%additional_droplets_phases_number /= 0) then
+								do droplets_phase_counter = 1, this%additional_droplets_phases_number
+									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)
+								end do
+							end if							
+							
 							do dim1 = 1, 3
 							do dim2 = 1, dimensions
 								if ((dim1 /= dim).and.(dim2 /= dim1).and.(dim2 /= dim)) then
@@ -934,9 +1057,9 @@ contains
 				H_max_old	= 10.0
 				a_norm_init = 0.0_dkind
 				
-				!$omp parallel default(none)  private(i,j,k,dim,loop,residual) , &
+				!$omp parallel default(none)  private(i,j,k,dim,loop,residual,lame_coeffs,pois_coeffs) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(F_a,F_b,p_dyn,H_int,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,a_norm_init)
+				!$omp& shared(F_a,F_b,p_dyn,H_int,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init)
 				
 				do dim = 1, dimensions
 					loop(3,1) = cons_inner_loop(3,1)
@@ -980,19 +1103,37 @@ contains
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 					if(bc%bc_markers(i,j,k) == 0) then
 					
-						residual	= 0.0_dkind
+	lame_coeffs		= 1.0_dkind				
+						pois_coeffs		= 0.0_dkind	
+			
+						select case(coordinate_system)
+							case ('cartesian')	
+								lame_coeffs			= 1.0_dkind
+								pois_coeffs			= 0.0_dkind
+							case ('cylindrical')
+								! x -> z, y -> r
+								lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+								lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+								lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
 					
-				!		residual	= residual - (2.0_dkind*dimensions)*H_int%cells(i,j,k)
-						
+								pois_coeffs(2)		=  cell_size(1) / lame_coeffs(2,2)
+					
+							case ('spherical')
+								! x -> r
+								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+								lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+								lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+						end select						
+					
+						residual	= 0.0_dkind
+
 						residual	= residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
 						
 						do dim = 1, dimensions
-						
-				!			residual	= residual +	(H_int%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) + H_int%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))
-						
-							residual	= residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_a%cells(dim,i,j,k))
-		   
-							residual	= residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_b%cells(dim,i,j,k))
+
+							residual	= residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+
+							residual	= residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
 						end do	
 
 						a_norm_init = a_norm_init + abs(residual)
@@ -1008,107 +1149,22 @@ contains
 				converged			= .false.
 				H_max				= 0.0_dkind
 								 
-				!$omp parallel default(none)  private(i,j,k,dim,residual) , &
+				!$omp parallel default(none)  private(i,j,k,dim,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,pois_coeffs) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(H,a_norm,a_norm_init,H_int,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,bc,dimensions,cell_size,converged,predictor,time_step,poisson_iteration,spectral_radii_jacobi)				
-				do while ((.not.converged).and.(poisson_iteration <= 1000))
+				!$omp& shared(H,a_norm,a_norm_init,H_int,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,poisson_iteration,spectral_radii_jacobi)				
+				do while ((.not.converged).and.(poisson_iteration <= 2000))
 				
 					!$omp barrier
 				
 					!$omp master
-					H_max = 0.0_dkind
-					a_norm = 0.0_dkind
+					H_max	= 0.0_dkind
+					a_norm	= 0.0_dkind
 					converged = .true.
 					!$omp end master
 					
 					!$omp barrier
 					
 				!# Parallel successive overrelaxation
-					!!$omp do collapse(3) schedule(guided) reduction(max:H_max) !reduction(+:H_average)	
-					!do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-					!do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-					!do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-					!	if(bc%bc_markers(i,j,k) == 0) then
-					!		if((mod(i+j+k,2) == 1)) then	
-					!			!print *, i, j, k, mod(i+j+k,2)
-					!			!H%cells(i,j,k)	= cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
-					!	
-					!			!ddiv_v_dt%cells(i,j,k)	= - 4.0_dkind*exp(-8.0**2*(i*1e-04 - 0.5)**2)
-					!			
-					!			H%cells(i,j,k)			= cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
-					!	
-					!			do dim = 1, dimensions
-					!				H%cells(i,j,k)	= H%cells(i,j,k) +	(H_int%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) + H_int%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))
-		   !  
-					!				H%cells(i,j,k)	= H%cells(i,j,k) +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_a%cells(dim,i,j,k))
-		   !  
-					!				H%cells(i,j,k)	= H%cells(i,j,k) +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_b%cells(dim,i,j,k))
-					!			
-					!			end do	
-     !
-					!			H%cells(i,j,k)	= 1.0_dkind/(2.0_dkind*dimensions)*beta*H%cells(i,j,k) +	(1.0_dkind - beta)*H_int%cells(i,j,k)
-     !
-					!			if (abs(H%cells(i,j,k)) > H_max) then
-					!				H_max = abs(H%cells(i,j,k))
-					!			end if
-					!			
-					!			!if (abs(H%cells(i,j,k)) /= 0.0_dkind) then
-					!			!	H_average = H_average + abs(H%cells(i,j,k)/(cons_inner_loop(1,2)-cons_inner_loop(1,1)))
-					!			!end if
-					!		end if
-		   !
-					!	!	H%cells(i,j,k)	=  0.0_dkind!cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
-					!	!	
-					!	!	do dim = 1, dimensions
-					!	!		H%cells(i,j,k)	= H%cells(i,j,k) +	(H_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + H_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
-					!	!!		H%cells(i,j,k)	= H%cells(i,j,k) +	cell_size(1)*(F_a%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - F_a%cells(dim,i,j,k))
-					!	!!		H%cells(i,j,k)	= H%cells(i,j,k) +	cell_size(1)*(F_b%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - F_b%cells(dim,i,j,k))
-					!	!	end do
-					!	!	
-					!	!	H%cells(i,j,k)	= 1.0_dkind/(2.0_dkind*dimensions)*beta*H%cells(i,j,k) +	(1.0_dkind - beta)*H_int%cells(i,j,k)
-					!		
-					!			!if (abs(H%cells(i,j,k)) > H_max) then
-					!			!	H_max = abs(H%cells(i,j,k))
-					!			!end if							
-					!	end if
-					!end do
-					!end do
-					!end do				
-					!!$omp end do
-					!
-					!!$omp do collapse(3) schedule(guided) reduction(max:H_max) !reduction(+:H_average)			
-					!do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-					!do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-					!do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-					!	if(bc%bc_markers(i,j,k) == 0) then
-					!		if((mod(i+j+k,2) == 0)) then	
-					!		!	print *, i, j, k
-					!			H%cells(i,j,k)	=  cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
-					!			do dim = 1, dimensions
-					!				H%cells(i,j,k)	= H%cells(i,j,k) +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))
-		   !
-					!				H%cells(i,j,k)	= H%cells(i,j,k) +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_a%cells(dim,i,j,k))
-		   !
-					!				H%cells(i,j,k)	= H%cells(i,j,k) +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_b%cells(dim,i,j,k))
-					!			
-					!			end do	
-					!			
-					!			H%cells(i,j,k)	= 1.0_dkind/(2.0_dkind*dimensions)*beta*H%cells(i,j,k) +	(1.0_dkind - beta)*H_int%cells(i,j,k)
-					!			
-					!			if (abs(H%cells(i,j,k)) > H_max) then
-					!				H_max = abs(H%cells(i,j,k))
-					!			end if
-					!			
-					!			!if (abs(H%cells(i,j,k)) /= 0.0_dkind) then
-					!			!	H_average = H_average + abs(H%cells(i,j,k)/(cons_inner_loop(1,2)-cons_inner_loop(1,1)))
-					!			!end if
-					!		end if
-					!	end if
-					!end do
-					!end do
-					!end do				
-					!!$omp end do
-					
 					!$omp do collapse(3) schedule(guided) reduction(+:a_norm) !reduction(+:H_average)	
 					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -1116,16 +1172,38 @@ contains
 						if(bc%bc_markers(i,j,k) == 0) then
 							if((mod(i+j+k,2) == 1)) then	
 			  
+								lame_coeffs		= 1.0_dkind				
+								pois_coeffs		= 0.0_dkind	
+			
+								select case(coordinate_system)
+									case ('cartesian')	
+										lame_coeffs			= 1.0_dkind
+										pois_coeffs			= 0.0_dkind
+									case ('cylindrical')
+										! x -> z, y -> r
+										lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+										lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+										lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+										pois_coeffs(2)		=  cell_size(1) / lame_coeffs(2,2)
+					
+									case ('spherical')
+										! x -> r
+										lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+										lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+										lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+								end select								
+
 								residual = 0.0_dkind
 								
 								residual = residual - (2.0_dkind*dimensions)*H_int%cells(i,j,k)
 								
 								do dim = 1, dimensions
-									residual = residual +	(H_int%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) + H_int%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))
+									residual = residual +	(H_int%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H_int%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
 		     
-									residual = residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_a%cells(dim,i,j,k))
+									residual = residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
 		     
-									residual = residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_b%cells(dim,i,j,k))
+									residual = residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
 								
 								end do	
      
@@ -1141,6 +1219,40 @@ contains
 					end do
 					end do				
 					!$omp end do
+					
+					!$omp do collapse(3) schedule(guided)	reduction(.and.:converged)	 
+					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+						if(bc%bc_markers(i,j,k) == 0) then
+							H_int%cells(i,j,k) = H%cells(i,j,k)
+							do dim = 1,dimensions	
+								do plus = 1,2
+									sign			= (-1)**plus
+									bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+									if( bound_number /= 0 ) then
+										boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+										select case(boundary_type_name)
+											case('wall')
+												if(predictor) then
+													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																					+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
+																																					+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)	
+												else
+													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																					+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
+																																					+	(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
+												end if
+										end select
+									end if
+								end do
+							end do
+						end if
+					end do
+					end do
+					end do
+					!$omp end do					
+					
 					
 					!$omp master
 					if(poisson_iteration == 0) then
@@ -1159,19 +1271,39 @@ contains
 						if(bc%bc_markers(i,j,k) == 0) then
 							if((mod(i+j+k,2) == 0)) then	
 	    
-							!	H%cells(i,j,k)	=  cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
-								
+								lame_coeffs		= 1.0_dkind				
+								pois_coeffs		= 0.0_dkind	
+			
+								select case(coordinate_system)
+									case ('cartesian')	
+										lame_coeffs			= 1.0_dkind
+										pois_coeffs			= 0.0_dkind
+									case ('cylindrical')
+										! x -> z, y -> r
+										lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+										lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+										lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+										pois_coeffs(2)		=  cell_size(1) / lame_coeffs(2,2)
+					
+									case ('spherical')
+										! x -> r
+										lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+										lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+										lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+								end select								
+							
 								residual = 0.0_dkind
 								
 								residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
 								
 								do dim = 1, dimensions
-									residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))
+									residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)) * (1.0_dkind - pois_coeffs(dim)))
 		   
-									residual = residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_a%cells(dim,i,j,k))
-		   
-									residual = residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - F_b%cells(dim,i,j,k))
-								
+									residual = residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+
+									residual = residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+
 								end do	
 								
 								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
@@ -1186,6 +1318,41 @@ contains
 					end do
 					end do				
 					!$omp end do
+
+					!$omp do collapse(3) schedule(guided)	reduction(.and.:converged)	 
+					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+						if(bc%bc_markers(i,j,k) == 0) then
+							H_int%cells(i,j,k)	= H%cells(i,j,k)
+							do dim = 1,dimensions	
+								do plus = 1,2
+									sign			= (-1)**plus
+									bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+									if( bound_number /= 0 ) then
+										boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+										select case(boundary_type_name)
+											case('wall')
+												if(predictor) then
+													H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	H_int%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
+																																						+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)	
+												!	H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+												else
+													H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	H_int%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
+																																						+	(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
+												!	H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+												end if
+										end select
+									end if
+								end do
+							end do
+						end if
+					end do
+					end do
+					end do
+					!$omp end do
 					
 					!$omp master
 					!if ((abs(H_max - H_max_old) > 1.0e-03).and.(converged)) then
@@ -1195,7 +1362,7 @@ contains
 					!H_max_old	= H_max
 					!	print *, a_norm, a_norm_init
 					!	print *, poisson_iteration
-						if ((a_norm > 1.0e-01*a_norm_init).and.(converged)) then
+						if ((a_norm > 1.0e-04*a_norm_init).and.(converged)) then
 							if(mod(poisson_iteration,100) == 0) then
 								print *, poisson_iteration,  a_norm/a_norm_init
 							end if
@@ -1206,28 +1373,7 @@ contains
 	
 					!$omp barrier	
 					
-					!$omp do collapse(3) schedule(guided)	reduction(.and.:converged)	 
-					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-						if(bc%bc_markers(i,j,k) == 0) then
-						!	print * ,i,j,k, (H_int%cells(i,j,k) - H%cells(i,j,k))/H_max
-							!if(H_max /= 0.0_dkind) then
-							!	if ((abs((H_int%cells(i,j,k) - H%cells(i,j,k))) > 1.0e-4).and.(converged)) then
-							!!	if (((H_max - H_max_old) > 1.0e-4).and.(converged)) then
-							!!	if ((a_norm > 1.0e-10*a_norm_init).and.(converged)) then
-							!		converged = .false.
-							!!		print *, abs(H_max - H_max_old), i 
-							!	end if
-							!end if
-							H_int%cells(i,j,k) = H%cells(i,j,k)
-						end if
-					end do
-					end do
-					end do
-					!$omp end do
-
-					!call this%calculate_dynamic_pressure(time_step,predictor)					
+					!call this%calculate_dynamic_pressure(time_step,predictor)	
 					
 					!$omp master
 					poisson_iteration	= poisson_iteration + 1
@@ -1241,21 +1387,38 @@ contains
 				!print *,  H_max
 				
 				!pause
-				
+
 				overall_poisson_iteration = overall_poisson_iteration + poisson_iteration
 
 				call this%calculate_dynamic_pressure(time_step,predictor)
 				pressure_converged = .true.
 
+				H_summ = 0.0_dkind
+
 				!$omp parallel default(none)  private(i,j,k,dim,H_residual,r_i,r_j,r_k,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_velocity,farfield_pressure) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(p_dyn,rho_old,rho_int,H,H_int,v_f,F_a,F_b,predictor,pressure_converged,cons_inner_loop,bc,dimensions,cell_size,time_step)				
+				!$omp& shared(H_summ,p_dyn,rho_old,rho_int,H,H_int,v_f,F_a,F_b,predictor,pressure_converged,cons_inner_loop,bc,dimensions,cell_size,time_step)				
+				
+				!$omp do collapse(3) schedule(guided)	reduction(+:H_summ)
+				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)					
+					if(bc%bc_markers(i,j,k) == 0) then
+						H_summ = H_summ + H%cells(i,j,k) / (cons_inner_loop(1,2) ) / (cons_inner_loop(2,2) ) 
+					end if						
+				end do
+				end do
+				end do
+				!$omp end do				
+				
 				
 				!$omp do collapse(3) schedule(guided)
 				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 					if(bc%bc_markers(i,j,k) == 0) then
+						H%cells(i,j,k)			= H%cells(i,j,k) - H_summ
+						H_int%cells(i,j,k)		= H%cells(i,j,k)
 						do dim = 1,dimensions															 
 							do plus = 1,2
 								sign			= (-1)**plus
@@ -1267,7 +1430,7 @@ contains
 											H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																			+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)
 											H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-     
+
 										case('outlet')
 											if (sign == 1) then		!# Правая граница
 												if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Выток, берутся значения слева
@@ -1387,7 +1550,7 @@ contains
 				end do		
 				!$omp end do
 				!$omp end parallel			
-									
+
 				pressure_iteration = pressure_iteration + 1
 
 				continue
@@ -1558,15 +1721,16 @@ contains
 				do j = loop(2,1), loop(2,2)		
 				do i = loop(1,1), loop(1,2)		
 				
-					if (predictor)	then
-						v_f_old%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k)
-						v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) - time_step * (F_a%cells(dim,i,j,k) + F_b%cells(dim,i,j,k)  +  (H%cells(i,j,k) - H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/cell_size(1))
-					else
-						v_f%pr(dim)%cells(dim,i,j,k) = 0.5_dkind * (v_f%pr(dim)%cells(dim,i,j,k) + v_f_old%pr(dim)%cells(dim,i,j,k)) - (0.5_dkind * time_step) * (F_a%cells(dim,i,j,k) + F_b%cells(dim,i,j,k)  +  (H%cells(i,j,k) - H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/cell_size(1) )
-					end if	
-		
-				!	v_f%pr(dim)%cells(dim,i,j,k) = 0.0_dkind
-					
+					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
+
+						if (predictor)	then
+							v_f_old%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k)
+							v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) - time_step * (F_a%cells(dim,i,j,k) + F_b%cells(dim,i,j,k)  +  (H%cells(i,j,k) - H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/cell_size(1))
+						else
+							v_f%pr(dim)%cells(dim,i,j,k) = 0.5_dkind * (v_f%pr(dim)%cells(dim,i,j,k) + v_f_old%pr(dim)%cells(dim,i,j,k)) - (0.5_dkind * time_step) * (F_a%cells(dim,i,j,k) + F_b%cells(dim,i,j,k)  +  (H%cells(i,j,k) - H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/cell_size(1) )
+						end if	
+						!v_f%pr(dim)%cells(dim,i,j,k) = 0.0_dkind
+					end if
 				end do
 				end do
 				end do
@@ -1599,13 +1763,16 @@ contains
 		real(dkind)	,dimension(:)	,allocatable	:: Y_rho_int
 		real(dkind)	:: spec_summ
 		
+		real(dkind), dimension (3,3):: lame_coeffs
+		
 		real(dkind)	,dimension(3)	:: cell_size		
 		
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
-
+		character(len=20)	:: coordinate_system
+		
 		integer	:: bound_number
-		integer :: i,j,k,dim,spec
+		integer :: i,j,k,dim,spec,droplets_phase_counter
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -1613,6 +1780,8 @@ contains
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		
+		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		allocate(Y_rho_int(species_number))
 		
@@ -1623,19 +1792,38 @@ contains
 					Y_int			=> this%Y_int%v_ptr			, &
 					Y_prod_diff		=> this%Y_prod_diff%v_ptr	, &
 					Y_prod_chem		=> this%Y_prod_chem%v_ptr	, &
+					Y_prod_droplets	=> this%Y_prod_droplets	, &
+					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 
 					
-			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,Y_rho_int,rhs,flux_right,flux_left) , &
+			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,Y_rho_int,rhs,flux_right,flux_left,lame_coeffs) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(v_f,Y_prod_diff,Y_prod_chem,Y,Y_old,Y_int,rho,rho_old,rho_int,bc,cons_inner_loop,species_number,dimensions,cell_size,time_step)					
+			!$omp& shared(v_f,Y_prod_diff,Y_prod_chem,Y,Y_old,Y_int,rho,rho_old,rho_int,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,time_step)					
 			!$omp do collapse(3) schedule(guided)			
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then	
 					do spec = 1, species_number
-					
+
+						lame_coeffs		= 1.0_dkind				
+				  
+						select case(coordinate_system)
+							case ('cartesian')	
+								lame_coeffs			= 1.0_dkind
+							case ('cylindrical')
+								! x -> z, y -> r
+								lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+								lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+								lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+							case ('spherical')
+								! x -> r
+								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+								lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+								lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+						end select						
+
 						Y_rho_int(spec) = 0.5_dkind * ( rho_old%cells(i,j,k)*Y_old%pr(spec)%cells(i,j,k) + rho_int%cells(i,j,k)*Y_int%pr(spec)%cells(i,j,k)) 
 						
 						rhs = 0.0_dkind
@@ -1664,7 +1852,8 @@ contains
 								end if
 							end if					
 
-							rhs = rhs - (	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	-	flux_left  * v_f%pr(dim)%cells(dim,i,j,k))/ cell_size(1)
+							rhs = rhs - (	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3)&
+-	flux_left * v_f%pr(dim)%cells(dim,i,j,k)* lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2)
 							
 							continue
 						end do	
@@ -1674,6 +1863,12 @@ contains
 						if (this%diffusion_flag)	Y_rho_int(spec) = Y_rho_int(spec) + 0.5_dkind * Y_prod_diff%pr(spec)%cells(i,j,k) * time_step
 						
 						if (this%reactive_flag)		Y_rho_int(spec) = Y_rho_int(spec) + 0.5_dkind * Y_prod_chem%pr(spec)%cells(i,j,k) * time_step
+						
+						if (this%additional_droplets_phases_number /= 0) then
+							do droplets_phase_counter = 1, this%additional_droplets_phases_number
+								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_droplets(droplets_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
+							end do		
+						end if									
 						
 					end do	
 					
@@ -1788,11 +1983,12 @@ contains
 										end if
 								
 										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= h_s%cells(i,j,k) * T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) / T%cells(i,j,k)
-										
+
 										do dim1 = 1, dimensions
-											if(dim1 /= dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= 0.0_dkind ! v%pr(dim1)%cells(i,j,k)
-											!	v_f%pr(dim1)%cells(dim1,i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= v_f%pr(dim1)%cells(dim1,i,j,k)!0.0_dkind !
+											if(dim1 == dim) then
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  -v%pr(dim1)%cells(i,j,k)
+											else
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if
 										end do
 										
@@ -1810,9 +2006,11 @@ contains
 											end do
 										end if
 										
-										do dim1 = 1,dimensions
-											if (dim1 /= dim) then
-											!	v_f%pr(dim1)%cells(dim1,i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_f%pr(dim1)%cells(dim1,i,j,k)!0.0_dkind !
+										do dim1 = 1, dimensions
+											if(dim1 == dim) then
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+											else
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if
 										end do
 										
@@ -1833,11 +2031,14 @@ contains
 											end if	
 										end if
 										
-										do dim1 = 1,dimensions
-											if (dim1 /= dim) then
-											!	v_f%pr(dim1)%cells(dim1,i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_f%pr(dim1)%cells(dim1,i,j,k)!0.0_dkind!
+										do dim1 = 1, dimensions
+											if(dim1 == dim) then
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+											else
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if
 										end do
+
 										if (predictor) then
 											rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 											rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
