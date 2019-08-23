@@ -225,7 +225,7 @@ program package_interface
 		T%cells(:,:,:)				= 300.0_dkind
 		
 		T%cells(0.5*(utter_loop(1,2)-(ignition_region)/delta_x):0.5*(utter_loop(1,2)+(ignition_region)/delta_x) ,&
-				0.5*(utter_loop(2,2)-(ignition_region)/delta_x):0.5*(utter_loop(2,2)+(ignition_region)/delta_x) , :)  = 3000.0_dkind 
+				0.5*(utter_loop(2,2)-(ignition_region)/delta_x):0.5*(utter_loop(2,2)+(ignition_region)/delta_x) , :)  = 1500.0_dkind 
 
 		Y%pr(1)%cells(:,:,:)	= 1.0_dkind				! Hydrogen
 		Y%pr(2)%cells(:,:,:)	= nu					! Oxygen
@@ -233,7 +233,7 @@ program package_interface
 
 		!***********************************************************************************************
 	
-		call problem_thermophysics%change_units_mole_to_dimless(Y)
+		call problem_thermophysics%change_field_units_mole_to_dimless(Y)
 
 		!****************************** Setting boundary conditions ************************************
 		call problem_boundaries%create_boundary_type (	type_name				= 'wall'	,	&
@@ -246,12 +246,11 @@ program package_interface
 														priority				= 1)	
 										
 		call problem_boundaries%create_boundary_type (	type_name				= 'outlet'	,	&
-														slip					= .false.	,	&
-														conductive				= .false.	,	&
-														wall_temperature		= 0.0_dkind	,	&
-														wall_conductivity_ratio	= 0.0_dkind	,	&
-														farfield_pressure		= 101325.0_dkind,	&
-														farfield_temperature	= 300.0_dkind ,	&
+														farfield_pressure		= 101325.0_dkind	,	&
+														farfield_temperature	= 300.0_dkind		,	&
+														farfield_velocity		= 0.0_dkind			,	&	
+														farfield_species_names	= (/'H2,O2,N2'/)	,	&	
+														farfield_concentrations	= (/1.0_dkind, nu, nu * 3.762_dkind/)	,	&
 														priority				= 2)
 															
 		problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 1
@@ -266,7 +265,7 @@ program package_interface
 													hydrodynamics_flag			= .true.		, &
 													heat_transfer_flag			= .true.		, &
 													molecular_diffusion_flag	= .true.		, &
-													viscosity_flag				= .false.		, &
+													viscosity_flag				= .true.		, &
 													chemical_reaction_flag		= .true.		, &
 													CFL_flag					= .true.		, &
 													CFL_coefficient				= CFL_coeff		, &

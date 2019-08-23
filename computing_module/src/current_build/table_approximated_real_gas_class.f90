@@ -942,7 +942,7 @@ contains
 
 										do specie_number = 1,size(farfield_species_names)
 											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
-											concs(specie_index)		= concs(specie_index) * mol_mix_conc / this%thermo%thermo_ptr%molar_masses(specie_number)
+											concs(specie_index)		= concs(specie_index) * mol_mix_conc / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 									
 										cp = this%thermo%thermo_ptr%calculate_mixture_cp(farfield_temperature, concs)
