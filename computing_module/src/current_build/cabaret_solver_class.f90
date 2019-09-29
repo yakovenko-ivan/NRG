@@ -217,6 +217,7 @@ contains
 		
 		if(problem_data_io%get_load_counter() /= 0) then
 			call problem_data_io%add_io_scalar_cons_field(constructor%E_f)
+			call problem_data_io%add_io_scalar_cons_field(constructor%gamma)
 			call problem_data_io%add_io_scalar_flow_field(constructor%rho_f_new)
 			call problem_data_io%add_io_scalar_flow_field(constructor%p_f_new)
 			call problem_data_io%add_io_scalar_flow_field(constructor%E_f_f_new)
@@ -228,6 +229,7 @@ contains
 
 		if(problem_data_io%get_load_counter() == 1) then
 			call problem_data_io%add_io_scalar_cons_field(constructor%E_f)
+			call problem_data_io%add_io_scalar_cons_field(constructor%gamma)
 			call problem_data_io%add_io_scalar_flow_field(constructor%rho_f_new)
 			call problem_data_io%add_io_scalar_flow_field(constructor%p_f_new)
 			call problem_data_io%add_io_scalar_flow_field(constructor%E_f_f_new)
@@ -479,10 +481,7 @@ contains
 			constructor%v_f(dim,:,:,:,:)     = constructor%v_f_new%v_ptr%pr(dim)%cells
 		end do
 	
-        constructor%p_f     = constructor%p_f_new%s_ptr%cells
-        constructor%rho_f   = constructor%rho_f_new%s_ptr%cells
-		constructor%E_f_f	= constructor%E_f_f_new%s_ptr%cells
-		
+
 		constructor%time		= calculation_time
 		constructor%time_step	=	problem_solver_options%get_initial_time_step()
 		constructor%initial_time_step = problem_solver_options%get_initial_time_step()
@@ -491,6 +490,11 @@ contains
 
 		call constructor%apply_boundary_conditions_main()
 		
+        constructor%p_f     = constructor%p_f_new%s_ptr%cells
+        constructor%rho_f   = constructor%rho_f_new%s_ptr%cells
+		constructor%E_f_f	= constructor%E_f_f_new%s_ptr%cells
+		constructor%v_s_f	= constructor%v_s_f_new%s_ptr%cells
+
 	end function
 
 	subroutine solve_test_problem(this)
@@ -2065,13 +2069,14 @@ contains
 					rho				=> this%rho%s_ptr				, &
 					v				=> this%v%v_ptr					, &
 					v_f_new			=> this%v_f_new%v_ptr			, &
+					v_s				=> this%v_s%s_ptr				, &
 					Y				=> this%Y%v_ptr					, &
 					bc				=> this%boundary%bc_ptr			, &
 					mesh			=> this%mesh%mesh_ptr)
 
 		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,farfield_pressure,farfield_density,wall_temperature,boundary_type_name) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,Y,cons_inner_loop)
+		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_inner_loop)
 		!$omp do collapse(3) schedule(static)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -2092,6 +2097,8 @@ contains
 										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho%cells(i,j,k)
 										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= T%cells(i,j,k)
 										mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= mol_mix_conc%cells(i,j,k)
+
+v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= v_s%cells(i,j,k)
 								
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then

@@ -309,7 +309,7 @@ contains
 			do k = loop(3,1),loop(3,2)
 			do j = loop(2,1),loop(2,2)
 			do i = loop(1,1),loop(1,2)
-				if ((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
+				if ((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
 
 					average_molar_mass = 0.0_dkind
 					do specie_number = 1,species_number

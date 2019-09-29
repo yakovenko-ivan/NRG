@@ -262,7 +262,7 @@ contains
 		character(len=20)				:: coordinate_system
 		
 		integer						:: dimensions
-		integer		,dimension(3,2)	:: cons_inner_loop
+		integer		,dimension(3,2)	:: cons_inner_loop, flow_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size		
 		
 		call this%calculate_viscosity_coeff()
@@ -270,6 +270,8 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
+
+		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
 
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
@@ -282,11 +284,12 @@ contains
 
 		call this%mpi_support%exchange_conservative_vector_field(v)					
 					
+
 		!$omp parallel default(none)  private(i,j,k,dim1,dim2,dim3,div_v,nu_node,v_face_h1,v_face_l1,v_face_h2,v_face_l2,lame_coeffs) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(mesh,sigma,v,nu,cons_inner_loop,cell_size,dimensions,coordinate_system) 
-		!$omp do collapse(3) schedule(static)
+		!$omp& shared(mesh,sigma,v,nu,cons_inner_loop,flow_inner_loop,cell_size,dimensions,coordinate_system) 
 
+		!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -322,8 +325,35 @@ contains
                         end do
 
 						sigma%pr(dim1,dim2)%cells(i,j,k) = nu%cells(i,j,k) * (2.0_dkind * (v%pr(dim1)%cells(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / (2.0_dkind*cell_size(dim1))  -    2.0_dkind/3.0_dkind*div_v) 
+				
+						select case(coordinate_system)
+							case ('cylindrical')
+								this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
+								this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(2)%cells(i,j,k)/mesh%mesh(2,i,j,k))
+							case ('spherical')
+								this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
+								this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k)) 
+						end select						
+					end if
+                end if
+			end do
+            end do
+        end do
+        end do
+        end do
+		!$omp end do nowait
+		
 
-					else
+		!$omp do collapse(3) schedule(static)
+		do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
+		do j = flow_inner_loop(2,1),flow_inner_loop(2,2)
+		do i = flow_inner_loop(1,1),flow_inner_loop(1,2)
+		
+            do dim1 = 1,dimensions
+            do dim2 = 1,dimensions
+  
+                if (dim1 <= dim2) then
+                    if (dim1 /= dim2) then
   
 						nu_node = 0.25_dkind * (nu%cells(i,j,k) + nu%cells(i,j-1,k) + nu%cells(i-1,j,k) + nu%cells(i-1,j-1,k))
 					
@@ -336,34 +366,19 @@ contains
 						
 						
   						sigma%pr(dim1,dim2)%cells(i,j,k) = nu_node * ((v_face_h1 - v_face_l1)/cell_size(dim2) + (v_face_h2 - v_face_l2)/cell_size(dim1))
+						
+						sigma%pr(dim2,dim1)%cells(i,j,k) = sigma%pr(dim1,dim2)%cells(i,j,k)
+		
 					end if
-											
-					select case(coordinate_system)
-						case ('cylindrical')
-							this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
-						case ('spherical')
-							this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
-					end select		
-					
-                    if ( dim1 /= dim2 ) then
-                        sigma%pr(dim2,dim1)%cells(i,j,k) = sigma%pr(dim1,dim2)%cells(i,j,k)
-                    end if
                 end if
-				
-				select case(coordinate_system)
-					case ('cylindrical')
-						this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(2)%cells(i,j,k)/mesh%mesh(2,i,j,k))
-					case ('spherical')
-						this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k)) 
-				end select		
-
 			end do
             end do
         end do
         end do
         end do
-		
 		!$omp end do nowait
+
+
 		!$omp end parallel
 					
 		end associate
@@ -511,7 +526,9 @@ contains
 							if( bound_number /= 0 ) then
 								do dim1 = 1,dimensions
 								do dim2 = 1,dimensions
-									sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= sigma%pr(dim1,dim2)%cells(i,j,k)
+									if (dim1 == dim2) then
+sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= sigma%pr(dim1,dim2)%cells(i,j,k)
+									end if
 								end do
 								end do
 							end if
