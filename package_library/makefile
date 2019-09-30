@@ -2,11 +2,11 @@ FCOMP	= mpif90
 
 #FLAGS 	= -O0 -g -traceback -fpp 	-check all -fpe:0 -warn all	# Debug Sequential
 #FLAGS 	= -O0 -g -traceback -fpp -DOMP	-check all -fpe:0 -warn all	# Debug OMP
-FLAGS 	= -O0 -g -traceback -fpp -Dmpi	-check all -fpe:0 -warn all	# Debug MPI
+#FLAGS 	= -O0 -g -traceback -fpp -Dmpi	-check all -fpe:0 -warn all	# Debug MPI
 
 #FLAGS	= -O3 -g -traceback -fpp 		   -fpe:0		# Release Sequential
 #FLAGS 	= -O3 -g -traceback -fpp -DOMP	-qopenmp   -fpe:0		# Release OMP
-#FLAGS	= -O3 -g -traceback -fpp -Dmpi		   -fpe:0		# Release MPI
+FLAGS	= -O3 -g -traceback -fpp -Dmpi		   -fpe:0		# Release MPI
 
 TARGET	= package_library.a
 
