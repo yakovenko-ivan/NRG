@@ -4,6 +4,8 @@ computing_module/src/third_party/dvode
 computing_module/src/third_party/cvode
 computing_module/src/test_versions
 computing_module/src/old_versions
+computing_module/debug_MPI
 package_library/package_library
+package_library/debug_MPI
 NRG_GIT_stable_1/
 *.bak
