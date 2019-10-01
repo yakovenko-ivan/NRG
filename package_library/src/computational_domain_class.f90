@@ -164,8 +164,11 @@ contains
 		cells_number		= this%cells_number
 		coordinate_system	= this%coordinate_system
 		
-		allocate(lengths	,source=this%lengths)
-		allocate(axis_names	,source=this%axis_names)
+		allocate(axis_names(dimensions))
+		allocate(lengths(dimensions,2))
+		
+		axis_names	= this%axis_names
+		lengths		= this%lengths
 		
 		write(unit = domain_data_unit, nml = domain_properties_1)
 		write(unit = domain_data_unit, nml = domain_properties_2)
@@ -187,9 +190,9 @@ contains
 		this%dimensions				= dimensions
 		this%cells_number			= cells_number		
 		this%faces_number			= cells_number + 1
-		this%lengths				= lengths
+		this%lengths				= lengths(1:dimensions,:)
 		this%coordinate_system		= coordinate_system
-		this%axis_names				= axis_names
+		this%axis_names				= axis_names(1:dimensions)
 
 		this%cells_number(dimensions+1:3) = 1
 		this%faces_number(dimensions+1:3) = 1
@@ -352,7 +355,9 @@ contains
 		class(computational_domain)	,intent(in)		:: this
 		real(dkind)	,dimension(:,:)	,allocatable	:: get_domain_lengths
 
-		allocate(get_domain_lengths,source=this%lengths)
+		
+		allocate(get_domain_lengths(this%dimensions,2))
+		get_domain_lengths = this%lengths
 	end function
 
 	pure function get_global_cells_number(this)
