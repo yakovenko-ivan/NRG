@@ -67,6 +67,7 @@ module data_save_class
 		procedure	:: get_data_save_folder
 		procedure	:: get_save_time
 		procedure	:: get_save_time_units_abbreviation
+		procedure	:: get_save_time_coefficient
 		procedure	:: get_visible_fields_number
 
 		!Setters 
@@ -340,6 +341,13 @@ contains
 		character(len=10)				:: get_save_time_units_abbreviation
 
 		get_save_time_units_abbreviation = this%save_time_units_abbreviation
+	end function
+	
+	pure function get_save_time_coefficient(this)
+		class(data_save)	,intent(in)	:: this
+		real(rkind)			:: get_save_time_coefficient
+
+		get_save_time_coefficient = this%save_time_coefficient
 	end function
 
 	pure function get_visible_fields_number(this)
