@@ -1,6 +1,6 @@
 program computing_module
 
-	use IFPORT
+!	use IFPORT
 
 	use global_data
 	use kind_parameters
@@ -81,7 +81,7 @@ program computing_module
 	load_counter		= problem_data_io%get_load_counter()
 
 	write(system_command,'(A,A,A,I3.3,A)') 'ls . -d ', trim(data_output_folder) ,trim(fold_sep), load_counter, '/*/ > dir.txt'
-	call execute_command_line(system_command) 
+	call system(system_command) 
 
 	open(newunit = dir_io, file = 'dir.txt', status = 'old', form = 'formatted')
 	read(dir_io,'(A)') file_path

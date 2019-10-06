@@ -1,6 +1,6 @@
 program computing_module
 
-	use IFPORT
+!	use IFPORT
 
 	use global_data
 	use kind_parameters
@@ -86,7 +86,7 @@ program computing_module
 
 	data_save_folder = trim(problem_data_save%get_data_save_folder())
 	write(system_command,'(A,A,A)') 'ls . -d ', trim(data_save_folder) , '/*/ > dir.txt'
-	call execute_command_line(system_command) 
+	call system(system_command) 
 
 	open(newunit = dir_io, file = 'dir.txt', status = 'old', form = 'formatted')
 	read(dir_io,'(A)') file_path
