@@ -460,7 +460,7 @@ contains
 				
 					call MPI_BARRIER(MPI_COMM_WORLD,error)
 
-					write(proc_rank,'(A,I3.3)') '_proc_', processor_rank
+					write(proc_rank,'(A,I4.4)') '_proc_', processor_rank
 
 					file_name = trim(this%data_save_folder) // trim(fold_sep) // trim(file_path) // trim(fold_sep) // trim(file_path) // trim(proc_rank) // '_data.plt'
 					open(newunit = unit_io, file = file_name, status = 'replace', form = 'binary')
