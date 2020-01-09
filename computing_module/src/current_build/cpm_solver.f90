@@ -278,8 +278,6 @@ contains
 
 		integer	:: particles_phase_counter, droplets_phase_counter
 		integer	:: specie
-
-		logical	:: stop_flag
 		
 		if (this%CFL_condition_flag) then
 			call this%calculate_time_step()
@@ -341,13 +339,8 @@ contains
 				call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)
 			end do	            
 		end if
-		
-		if(stop_flag) then
-			call this%state_eq%apply_state_equation_for_initial_conditions()
-			stop_flag = .false.
-		else
-			call this%state_eq%apply_state_equation()
-		end if
+
+		call this%state_eq%apply_state_equation()
 
 		!call this%state_eq%check_conservation_laws()
 
