@@ -59,7 +59,7 @@ module fds_low_mach_solver_class
 		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mol_mix_conc
 		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff	, E_f_int		, h_s			, gamma
 		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_int
-		type(field_scalar_cons_pointer)	:: nu
+		type(field_scalar_cons_pointer)	:: nu		, kappa
 		type(field_scalar_flow_pointer)	:: F_a		, F_b
 		
 		type(field_vector_cons_pointer)	:: v		, v_prod_gd		, v_prod_visc	, v_prod_source	, v_int	
@@ -207,6 +207,14 @@ contains
 		call manager%create_vector_field(v_f_old,'velocity_flow_old'					,'v_f_old'	,'spatial')
 		constructor%v_f_old%v_ptr => v_f_old
 		
+		constructor%state_eq	=	table_approximated_real_gas_c(manager)
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_of_sound')
+		constructor%v_s%s_ptr			=> scal_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'sensible_enthalpy')
+		constructor%h_s%s_ptr			=> scal_ptr%s_ptr	
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'adiabatic_index')
+		constructor%gamma%s_ptr			=> scal_ptr%s_ptr			
+		
 		if(constructor%viscosity_flag) then
 			constructor%visc_solver			= viscosity_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_viscosity')
@@ -220,7 +228,9 @@ contains
 		if (constructor%heat_trans_flag) then
 			constructor%heat_trans_solver	= heat_transfer_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_heat_transfer')
-			constructor%E_f_prod_heat%s_ptr			=> scal_ptr%s_ptr
+			constructor%E_f_prod_heat%s_ptr		=> scal_ptr%s_ptr
+			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'thermal_conductivity')
+			constructor%kappa%s_ptr				=> scal_ptr%s_ptr
 		end if
 
 		if (constructor%diffusion_flag) then
@@ -266,14 +276,6 @@ contains
 			constructor%Y_prod_chem%v_ptr			=> vect_ptr%v_ptr
 		end if
 
-		constructor%state_eq	=	table_approximated_real_gas_c(manager)
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_of_sound')
-		constructor%v_s%s_ptr			=> scal_ptr%s_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'sensible_enthalpy')
-		constructor%h_s%s_ptr			=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'adiabatic_index')
-		constructor%gamma%s_ptr			=> scal_ptr%s_ptr	
-	
 		cons_allocation_bounds		= manager%domain%get_local_utter_cells_bounds()		
 		
 		allocate(constructor%vorticity(		3						, &
@@ -337,7 +339,7 @@ contains
 		cell_size						= constructor%mesh%mesh_ptr%get_cell_edges_length()
 		
 		constructor%time				= calculation_time
-		constructor%initial_time_step	= problem_solver_options%get_initial_time_step()
+		constructor%initial_time_step	= 1.0e-10_dkind ! problem_solver_options%get_initial_time_step()
 		constructor%time_step			= constructor%initial_time_step
 
 		constructor%rho_0				= constructor%rho%s_ptr%cells(1,1,1)
@@ -391,11 +393,7 @@ contains
 			end do		
 		end if  
 
-		if ((this%CFL_condition_flag).and.(iteration > 1)) then
-			call this%calculate_time_step()
-		else
-			this%time_step = 1e-08_dkind
-		end if
+		call this%calculate_time_step()
 
 		!call this%state_eq%check_conservation_laws()
 
@@ -638,8 +636,8 @@ contains
 			
 			time = time + 0.5_dkind*time_step
 			
-			if ((time > 0.0e-03_dkind).and.(time < 25.0e-03_dkind)) then
-				energy_source = 200.0e06_dkind
+			if(time <= 2.0e-03_dkind) then
+				energy_source = 1.0e08_dkind
 			else
 				energy_source = 0.0_dkind
 			end if
@@ -682,8 +680,9 @@ contains
 					if (this%diffusion_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_diff%cells(i,j,k)
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)
 					
-					if ((i>50).and.(i<100).and.(j>10).and.(j<30)) then
-					!	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  energy_source
+
+					if(mesh%mesh(1,i,j,k) <= mesh%mesh(1,1,j,k) + 1.0e-03_dkind) then
+			!			div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) + energy_source !* 1.0e+10 * this%time_step *  rho%cells(i,j,k) !* cell_size(1) ! * 4.0_dkind * Pi * mesh%mesh(1,i,j,k) * mesh%mesh(1,i,j,k)
 					end if
 						
 					if (this%additional_droplets_phases_number /= 0) then
@@ -729,7 +728,7 @@ contains
 						continue
 					end do					
 					
-					div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp )
+					div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * h_s%cells(i,j,k))
 					
 					do spec = 1, species_number
 					
@@ -761,22 +760,22 @@ contains
 								end if
 							end if					
 
-							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp))	* &
+							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  h_s%cells(i,j,k))) * &
 																			  (	-  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* lame_coeffs(dim,3) * (flux_right	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)	&
 																					 -	v_f%pr(dim)%cells(dim,i,j,k)									* lame_coeffs(dim,1) * (flux_left	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)) / lame_coeffs(dim,2))
 							continue													 
 						end do							
 						
 						
-						if (this%diffusion_flag) 	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp))* &
+						if (this%diffusion_flag) 	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * h_s%cells(i,j,k))) * &
 																		  (	Y_prod_diff%pr(spec)%cells(i,j,k))
 
-						if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp))* &
+						if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  h_s%cells(i,j,k))) * &
 																		  (	Y_prod_chem%pr(spec)%cells(i,j,k))
 					end do
 					
 					D_sum = D_sum + div_v_int%cells(i,j,k) * cell_volume
-					P_sum = P_sum + (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp ))	* cell_volume 
+					P_sum = P_sum + (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * h_s%cells(i,j,k)))* cell_volume 
 				end if
 			end do
 			end do
@@ -830,7 +829,7 @@ contains
 					dp_stat_dt%cells(i,j,k) = (D_sum - U_sum)/ P_sum
 						
 					if (this%all_Neumann_flag) then	
-						div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp )) * dp_stat_dt%cells(i,j,k)!div_v_int%cells(i,j,k) !- (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * T%cells(i,j,k) * mixture_cp )) * dp_stat_dt%cells(i,j,k)
+						div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * h_s%cells(i,j,k)))* dp_stat_dt%cells(i,j,k)
 					end if
 
 				end if
@@ -937,7 +936,7 @@ contains
 				spectral_radii_jacobi = spectral_radii_jacobi + cell_size(1)**2 * cos(Pi/cons_utter_loop(dim,2)) / (dimensions * cell_size(1)**2)
 			end do
 			
-			
+
 			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,pois_coeffs) , &
 			!$omp& firstprivate(this) , &
 			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,mesh,time_step)					
@@ -1237,7 +1236,7 @@ contains
 										lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
 										lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
 					
-										pois_coeffs(2)		=  cell_size(1) / lame_coeffs(2,2)
+										pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
 					
 									case ('spherical')
 										! x -> r
@@ -1271,7 +1270,7 @@ contains
 					end do
 					end do				
 					!$omp end do
-					
+
 					!$omp barrier
 
 					!$omp master
@@ -1279,7 +1278,6 @@ contains
 					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 						if(bc%bc_markers(i,j,k) == 0) then
-!							H_int%cells(i,j,k) = H%cells(i,j,k)
 							do dim = 1,dimensions	
 								do plus = 1,2
 									sign			= (-1)**plus
@@ -1469,9 +1467,9 @@ contains
 						!	pause
 						end if						
 						
-						if(mod(poisson_iteration,100) == 0) then
+						if((mod(poisson_iteration,1000) == 0).and.(a_norm_init > 1e-10)) then
 							print *, poisson_iteration,  a_norm/a_norm_init, a_norm_init, a_norm
-						end if						
+						end if					
 						
 						if ((a_norm > 1.0e-02*a_norm_init).and.(converged)) converged = .false.	
 
@@ -1508,15 +1506,11 @@ contains
 				call this%calculate_dynamic_pressure(time_step,predictor)
 				pressure_converged = .true.
 
-				H_summ = 0.0_dkind
-
-				!$omp do collapse(3) schedule(guided)
 				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+					H_int%cells(i,j,k)		= H%cells(i,j,k)
 					if(bc%bc_markers(i,j,k) == 0) then
-						H%cells(i,j,k)			= H%cells(i,j,k) - H_summ
-						H_int%cells(i,j,k)		= H%cells(i,j,k)
 						do dim = 1,dimensions															 
 							do plus = 1,2
 								sign			= (-1)**plus
@@ -1542,7 +1536,7 @@ contains
 													do dim1 = 1,dimensions
 														H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind*(	(0.5_dkind *( v_f%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) + v_f%pr(dim1)%cells(dim1,i,j,k))) **2) 
 													end do
-     
+
 										!			H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		=	2.0_dkind*H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - H%cells(i,j,k)
 														
 													H_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
@@ -1701,7 +1695,7 @@ contains
 					F_b				=> this%F_b%s_ptr			, &
 					H				=> this%H%s_ptr				, &
 					H_int			=> this%H_int%s_ptr			, &
-									=> this%v%v_ptr				, &
+					v				=> this%v%v_ptr				, &
 					v_f				=> this%v_f%v_ptr			, &
 					v_f_old			=> this%v_f_old%v_ptr		, &
 					bc				=> this%boundary%bc_ptr)
@@ -2254,7 +2248,7 @@ contains
 	subroutine calculate_time_step(this)
 		class(fds_solver)	,intent(inout)	:: this
 		
-		real(dkind)	:: delta_t_interm, delta_t_interm1, delta_t_interm1x, delta_t_interm2, time_step, time_step2, velocity_value, divergence_value
+		real(dkind)	:: delta_t_interm, delta_t_interm1, delta_t_interm1x, delta_t_interm2, delta_t_interm3, time_step, time_step2, velocity_value, divergence_value
 
 		real(dkind)	,dimension(3)	:: cell_size
 
@@ -2282,6 +2276,7 @@ contains
 					div_v_int		=> this%div_v_int%s_ptr		, &
 					v_s				=> this%v_s%s_ptr			, &
 					nu				=> this%nu%s_ptr			, &
+					kappa			=> this%kappa%s_ptr			, &
 					rho				=> this%rho%s_ptr			, &
 					D				=> this%D%v_ptr				, &
 					bc				=> this%boundary%bc_ptr		, &
@@ -2298,13 +2293,13 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
 				velocity_value		= 0.0_dkind
 				do dim = 1,dimensions
-					velocity_value	= velocity_value + abs(v%pr(dim)%cells(i,j,k))/(cell_size(1))			!#L1 norm
-				!	velocity_value	= velocity_value + (v%pr(dim)%cells(i,j,k)/minval(cell_size(1)))**2		!#L2 norm
+				!	velocity_value	= velocity_value + abs(v%pr(dim)%cells(i,j,k))/(cell_size(1))		!#L1 norm
+					velocity_value	= velocity_value + (v%pr(dim)%cells(i,j,k)/(cell_size(1)))**2		!#L2 norm
 				end do
 
 				if((velocity_value > 0.0_dkind).or.(abs(div_v_int%cells(i,j,k)) > 0.0_dkind)) then
-					delta_t_interm = 1.0_dkind/(velocity_value + abs(div_v_int%cells(i,j,k)))		!# L1 norm
-				!	delta_t_interm = 1.0_dkind/(sqrt(velocity_value) + abs(div_v_int%cells(i,j,k)))	!# L2 norm
+				!	delta_t_interm = 1.0_dkind/(velocity_value + abs(div_v_int%cells(i,j,k)))		!# L1 norm
+					delta_t_interm = 1.0_dkind/(sqrt(velocity_value) + abs(div_v_int%cells(i,j,k)))	!# L2 norm
 
 					if (delta_t_interm < time_step) then
 						time_step = delta_t_interm
@@ -2321,8 +2316,9 @@ contains
 		
 		delta_t_interm1 = time_step2
 		delta_t_interm2 = time_step2
+		delta_t_interm3 = time_step2
 
-		if ((this%viscosity_flag).or.(this%diffusion_flag)) then
+		if ((this%viscosity_flag).or.(this%diffusion_flag).or.(this%heat_trans_flag)) then
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -2333,9 +2329,13 @@ contains
 							if(delta_t_interm1x < delta_t_interm1) delta_t_interm1 = delta_t_interm1x
 						end do
 					end if 
-					if (this%viscosity_flag) delta_t_interm2 = 1.0_dkind/4.0_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+					if (this%viscosity_flag)	delta_t_interm2 = 1.0_dkind/4.0_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+					if (this%heat_trans_flag)	delta_t_interm3 = 1.0_dkind/4.0_dkind/(kappa%cells(i,j,k)/1000.0_dkind/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
 					if (min(delta_t_interm1,delta_t_interm2) < time_step2) then
 						time_step2 = min(delta_t_interm1,delta_t_interm2)
+					end if
+					if (min(time_step2,delta_t_interm3)	 < time_step2) then
+						time_step2 = min(time_step2,delta_t_interm3)	
 					end if
 				end if
 			end do
@@ -2348,10 +2348,10 @@ contains
 	!	this%time_step	= 1.0e-04_dkind
 
 		print *, this%courant_fraction * time_step, time_step2
-			
+	
 		this%time_step	= min(time_step2,this%courant_fraction * time_step)
 		
-		this%time_step	= min(1.0e-02_dkind, this%time_step)
+		this%time_step	= min(5.0e-06_dkind, this%time_step)
 
 	!	print *, this%time_step
 		
