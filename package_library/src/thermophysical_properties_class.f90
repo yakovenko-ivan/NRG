@@ -28,6 +28,7 @@ module thermophysical_properties_class
 
 		procedure	:: calculate_mixture_cp
 		procedure	:: calculate_specie_cp
+		procedure	:: calculate_mixture_cp_dT
 		procedure	:: calculate_specie_entropy
 		procedure	:: calculate_specie_enthalpy
 		procedure	:: calculate_mixture_enthalpy
@@ -223,6 +224,43 @@ contains
 
 	end function
 
+	recursive pure function calculate_mixture_cp_dT(this,temperature,species_concentrations)
+		class(thermophysical_properties),   intent(in)  :: this
+		real(dkind)                             :: calculate_mixture_cp_dT
+		real(dkind)                 ,intent(in) :: temperature
+		real(dkind) ,dimension(:)   ,intent(in) :: species_concentrations
+		real(dkind)                             :: specie_cp_dT
+		!!$OMP threadprivate (calculate_mixture_cp)
+
+		real(dkind) :: temp
+		integer :: species_number
+		integer :: i, specie_number
+
+		calculate_mixture_cp_dT = 0.0_dkind
+ 		species_number = size(species_concentrations)
+
+		temp = temperature
+			if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+
+		do specie_number = 1,species_number
+			if(temp < 1000.0) then
+				specie_cp_dT = 4.0_dkind * this%a_coeffs(5,1,specie_number)
+				do i = 4, 2, -1
+					specie_cp_dT = specie_cp_dT * temp
+					specie_cp_dT = specie_cp_dT + real(i-1,dkind)*this%a_coeffs(i,1,specie_number)
+				end do
+			else
+				specie_cp_dT = 4.0_dkind * this%a_coeffs(5,2,specie_number)
+				do i = 4, 2, -1
+					specie_cp_dT = specie_cp_dT * temp
+					specie_cp_dT = specie_cp_dT + real(i-1,dkind)*this%a_coeffs(i,2,specie_number)
+				end do
+			end if
+			calculate_mixture_cp_dT = calculate_mixture_cp_dT + specie_cp_dT * species_concentrations(specie_number)
+		end do
+	end function	
+	
+	
 	recursive pure function calculate_specie_enthalpy(this,temperature, specie_number)
 		class(thermophysical_properties),   intent(in)  :: this
 		real(dkind)             :: calculate_specie_enthalpy

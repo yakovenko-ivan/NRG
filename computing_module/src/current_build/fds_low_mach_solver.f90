@@ -29,12 +29,15 @@ module fds_low_mach_solver_class
 	private
 	public	:: fds_solver, fds_solver_c
 
-	type(field_scalar_cons)	,target	:: p_dyn, p_stat, p_stat_old,	dp_stat_dt, p_int, T_int, rho_int, rho_old	
-	type(field_scalar_cons)	,target	:: div_v, div_v_int, ddiv_v_dt,	H, H_int
+	type(field_scalar_cons)	,target	:: p_dyn	,p_stat		,p_stat_old		,dp_stat_dt	,p_int, dT_dt, T_int, rho_int, rho_old	
+	type(field_scalar_cons)	,target	:: div_v	,div_v_int	,ddiv_v_dt		,H			,H_old
 	type(field_scalar_cons)	,target	:: E_f_int
 	type(field_vector_cons)	,target	:: v_int, Y_int, Y_old
 	type(field_scalar_flow)	,target	:: F_a, F_b
 	type(field_vector_flow)	,target	:: v_f, v_f_old	
+
+	real(dkind)	,dimension(:)	,allocatable	:: concs
+	!$omp threadprivate(concs)
 
 	type fds_solver
 		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag
@@ -56,9 +59,9 @@ module fds_low_mach_solver_class
 		type(computational_mesh_pointer)			:: mesh
 		type(boundary_conditions_pointer)			:: boundary
 
-		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mol_mix_conc
+		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, dT_dt			, p				, p_int			, v_s			, mol_mix_conc
 		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff	, E_f_int		, h_s			, gamma
-		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_int
+		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_old			
 		type(field_scalar_cons_pointer)	:: nu		, kappa
 		type(field_scalar_flow_pointer)	:: F_a		, F_b
 		
@@ -71,7 +74,7 @@ module fds_low_mach_solver_class
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_droplets		
 		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets
 		
-		real(dkind)	,dimension(:,:,:,:)	,allocatable	:: vorticity
+		real(dkind)	,dimension(:,:,:,:)	,allocatable	:: vorticity, grad_F_a, grad_F_b
 		real(dkind)	,dimension(:,:,:)	,allocatable	:: p_old
 		
 		real(dkind)				:: rho_0
@@ -85,6 +88,7 @@ module fds_low_mach_solver_class
 		procedure	,private	:: CHARM_flux_limiter
 		procedure	,private	:: apply_boundary_conditions
 		procedure	,private	:: apply_poisson_boundary_conditions
+		procedure	,private	:: spectral_radii_selection
 		procedure				:: solve_problem
 		procedure				:: calculate_time_step
 		procedure				:: get_time_step
@@ -115,6 +119,8 @@ contains
 		integer	,dimension(3,2)	:: cons_utter_loop, cons_inner_loop
 		integer	,dimension(3,2)	:: flow_inner_loop, loop
 		
+		integer				:: species_number
+
 	    type(liquid_droplets_phase)     :: droplets_params
 		integer				:: particles_phase_counter, droplets_phase_counter		
 		
@@ -172,6 +178,9 @@ contains
 		constructor%H%s_ptr							=> H	
 		call manager%create_scalar_field(dp_stat_dt	,'pressure_static_change'				,'dp_stat_dt')
 		constructor%dp_stat_dt%s_ptr				=> dp_stat_dt	
+	
+		call manager%create_scalar_field(dT_dt,'temperature_change','dT_dt')
+		constructor%dT_dt%s_ptr						=> dT_dt
 		
 		call manager%create_scalar_field(rho_int	,'density_interm'						,'rho_int')
 		constructor%rho_int%s_ptr				=> rho_int
@@ -187,9 +196,6 @@ contains
 		constructor%T_int%s_ptr					=> T_int		
 		call manager%create_scalar_field(p_int		,'pressure_interm'						,'p_int')
 		constructor%p_int%s_ptr					=> p_int	
-		call manager%create_scalar_field(H_int		,'stagnation_energy_interm'				,'H_int')
-		constructor%H_int%s_ptr					=> H_int	
-				
 		call manager%create_vector_field(v_int		,'velocity_interm'						,'v_int'	,'spatial')
 		constructor%v_int%v_ptr					=> v_int
 		call manager%create_vector_field(Y_int		,'specie_molar_concentration_interm'	,'Y_int'	,'chemical')
@@ -286,7 +292,16 @@ contains
 		allocate(constructor%p_old(			cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))													
+
+		allocate(constructor%grad_F_a(		3						, &
+											cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
+											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
+											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 				
+		allocate(constructor%grad_F_b(		3						, &
+											cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
+											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
+											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 											
 		cons_utter_loop	= manager%domain%get_local_utter_cells_bounds()	
 		cons_inner_loop = manager%domain%get_local_inner_cells_bounds()	
@@ -339,10 +354,17 @@ contains
 		cell_size						= constructor%mesh%mesh_ptr%get_cell_edges_length()
 		
 		constructor%time				= calculation_time
-		constructor%initial_time_step	= 1.0e-10_dkind ! problem_solver_options%get_initial_time_step()
+		constructor%initial_time_step	= 2.5e-08_dkind ! problem_solver_options%get_initial_time_step()
 		constructor%time_step			= constructor%initial_time_step
 
 		constructor%rho_0				= constructor%rho%s_ptr%cells(1,1,1)
+	
+		species_number = manager%chemistry%chem_ptr%species_number
+		
+		!$omp parallel
+		allocate(concs(species_number))
+		concs = 0.0_dkind
+		!$omp end parallel
 		
 	end function
 
@@ -357,19 +379,21 @@ contains
 
 
 		this%time = this%time + this%time_step		
+
+		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
+		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
+		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
+		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)				
 		
-		!call this%apply_boundary_conditions_main()
-
-		if (iteration == 1) then	
-			if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)			
-		end if
-
+		if(this%additional_droplets_phases_number /= 0) then
+			do droplets_phase_counter = 1, this%additional_droplets_phases_number
+				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)		
+			end do		
+		end if  		
+		
 		call this%calculate_interm_Y_predictor(this%time_step)
 		call this%state_eq%apply_state_equation_low_mach_fds(this%time_step,predictor=.true.)		
 		call this%apply_boundary_conditions(this%time_step,predictor=.true.)		
-		
-		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
-
 		call this%calculate_divergence_v		(this%time_step,predictor=.true.)
 		call this%calculate_pressure_poisson	(this%time_step,predictor=.true.)
 		call this%calculate_velocity			(this%time_step,predictor=.true.)
@@ -378,20 +402,9 @@ contains
 		call this%state_eq%apply_state_equation_low_mach_fds(this%time_step,predictor=.false.)
 		call this%apply_boundary_conditions(this%time_step,predictor=.false.)
 
-		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
-		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
-		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
-		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)		
-		
 		call this%calculate_divergence_v		(this%time_step,predictor=.false.)
 		call this%calculate_pressure_poisson	(this%time_step,predictor=.false.)
 		call this%calculate_velocity			(this%time_step,predictor=.false.)		
-		
-		if(this%additional_droplets_phases_number /= 0) then
-			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)		
-			end do		
-		end if  
 
 		call this%calculate_time_step()
 
@@ -578,7 +591,7 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 	
-		real(dkind)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, dp_dt, D_sum, P_sum, U_sum, div_sum
+		real(dkind)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, mixture_cp_dT, dp_dt, D_sum, P_sum, U_sum, div_sum
 		
 		real(dkind)					:: cell_volume
 		real(dkind)	,dimension(3)	:: cell_size, cell_surface_area
@@ -590,7 +603,7 @@ contains
 		real(dkind), dimension (3,3)	:: lame_coeffs
 		character(len=20)				:: coordinate_system	
 		
-		integer	:: dimensions, species_number
+		integer	:: dimensions, species_number, cells_number
 		integer	,dimension(3,2)	:: cons_inner_loop
 
 		integer	:: bound_number, plus, sign
@@ -609,6 +622,7 @@ contains
 		
 		associate (	div_v_int		=> this%div_v_int%s_ptr		, &
 					T				=> this%T%s_ptr				, &
+					dT_dt			=> this%dT_dt%s_ptr			, &
 					rho				=> this%rho%s_ptr			, &
 					p_stat			=> this%p_stat%s_ptr		, &
 					gamma			=> this%gamma%s_ptr			, &
@@ -644,9 +658,9 @@ contains
 			
 		!	print *, '2', div_v_int%cells(50,20,1),T%cells(50,20,1),D_sum,P_sum
 			
-			!$omp parallel default(none)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs) , &
+			!$omp parallel default(none)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,mixture_cp_dT,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(D_sum,P_sum,U_sum,div_v_int,p_stat,dp_stat_dt,v_f,h_s,E_f_prod_visc,E_f_prod_heat,E_f_prod_diff,E_f_prod_chem,Y_prod_diff,Y_prod_chem,T,Y,rho,mol_mix_conc,energy_source,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,iter)					
+			!$omp& shared(D_sum,P_sum,U_sum,div_v_int,p_stat,dp_stat_dt,v_f,h_s,E_f_prod_visc,E_f_prod_heat,E_f_prod_diff,E_f_prod_chem,Y_prod_diff,Y_prod_chem,T,dT_dt,Y,rho,mol_mix_conc,energy_source,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,iter)					
 			!$omp do collapse(3) schedule(guided)	reduction(+:D_sum,P_sum)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -681,8 +695,17 @@ contains
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)
 					
 
-					if(mesh%mesh(1,i,j,k) <= mesh%mesh(1,1,j,k) + 1.0e-03_dkind) then
-			!			div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) + energy_source !* 1.0e+10 * this%time_step *  rho%cells(i,j,k) !* cell_size(1) ! * 4.0_dkind * Pi * mesh%mesh(1,i,j,k) * mesh%mesh(1,i,j,k)
+					concs = 0.0_dkind
+					mixture_cp = 0.0
+					do spec = 1,species_number
+						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dkind) then
+							mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec)	*Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
+							concs(spec)		= Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec) * mol_mix_conc%cells(i,j,k)
+						end if
+					end do				
+					
+					if(mesh%mesh(1,i,j,k) <= mesh%mesh(1,1,j,k) + 4.0e-04_dkind) then
+				!		div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) + energy_source !* 1.0e+10 * this%time_step *  rho%cells(i,j,k) !* cell_size(1) ! * 4.0_dkind * Pi * mesh%mesh(1,i,j,k) * mesh%mesh(1,i,j,k)
 					end if
 						
 					if (this%additional_droplets_phases_number /= 0) then
@@ -691,11 +714,6 @@ contains
 						end do		
 					end if
 					
-					mixture_cp = 0.0
-					do spec = 1, species_number
-						mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec)	*Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
-					end do
-
 					do dim = 1,dimensions
 					
 						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
@@ -727,8 +745,11 @@ contains
 																			  -	v_f%pr(dim)%cells(dim,i,j,k)									* lame_coeffs(dim,1) * (flux_left	-  rho%cells(i,j,k) * h_s%cells(i,j,k)) / cell_size(1)) / lame_coeffs(dim,2)	
 						continue
 					end do					
-					
 					div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * h_s%cells(i,j,k))
+					mixture_cp		= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
+					mixture_cp_dT	= this%thermo%thermo_ptr%calculate_mixture_cp_dT(T%cells(i,j,k),concs)
+					
+					div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) - 1.0_dkind/mixture_cp*mixture_cp_dT*dT_dt%cells(i,j,k)	
 					
 					do spec = 1, species_number
 					
@@ -856,7 +877,7 @@ contains
 		logical				,intent(in)		:: predictor
 		
 		real(dkind)	:: H_center, H_left, H_right, F_a_left, F_a_right, F_b_left, F_b_right
-		real(dkind)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm, a_norm_prev, H_summ, sum_ddiv_v_dt
+		real(dkind)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm, a_norm_prev, H_summ, sum_ddiv_v_dt, grad_F_a_summ, grad_F_b_summ
 		real(dkind)	:: farfield_density, farfield_pressure, farfield_velocity
 		
 		real(dkind), dimension (3,3)	:: lame_coeffs
@@ -866,7 +887,7 @@ contains
 		integer		:: r_i, r_j, r_k
 
 		real(dkind)	,dimension(3)	:: cell_size		
-		real(dkind)	:: time_step_adj, beta, beta_old, spectral_radii_jacobi
+		real(dkind)	:: time_step_adj, beta, beta_old, spectral_radii_jacobi, edges_number, cells_number
 		real(dkind), save	:: time = 0.0_dkind
 		
 		integer	:: dimensions, iterations, iterations_number
@@ -909,8 +930,9 @@ contains
 					F_a				=> this%F_a%s_ptr			, &
 					F_b				=> this%F_b%s_ptr			, &
 					H				=> this%H%s_ptr				, &
-					H_int			=> this%H_int%s_ptr			, &
 					vorticity		=> this%vorticity			, &
+					grad_F_a		=> this%grad_F_a			, &
+					grad_F_b		=> this%grad_F_b			, &
 					v_f				=> this%v_f%v_ptr			, &
 					v_f_old			=> this%v_f_old%v_ptr		, &
 					v_prod_visc		=> this%v_prod_visc%v_ptr	, &
@@ -924,6 +946,9 @@ contains
 			vorticity		= 0.0_dkind	
 			F_a%cells		= 0.0_dkind		
 			F_b%cells		= 0.0_dkind		
+			cells_number	= 0.0_dkind
+			
+			grad_F_a_summ	= 0.0_dkind
 			
 			!beta = 2.0_dkind/(1.0_dkind + sin(pi*cell_size(1)))
 			!beta = 2.0_dkind - 2.0_dkind * pi*cell_size(1)
@@ -936,11 +961,12 @@ contains
 				spectral_radii_jacobi = spectral_radii_jacobi + cell_size(1)**2 * cos(Pi/cons_utter_loop(dim,2)) / (dimensions * cell_size(1)**2)
 			end do
 			
+			spectral_radii_jacobi =	    0.9999913706818E+00_dkind
 
-			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,pois_coeffs) , &
+			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,pois_coeffs,farfield_velocity) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,mesh,time_step)					
-			!$omp do collapse(3) schedule(guided)	reduction(+:sum_ddiv_v_dt)
+			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,grad_F_a, grad_F_a_summ, rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,cells_number,coordinate_system,mesh,time_step)					
+			!$omp do collapse(3) schedule(guided)	reduction(+:sum_ddiv_v_dt) reduction(+:cells_number)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -983,6 +1009,8 @@ contains
 						end do
 					end if
 					
+					cells_number  = cells_number + 1.0_dkind
+					sum_ddiv_v_dt = sum_ddiv_v_dt + ddiv_v_dt%cells(i,j,k)
 				!	ddiv_v_dt%cells(i,j,k)	= - 4.0_dkind*exp(-8.0**2*(i*1e-05 - 0.25)**2)
 					
 				end if
@@ -991,6 +1019,19 @@ contains
 			end do		
 			!$omp end do
 
+			if (this%all_Neumann_flag) then	
+			!$omp do collapse(3) schedule(guided)
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+				if(bc%bc_markers(i,j,k) == 0) then
+					ddiv_v_dt%cells(i,j,k)	= ddiv_v_dt%cells(i,j,k) - sum_ddiv_v_dt/cells_number
+				end if
+			end do
+			end do
+			end do		
+			!$omp end do			
+			end if
 			
 			!$omp do collapse(3) schedule(guided)	
 			do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
@@ -1026,7 +1067,7 @@ contains
 				loop(1,1) = cons_inner_loop(1,1)
 				loop(1,2) = cons_utter_loop(1,2)*I_m(dim,1) + cons_inner_loop(1,2)*(1 - I_m(dim,1))
 				
-				!$omp do collapse(3) schedule(guided)	
+				!$omp do collapse(3) schedule(guided)
 				do k = loop(3,1),loop(3,2)
 				do j = loop(2,1),loop(2,2)
 				do i = loop(1,1),loop(1,2)
@@ -1085,12 +1126,67 @@ contains
 						
 						end if
 					end if
-				
 				end do
 				end do
 				end do
 				!$omp end do
 			end do
+
+			!$omp do collapse(3) schedule(guided) reduction(+:grad_F_a_summ)
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+				if(bc%bc_markers(i,j,k) == 0) then
+					
+					lame_coeffs		= 1.0_dkind				
+					pois_coeffs		= 0.0_dkind	
+			
+					select case(coordinate_system)
+						case ('cartesian')	
+							lame_coeffs			= 1.0_dkind
+							pois_coeffs			= 0.0_dkind
+						case ('cylindrical')
+							! x -> z, y -> r
+							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+							pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
+					
+						case ('spherical')
+							! x -> r
+							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+					end select						
+					
+					do dim = 1, dimensions
+						grad_F_a(dim,i,j,k)	= (F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+						grad_F_a_summ		= grad_F_a_summ + grad_F_a(dim,i,j,k) 
+					end do
+   
+					
+						
+				end if
+			end do
+			end do
+			end do		
+			!$omp end do			
+			
+			if (this%all_Neumann_flag) then	
+			!$omp do collapse(3) schedule(guided)
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+				if(bc%bc_markers(i,j,k) == 0) then
+					grad_F_a(dim,i,j,k)  = grad_F_a(dim,i,j,k)  - grad_F_a_summ/cells_number
+				end if
+			end do
+			end do
+			end do		
+			!$omp end do			
+			end if
+			
 			!$omp end parallel
 			
 			overall_poisson_iteration = 0			
@@ -1103,10 +1199,12 @@ contains
 				
 				H_max_old	= 10.0
 				a_norm_init = 0.0_dkind
+
+				grad_F_b_summ = 0.0_dkind
 				
-				!$omp parallel default(none)  private(i,j,k,dim,loop,residual,lame_coeffs,pois_coeffs) , &
+				!$omp parallel default(none)  private(i,j,k,dim,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,pois_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(F_a,F_b,p_dyn,H,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init)
+				!$omp& shared(F_a,F_b,grad_F_b,grad_F_b_summ,v_f,v_f_old,p_dyn,H,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init,time_step,cells_number)
 				
 				do dim = 1, dimensions
 					loop(3,1) = cons_inner_loop(3,1)
@@ -1140,11 +1238,63 @@ contains
 					end do
 					end do
 					!$omp end do
-		
-				end do
-					
 
-				!$omp do collapse(3) schedule(guided) reduction(+:a_norm_init) !reduction(+:H_average)	
+				end do
+				
+				!$omp do collapse(3) schedule(guided) reduction(+:grad_F_b_summ)
+				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+					if(bc%bc_markers(i,j,k) == 0) then
+					
+						lame_coeffs		= 1.0_dkind				
+						pois_coeffs		= 0.0_dkind	
+			
+						select case(coordinate_system)
+							case ('cartesian')	
+								lame_coeffs			= 1.0_dkind
+								pois_coeffs			= 0.0_dkind
+							case ('cylindrical')
+								! x -> z, y -> r
+								lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+								lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+								lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+								pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
+					
+							case ('spherical')
+								! x -> r
+								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+								lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+								lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+						end select						
+					
+						do dim = 1, dimensions
+							grad_F_b(dim,i,j,k)	= (F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+							grad_F_b_summ	= grad_F_b_summ + grad_F_b(dim,i,j,k) 
+						end do
+						
+					end if
+				end do
+				end do
+				end do		
+				!$omp end do			
+			
+				if (this%all_Neumann_flag) then	
+				!$omp do collapse(3) schedule(guided)
+				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+					if(bc%bc_markers(i,j,k) == 0) then
+						grad_F_b(dim,i,j,k)  = grad_F_b(dim,i,j,k)  - grad_F_b_summ/cells_number
+					end if
+				end do
+				end do
+				end do		
+				!$omp end do				
+				end if
+				
+				!$omp do collapse(3) schedule(guided) reduction(+:a_norm_init)
 				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -1181,17 +1331,53 @@ contains
 						do dim = 1, dimensions
 							residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
 
-							residual	= residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+							residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k)
 
-							residual	= residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
-						end do	
+							residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k)
+
+							do plus = 1,2
+								sign			= (-1)**plus
+								bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+								if( bound_number /= 0 ) then
+									boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+									select case(boundary_type_name)
+										case('wall')
+											farfield_velocity = 0.0_dkind
+											if(predictor) then
+												residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																						!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																							
+											else
+												residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																						!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+											end if													
+										case('inlet')
+											farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+											if(predictor) then
+												residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																						!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																							
+											else
+												residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																						!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+											end if													
+									end select
+								end if
+							end do	
+						end do
 
 						a_norm_init = a_norm_init + abs(residual)
 						
 					end if
 				end do
 				end do
-				end do				
+				end do
 				!$omp end do
 				!$omp end parallel	
 				
@@ -1199,7 +1385,9 @@ contains
 				converged			= .false.
 				H_max				= 0.0_dkind
 				a_norm_prev			= a_norm_init
-				
+				beta				= 1.0_dkind
+				!	call this%spectral_radii_selection(time_step,predictor,a_norm_init,spectral_radii_jacobi)				
+				!	pause	
 				!$omp parallel default(none)  private(i,j,k,dim,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,pois_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
 				!$omp& shared(H_summ,H,a_norm,a_norm_init,a_norm_prev,H_int,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,spectral_radii_jacobi)				
@@ -1216,7 +1404,7 @@ contains
 					!$omp barrier
 
 				!# Parallel successive overrelaxation
-					!$omp do collapse(3) schedule(guided) reduction(+:a_norm) !reduction(+:H_average)	
+					!$omp do collapse(3) schedule(guided) reduction(+:a_norm)
 					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -1247,20 +1435,55 @@ contains
 
 								residual = 0.0_dkind
 								
-								residual = residual - (2.0_dkind*dimensions)*H_int%cells(i,j,k)
+								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)								
+								
+								residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
 								
 								do dim = 1, dimensions
-									residual = residual +	(H_int%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H_int%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
+									residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
 		     
-									residual = residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
-		     
-									residual = residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+									residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k) !(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+
+									residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k) !(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
 								
-								end do	
-     
-								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
+							do plus = 1,2
+										sign			= (-1)**plus
+										bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+										if( bound_number /= 0 ) then
+											boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+											select case(boundary_type_name)
+												case('wall')
+													farfield_velocity = 0.0_dkind
+													if(predictor) then
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																							
+													else
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																								!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+													end if													
+												case('inlet')
+													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+													if(predictor) then
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																							
+													else
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																								!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+													end if													
+											end select		
+										end if
+									end do
+								end do								
 								
-								H%cells(i,j,k)	= H_int%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*residual
+								H%cells(i,j,k)	= H%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*residual
      
 								a_norm = a_norm + abs(residual)
      
@@ -1272,59 +1495,6 @@ contains
 					!$omp end do
 
 					!$omp barrier
-
-					!$omp master
-					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-						if(bc%bc_markers(i,j,k) == 0) then
-							do dim = 1,dimensions	
-								do plus = 1,2
-									sign			= (-1)**plus
-									bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-									if( bound_number /= 0 ) then
-										boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-										select case(boundary_type_name)
-											case('wall')
-												if(predictor) then
-													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																																					+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
-																																					+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)	
-												else
-													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																																					+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
-																																					+	(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
-												end if
-											case('inlet')	
-												farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
-											!	farfield_velocity = 0.0_dkind + min(time,5e-03)/5e-03 * farfield_velocity
-												if (predictor) then	
-													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
-																																		- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step
-												else		
-													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
-																																		- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
-																																												+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
-												end if	
-											case('outlet')
-											!	H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 0.0_dkind !H%cells(i,j,k)
-										end select
-									end if
-								end do
-							end do
-						end if
-					end do
-					end do
-					end do
-					!$omp end master					
-
-
-					continue
-					
-					!$omp barrier
-					
 
 					!$omp master
 					if(poisson_iteration == 0) then
@@ -1367,18 +1537,54 @@ contains
 							
 								residual = 0.0_dkind
 								
+								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
+
 								residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
-								
+
 								do dim = 1, dimensions
 									residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)) * (1.0_dkind - pois_coeffs(dim)))
 		   
-									residual = residual +	cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+									residual = residual +	cell_size(1)*grad_F_a(dim,i,j,k)
+									residual = residual +	cell_size(1)*grad_F_b(dim,i,j,k)
 
-									residual = residual +	cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+									residual = residual +	cell_size(1)*grad_F_b(dim,i,j,k) !cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
 
+									do plus = 1,2
+										sign			= (-1)**plus
+										bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+										if( bound_number /= 0 ) then
+											boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+											select case(boundary_type_name)
+												case('wall')
+													farfield_velocity = 0.0_dkind
+													if(predictor) then
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																							
+													else
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																								!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+													end if													
+												case('inlet')
+													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+													if(predictor) then
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																							
+													else
+														residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+																																								!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																								!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+													end if													
+											end select
+										end if
+									end do
 								end do	
-								
-								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
 								
 								H%cells(i,j,k)	= H%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*residual
 								
@@ -1394,104 +1600,41 @@ contains
 					!$omp barrier
 
 					!$omp master
-					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-						if(bc%bc_markers(i,j,k) == 0) then
-							H_int%cells(i,j,k)	= H%cells(i,j,k)
-							do dim = 1,dimensions	
-								do plus = 1,2
-									sign			= (-1)**plus
-									bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-									if( bound_number /= 0 ) then
-										boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-										select case(boundary_type_name)
-											case('wall')
-												if(predictor) then
-													H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	H_int%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
-																																						+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)	
-												!	H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-												else
-													H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	H_int%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
-																																						+	(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
-												!	H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-												end if
-											case('inlet')
-												farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
-											!	farfield_velocity = 0.0_dkind + min(time,5e-03)/5e-03 * farfield_velocity
-												if (predictor) then	
-													H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H_int%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
-																																				- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step
-												else		
-													H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H_int%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
-																																				- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
-																																												+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
-												end if
-											case('outlet')
-											!	H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 0.0_dkind !H_int%cells(i,j,k)	
-										end select
-									end if
-								end do
-							end do
-						end if
-					end do
-					end do
-					end do
-					!$omp end master
 
-					!$omp barrier
-					
-					!$omp master
 					if(poisson_iteration == 0) then
 						beta		= 1.0_dkind/(1.0_dkind - 0.25_dkind * spectral_radii_jacobi*spectral_radii_jacobi * beta)
 					end if
-					!$omp end master
-					
 
-					!$omp master
-					!if ((abs(H_max - H_max_old) > 1.0e-03).and.(converged)) then
-					!	converged = .false.
-					!!	print *, abs(H_max - H_max_old),  H_max, poisson_iteration
-					!end if		
-					!H_max_old	= H_max
-					!	print *, a_norm, a_norm_init
-					!	print *, poisson_iteration
+					if((a_norm_init < 1e-10).and.(poisson_iteration == 0)) then
+					!	print *, a_norm_init, a_norm
+						a_norm_init =  a_norm
+					!	pause
+					end if						
+						
+					if((mod(poisson_iteration,100) == 0).and.(a_norm_init > 1e-10)) then
+						print *, poisson_iteration,  a_norm/a_norm_init, a_norm_init, a_norm, beta
+					end if					
+						
+					if ((a_norm > 1.0e-02*a_norm_init).and.(converged)) converged = .false.	
 
-						if((a_norm_init < 1e-10).and.(poisson_iteration == 0)) then
-						!	print *, a_norm_init, a_norm
-							a_norm_init =  a_norm
-						!	pause
-						end if						
+					if (poisson_iteration < 100) converged = .false.
 						
-						if((mod(poisson_iteration,1000) == 0).and.(a_norm_init > 1e-10)) then
-							print *, poisson_iteration,  a_norm/a_norm_init, a_norm_init, a_norm
-						end if					
+					if ((poisson_iteration > 2000).and.(a_norm_prev < a_norm)) then
+						converged = .true.
+						print *, 'Not converged***************************************'
+			!			pause
+					end if
 						
-						if ((a_norm > 1.0e-02*a_norm_init).and.(converged)) converged = .false.	
+					if (a_norm < 1e-05) converged = .true.
+						
+					a_norm_prev = a_norm
 
-						if (poisson_iteration < 10) converged = .false.
-						
-						if ((poisson_iteration > 10000).and.(a_norm_prev < a_norm)) converged = .true.
-						
-						if (a_norm < 1e-02) converged = .true.
-						
-						a_norm_prev = a_norm
-						
-					!$omp end master
-	
-					!$omp barrier	
-					
-					!call this%calculate_dynamic_pressure(time_step,predictor)	
-					
-					!$omp master
 					poisson_iteration	= poisson_iteration + 1
+
 					!$omp end master
 					
 					!$omp barrier
+
 				end do	
 				!$omp end parallel
 				
@@ -1503,13 +1646,10 @@ contains
 
 				overall_poisson_iteration = overall_poisson_iteration + poisson_iteration
 
-				call this%calculate_dynamic_pressure(time_step,predictor)
-				pressure_converged = .true.
-
 				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-					H_int%cells(i,j,k)		= H%cells(i,j,k)
+
 					if(bc%bc_markers(i,j,k) == 0) then
 						do dim = 1,dimensions															 
 							do plus = 1,2
@@ -1519,10 +1659,15 @@ contains
 									boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 									select case(boundary_type_name)
 										case('wall')
-											H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																			+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)
-											H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-
+										if(predictor) then
+												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																		+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
+											else
+												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																		+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
+											end if
 										case('outlet')
 											if (sign == 1) then		!# Правая граница
 												if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Выток, берутся значения слева
@@ -1536,10 +1681,6 @@ contains
 													do dim1 = 1,dimensions
 														H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind*(	(0.5_dkind *( v_f%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) + v_f%pr(dim1)%cells(dim1,i,j,k))) **2) 
 													end do
-
-										!			H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		=	2.0_dkind*H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - H%cells(i,j,k)
-														
-													H_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 												else																					!# Вток, берутся значения справа
 													farfield_density		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_density()
 													farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
@@ -1547,9 +1688,6 @@ contains
 							
 													H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		=	p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/farfield_density + 0.5_dkind*(farfield_velocity **2)!p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/farfield_density + 0.5_dkind*(farfield_velocity **2)
 											
-										!			H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		=	2.0_dkind*H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - H%cells(i,j,k)
-														
-													H_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 												end if
 											else					!# Левая граница
 												if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Выток, берутся значения справа
@@ -1564,28 +1702,21 @@ contains
 														H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + 0.5_dkind*(	(0.5_dkind *( v_f%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) + v_f%pr(dim1)%cells(dim1,i,j,k))) **2) 
 													end do
 												
-										!			H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		=	2.0_dkind*H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - H%cells(i,j,k)
-														
-													H_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	
 												else																					!# Вток, берутся значения справа
 													farfield_density		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_density()
 													farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
 												
 													H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		=	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/farfield_density + 0.5_dkind*(farfield_velocity **2)!p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/farfield_density + 0.5_dkind*(farfield_velocity **2) 
-										!			H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		=	2.0_dkind*H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - H%cells(i,j,k)
-												
-										!			H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		=	2.0_dkind*H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - H%cells(i,j,k)
-														
-													H_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+
 												end if
 											end if
 												
 										case('inlet')
      
 											if (dim==1) then
-												farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
-											
+												farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+												
 												if (predictor) then	
 													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
@@ -1594,10 +1725,9 @@ contains
 													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
 																																		- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
-																																												+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+																																				+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 												end if
 										
-												H_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 											end if
 									end select
 								end if
@@ -1607,6 +1737,9 @@ contains
 				end do
 				end do
 				end do	
+				
+				call this%calculate_dynamic_pressure(time_step,predictor)
+				pressure_converged = .true.				
 				
 				!$omp parallel default(none)  private(i,j,k,dim,H_residual,r_i,r_j,r_k,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_velocity,farfield_pressure) , &
 				!$omp& firstprivate(this) , &
@@ -1622,9 +1755,8 @@ contains
 							if (predictor) then
 								if (pressure_converged) then
 								if (abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>20.0_dkind/cell_size(1)/cell_size(1)) then
+										*(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>10.0_dkind/cell_size(1)/cell_size(1)) then
 									pressure_converged = .false.
-									print *, i, j, k
 									print *, 'Pressure error', abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
 										*(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))
 								end if
@@ -1632,9 +1764,8 @@ contains
 							else
 								if (pressure_converged) then
 								if (abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>20.0_dkind/cell_size(1)/cell_size(1)) then
+										*(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>10.0_dkind/cell_size(1)/cell_size(1)) then
 									pressure_converged = .false.
-									print *, i, j, k
 									print *, 'Pressure error',  abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
 										*(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))
 								end if
@@ -1647,7 +1778,7 @@ contains
 				end do
 				end do		
 				!$omp end do
-				!$omp end parallel			
+				!$omp end parallel
 
 				pressure_iteration = pressure_iteration + 1
 
@@ -1686,7 +1817,7 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-	
+
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 	
 		associate (	rho_old			=> this%rho_old%s_ptr		, &
@@ -1694,7 +1825,6 @@ contains
 					F_a				=> this%F_a%s_ptr			, &
 					F_b				=> this%F_b%s_ptr			, &
 					H				=> this%H%s_ptr				, &
-					H_int			=> this%H_int%s_ptr			, &
 					v				=> this%v%v_ptr				, &
 					v_f				=> this%v_f%v_ptr			, &
 					v_f_old			=> this%v_f_old%v_ptr		, &
@@ -1787,7 +1917,10 @@ contains
 		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
 		integer	,dimension(3,2)	:: loop
 		
-		integer :: i,j,k,dim,spec
+		character(len=20)		:: boundary_type_name
+		
+		integer	:: sign, bound_number
+		integer :: i,j,k,dim,dim1,dim2,spec,plus
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		
@@ -1840,6 +1973,17 @@ contains
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)	
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1, dimensions
+						do plus = 1,2
+							sign			= (-1)**plus
+							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+							if( bound_number /= 0 ) then
+								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+								select case(boundary_type_name)
+									case('wall')
+										v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) = 0.0_dkind 
+								end select
+							end if
+						end do
 						v%pr(dim)%cells(i,j,k) = 0.5_dkind * ( v_f%pr(dim)%cells(dim,i,j,k) + v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
 					end do	
 				end if
@@ -1952,7 +2096,7 @@ contains
 							end if					
 
 							rhs = rhs - (	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3)&
--	flux_left * v_f%pr(dim)%cells(dim,i,j,k)* lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2)
+										-	flux_left * v_f%pr(dim)%cells(dim,i,j,k)* lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2)
 							
 							continue
 						end do	
@@ -2015,7 +2159,7 @@ contains
 		
 		real(dkind)	,dimension(3)	:: cell_size		
 		
-		real(dkind)					:: wall_temperature, farfield_temperature, farfield_pressure
+		real(dkind)					:: wall_temperature, farfield_temperature, farfield_pressure, farfield_velocity
 		
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -2085,7 +2229,7 @@ contains
 
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  -v%pr(dim1)%cells(i,j,k)
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
 											else
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if
@@ -2130,11 +2274,13 @@ contains
 											end if	
 										end if
 										
+										farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+										
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  farfield_velocity
 											else
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  0.0_dkind 
 											end if
 										end do
 
@@ -2190,7 +2336,6 @@ contains
 					F_a				=> this%F_a%s_ptr			, &
 					F_b				=> this%F_b%s_ptr			, &
 					H				=> this%H%s_ptr				, &
-					H_int			=> this%H_int%s_ptr			, &
 					v_f				=> this%v_f%v_ptr			, &
 					v_f_old			=> this%v_f_old%v_ptr		, &
 					bc				=> this%boundary%bc_ptr)
@@ -2351,7 +2496,7 @@ contains
 	
 		this%time_step	= min(time_step2,this%courant_fraction * time_step)
 		
-		this%time_step	= min(5.0e-06_dkind, this%time_step)
+		this%time_step	= min(2.5e-05_dkind, this%time_step)
 
 	!	print *, this%time_step
 		
@@ -2363,6 +2508,336 @@ contains
 
 	end subroutine
 
+	subroutine spectral_radii_selection(this,time_step,predictor,a_norm_init,spectral_radii_jacobi)
+		class(fds_solver)	,intent(inout)	:: this
+		real(dkind)			,intent(in)		:: time_step
+		logical				,intent(in)		:: predictor
+		real(dkind)			,intent(in)		:: a_norm_init
+		real(dkind)			,intent(out)	:: spectral_radii_jacobi
+
+		real(dkind)	:: H_residual, residual, a_norm, a_norm_prev
+		real(dkind)	:: farfield_density, farfield_pressure, farfield_velocity
+		
+		real(dkind), dimension (3,3)	:: lame_coeffs
+		real(dkind), dimension (3)		:: pois_coeffs
+		character(len=20)				:: coordinate_system
+		
+		real(dkind)	,dimension(3)	:: cell_size		
+		real(dkind)	:: time_step_adj, beta, beta_old, delta, x1, x2, xm, a, b
+		real(dkind), save	:: time = 0.0_dkind
+		real(dkind)	,dimension(3)	:: x
+		integer		,dimension(3)	:: poisson_iteration
+		
+		
+		integer	:: dimensions, iterations, iterations_number
+		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
+		integer	,dimension(3,2)	:: loop
+		
+		character(len=20)		:: boundary_type_name
+		
+		integer	:: iter, func_iter
+		integer	:: sign, bound_number
+		integer :: i,j,k,dim,dim1,dim2,spec,plus
+		integer	:: io_unit
+		
+		integer			:: pressure_iteration , overall_poisson_iteration, poisson_iteration_1, poisson_iteration_2, poisson_iteration_m
+		
+		logical			:: converged = .false.
+		logical			:: pressure_converged = .false.
+		
+		dimensions		= this%domain%get_domain_dimensions()
+		
+		coordinate_system	= this%domain%get_coordinate_system_name()
+		
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
+		cons_utter_loop	= this%domain%get_local_utter_cells_bounds()
+		
+		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+
+		open(newunit = io_unit, file = 'spectral_radii.dat', status = 'unknown', form = 'formatted', position='append')
+		
+		associate (	p				=> this%p%s_ptr				, &
+					p_stat			=> this%p_stat%s_ptr		, &
+					p_dyn			=> this%p_dyn%s_ptr			, &
+					rho_old			=> this%rho_old%s_ptr		, &
+					rho_int			=> this%rho_int%s_ptr		, &
+					ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
+					F_a				=> this%F_a%s_ptr			, &
+					F_b				=> this%F_b%s_ptr			, &
+					grad_F_a		=> this%grad_F_a			, &
+					grad_F_b		=> this%grad_F_b			, &					
+					H				=> this%H%s_ptr				, &
+					H_old			=> this%H_old%s_ptr			, &
+					mesh			=> this%mesh%mesh_ptr		, &
+					bc				=> this%boundary%bc_ptr)
+
+			do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
+			do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
+			do i = cons_utter_loop(1,1),cons_utter_loop(1,2)
+				H_old%cells(i,j,k)		= H%cells(i,j,k)
+			end do
+			end do
+			end do			
+
+			print *, 'Calculating optimal spectral radii'
+			
+			a_norm_prev			= a_norm_init
+			
+			a = 0.9_dkind
+			b = 0.999999_dkind
+
+			!spectral_radii_jacobi = 0.0_dkind
+			!do dim = 1, dimensions
+			!	spectral_radii_jacobi = spectral_radii_jacobi + cell_size(1)**2 * cos(0.05_dkind*13.5_dkind*Pi/cons_utter_loop(dim,2)) / (dimensions * cell_size(1)**2)
+			!end do			
+			
+			do iter = 1, 100
+
+				x(1) = b - 0.25_dkind * (b - a)
+				x(2) = a + 0.5_dkind  * (b - a)	
+				x(3) = a + 0.25_dkind * (b - a)
+
+				poisson_iteration = 0
+				
+				do func_iter = 1, 3
+				
+					spectral_radii_jacobi = x(func_iter)
+				
+					do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
+					do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
+					do i = cons_utter_loop(1,1),cons_utter_loop(1,2)
+						H%cells(i,j,k)		= H_old%cells(i,j,k)
+					end do
+					end do
+					end do		
+
+					converged = .false.
+
+				!	beta		= 1.0_dkind/(1.0_dkind - 0.5_dkind * spectral_radii_jacobi*spectral_radii_jacobi)
+					beta	= 1.0_dkind	
+					
+					do while ((.not.converged).and.(poisson_iteration(func_iter) <= 50000))
+			
+						a_norm	= 0.0_dkind
+						converged = .true.
+						
+
+						do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+						do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+						do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+							if(bc%bc_markers(i,j,k) == 0) then
+								if((mod(i+j+k,2) == 1)) then	
+			  
+									lame_coeffs		= 1.0_dkind				
+									pois_coeffs		= 0.0_dkind	
+			
+									select case(coordinate_system)
+										case ('cartesian')	
+											lame_coeffs			= 1.0_dkind
+											pois_coeffs			= 0.0_dkind
+										case ('cylindrical')
+											! x -> z, y -> r
+											lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+											lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+											lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+											pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
+					
+										case ('spherical')
+											! x -> r
+											lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+											lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+											lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+									end select								
+
+									residual = 0.0_dkind
+								
+									residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)								
+								
+									residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
+								
+									do dim = 1, dimensions
+										residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
+		     
+										residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k) !(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+
+										residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k) !(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
+								
+										do plus = 1,2
+											sign			= (-1)**plus
+											bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+											if( bound_number /= 0 ) then
+												boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+												select case(boundary_type_name)
+													case('wall')
+														if(predictor) then
+															residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																								+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
+														else
+															residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																								+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
+														end if
+												end select
+											end if
+										end do
+									end do								
+								
+									H%cells(i,j,k)	= H%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*residual
+     
+									a_norm = a_norm + abs(residual)
+     
+								end if
+							end if
+						end do
+						end do
+						end do				
+
+						if(poisson_iteration(func_iter) == 0) then
+							beta		= 1.0_dkind/(1.0_dkind - 0.5_dkind * spectral_radii_jacobi*spectral_radii_jacobi)
+						else
+							beta		= 1.0_dkind/(1.0_dkind - 0.25_dkind * spectral_radii_jacobi*spectral_radii_jacobi * beta)
+						end if
+		
+						do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+						do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+						do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+							if(bc%bc_markers(i,j,k) == 0) then
+								if((mod(i+j+k,2) == 0)) then	
+	    
+									lame_coeffs		= 1.0_dkind				
+									pois_coeffs		= 0.0_dkind	
+			
+									select case(coordinate_system)
+										case ('cartesian')	
+											lame_coeffs			= 1.0_dkind
+											pois_coeffs			= 0.0_dkind
+										case ('cylindrical')
+											! x -> z, y -> r
+											lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
+											lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
+											lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+					
+											pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
+					
+										case ('spherical')
+											! x -> r
+											lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+											lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+											lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+									end select								
+							
+									residual = 0.0_dkind
+								
+									residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)								
+								
+									residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
+
+									do dim = 1, dimensions
+										residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)) * (1.0_dkind - pois_coeffs(dim)))
+		   
+										residual = residual +	cell_size(1)*grad_F_a(dim,i,j,k) !cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+
+										residual = residual +	cell_size(1)*grad_F_b(dim,i,j,k) !cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+
+										do plus = 1,2
+											sign			= (-1)**plus
+											bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+											if( bound_number /= 0 ) then
+												boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+												select case(boundary_type_name)
+													case('wall')
+														if(predictor) then
+															residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																								+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
+														else
+															residual = residual + H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																								+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
+														end if
+												end select
+											end if
+										end do
+									end do	
+								
+									H%cells(i,j,k)	= H%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*residual
+								
+									a_norm = a_norm + abs(residual)
+								
+								end if
+							end if
+						end do
+						end do
+						end do								
+
+						if(poisson_iteration(func_iter) == 0) then
+							beta		= 1.0_dkind/(1.0_dkind - 0.25_dkind * spectral_radii_jacobi*spectral_radii_jacobi * beta)
+						end if
+						
+						if((mod(poisson_iteration(func_iter),1000) == 0).and.(a_norm_init > 1e-10)) then
+							print *, poisson_iteration(func_iter),  a_norm/a_norm_init, a_norm_init, a_norm, beta, spectral_radii_jacobi
+						end if	
+						
+						if (poisson_iteration(func_iter) < 10) converged = .false.
+						if ((poisson_iteration(func_iter) > 10000).and.(a_norm_prev < a_norm)) then
+							print *, 'Not converged'
+							converged = .true.
+						end if
+						
+						if ((a_norm > 1.0e-01*a_norm_init).and.(converged)) converged = .false.	
+						
+						if (a_norm < 1e-02) converged = .true.
+
+						poisson_iteration(func_iter) = poisson_iteration(func_iter) + 1
+
+						if(func_iter>1) then
+						if((poisson_iteration(func_iter) > maxval(poisson_iteration(:func_iter-1)))) then
+							exit
+						end if
+						end if
+						
+					end do	
+				
+				end do	
+					
+				
+				write(*,'(A,I2,A,E14.7,A,I4,A,E14.7,A,I4,A,E14.7,A,I4)') 'iter: ', iter, '	x1: ', x(3), '  ', poisson_iteration(3), ' x2: ', x(1), '  ', poisson_iteration(1), ' xm: ', x(2), '  ', poisson_iteration(2)						
+				write(io_unit,'(E20.13,I6)')	x(MINLOC(poisson_iteration)), minval(poisson_iteration)
+				
+				
+				if (poisson_iteration(3) < poisson_iteration(2)) then
+					b = x(2)
+					x(2) = x(3)
+				else
+					if (poisson_iteration(1) < poisson_iteration(2)) then
+						a = x(2)
+						x(2) = x(1)
+					else
+						a = x(3)
+						b = x(1)
+					end if
+				end if
+			end do
+			
+			close(io_unit)
+			
+			spectral_radii_jacobi = x(1)
+			
+			print *, 'Optimal spectral radii', spectral_radii_jacobi
+			
+			do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
+			do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
+			do i = cons_utter_loop(1,1),cons_utter_loop(1,2)
+				H%cells(i,j,k)		= H_old%cells(i,j,k)
+			end do
+			end do
+			end do				
+
+		end associate
+
+	end subroutine
 	
 	pure function get_time_step(this)
 		real(dkind)						:: get_time_step
