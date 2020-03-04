@@ -28,6 +28,7 @@ module lagrangian_droplets_solver_class
 
 	type	:: lagrangian_particle
 		real(dkind)	,dimension(3)	:: coords, velocity
+		integer		,dimension(3)	:: cell
 		real(dkind)					:: temperature
 		real(dkind)					:: mass,	dm
 		logical						:: outside_domain
@@ -152,19 +153,6 @@ contains
 
 		constructor%phase_number    = phase_number
 
-		constructor%particles_number    = 25
-		
-		allocate(constructor%particles(constructor%particles_number))
-		
-		do part	= 1, constructor%particles_number 
-			constructor%particles(part)%temperature = 300.0_dkind
-			constructor%particles(part)%mass		= Pi*constructor%droplets_params%diameter**3 / 6.0_dkind * constructor%droplets_params%material_density
-			do dim = 1, 3
-				constructor%particles(part)%velocity(dim)	= 0.0_dkind
-				constructor%particles(part)%coords(dim)		= 0.0_dkind
-			end do
-		end do
-		
 		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr
 		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
@@ -182,12 +170,12 @@ contains
 		integer		,dimension(3,2)	:: cons_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size
 		
-		real(dkind)	:: delta, part_number_x, a ,b
+		real(dkind)	:: delta, part_number_x, part_number_max, a ,b
 		real(dkind)	,dimension(3)	:: coords
 		real(dkind)	,dimension(:,:)	,allocatable	:: lengths
 		
 		integer	:: dimensions
-		integer :: i,j,k, part
+		integer :: i,j,k, part, dim, particle
 
 		integer, dimension(3)	:: cell, initial_cell
 		logical	:: out_flag
@@ -200,27 +188,78 @@ contains
 		
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 		
-		part_number_x = sqrt(real(this%particles_number))
+		delta = 0.0006_dkind
 		
-		delta = 0.75_dkind*(lengths(1,2)-lengths(1,1)) / part_number_x
+		part_number_max = (lengths(1,2)-lengths(1,1)) /delta
+
+		this%particles_number = 0
+		do part = 1, part_number_max**2
+			a = int((part-1) / int(part_number_max))
+			b = mod((part-1) , int(part_number_max))
+			coords(1) = 0.5_dkind*delta + delta * a + 0.00001_dkind*delta
+			coords(2) = 0.5_dkind*delta + delta * b	+ 0.00001_dkind*delta		
+			cell = this%get_particle_cell(coords,out_flag)
+			if (((coords(1) > 0.125_dkind*(lengths(1,2)-lengths(1,1))) .or. (coords(2) > 0.125_dkind*(lengths(2,2)-lengths(2,1)))).and.	&
+!				((coords(1) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta) .or. (coords(2) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta)).and.		&
+				(not(out_flag))) then
+				this%particles_number    = this%particles_number + 1
+			end if
+		end do
+
+		allocate(this%particles(this%particles_number))	
 		
-		do part = 0, this%particles_number-1
-		!	do dim = 1, dimensions 	
-				a = int(part / part_number_x)
-				b = mod(part , int(part_number_x))
-				coords(1) = 0.5_dkind * cell_size(1) + 0.5_dkind*delta + delta * a
-				coords(2) = 0.5_dkind * cell_size(1) + 0.5_dkind*delta + delta * b
-				this%particles(part+1)%coords(1) = coords(1)
-				this%particles(part+1)%coords(2) = coords(2)
-				this%particles(part+1)%velocity(1) = 0.0_dkind
-				this%particles(part+1)%velocity(2) = 0.0_dkind		
-				this%particles(part+1)%outside_domain = .false.
+		particle = 0
+		do part = 1, part_number_max**2
+		!	do dim = 1, dimensions 
+				a = int((part-1) / int(part_number_max))
+				b = mod((part-1) , int(part_number_max))
+				coords(1) = 0.5_dkind*delta + delta * a + 0.00001_dkind*delta
+				coords(2) = 0.5_dkind*delta + delta * b	+ 0.00001_dkind*delta		
+				cell = this%get_particle_cell(coords,out_flag)
+				if (((coords(1) > 0.125_dkind*(lengths(1,2)-lengths(1,1))) .or. (coords(2) > 0.125_dkind*(lengths(2,2)-lengths(2,1)))).and.	&
+!					((coords(1) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta) .or. (coords(2) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta)).and.		&
+					(not(out_flag))) then
 				
-				initial_cell = this%get_particle_cell(this%particles(part+1)%coords,out_flag)
-				this%particles(part+1)%outside_domain = out_flag
+					particle = particle + 1 
 				
+					do dim = 1, 3
+						this%particles(particle)%velocity(dim)	= 0.0_dkind
+						this%particles(particle)%coords(dim)	= 0.0_dkind
+					end do						
+					
+					this%particles(particle)%coords(1) = coords(1) 
+					this%particles(particle)%coords(2) = coords(2) 
+					this%particles(particle)%velocity(1)	= 0.0_dkind
+					this%particles(particle)%velocity(2)	= 0.0_dkind
+					this%particles(particle)%dm			= 0.0_dkind  
+					this%particles(particle)%outside_domain = .false.
+				
+					this%particles(particle)%temperature = 300.0_dkind
+					this%particles(particle)%mass		= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+				
+					initial_cell = this%get_particle_cell(this%particles(particle)%coords,out_flag)
+					this%particles(particle)%cell = initial_cell
+					this%particles(particle)%outside_domain = out_flag
+				end if
 		!	end do
 		end do
+		
+		!this%particles_number = 1
+		!allocate(this%particles(this%particles_number))	
+		!
+		!this%particles(1)%coords(1)		= 0.01_dkind 
+		!this%particles(1)%coords(2)		= 0.0_dkind
+		!this%particles(1)%velocity(1)	= 0.0_dkind
+		!this%particles(1)%velocity(2)	= 0.0_dkind
+		!this%particles(1)%dm			= 0.0_dkind  
+		!this%particles(1)%outside_domain = .false.
+		!		
+		!this%particles(1)%temperature = 300.0_dkind
+		!this%particles(1)%mass		= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+		!		
+		!initial_cell = this%get_particle_cell(this%particles(1)%coords,out_flag)
+		!this%particles(1)%cell = initial_cell
+		!this%particles(1)%outside_domain = out_flag
 		
 		continue
 		
@@ -240,7 +279,7 @@ contains
 		real(dkind)	,dimension(3)	:: gas_velocity, relative_velocity, old_velocity, particle_acceleration
 		real(dkind)					:: abs_relative_velocity
 		real(dkind)					:: lower_face, higher_face, a, b
-		real(dkind)					:: Re_p, Nu_p, Sc_p, Sh_p, Pr_p, C_drag, A_p, alpha_p, beta_p
+		real(dkind)					:: Re_p, Nu_p, Sc_p, Sh_p, Pr_p, C_drag, A_p, alpha_p, beta_p, D_air_water
 		real(dkind)					:: H_m, H_v, H_l, H_h
 		real(dkind)					:: X_vap, Y_vap, W_ratio, dY_dT
 		real(dkind)					:: specie_enthalpy_gas, specie_enthalpy_liquid, mixture_cp
@@ -284,7 +323,7 @@ contains
 					rho			=> this%rho%s_ptr		, &
 					p			=> this%p%s_ptr			, &
 					h_s			=> this%h_s%s_ptr		, &
-					Y			=>	this%Y%v_ptr		, &
+					Y			=> this%Y%v_ptr			, &
                     v_f			=> this%v_f%v_ptr		, &
 					D			=> this%D%v_ptr			, &
 					kappa		=> this%kappa%s_ptr		, &
@@ -303,11 +342,14 @@ contains
 		!!$omp& shared(T,T_d,T_d_int,E_f_prod,rho,rho_d,mass_d,numdens_d,v_d,v_d_int,v,v_prod,Y_prod,nu,kappa,foam_marker,time_boil,droplet,Nusselt,droplet_material_index,time_step,mesh,bc,cons_inner_loop,dimensions,marker1,specie_enthalpy)
 		!!$omp do collapse(3) schedule(guided)					
 			
+		E_f_prod%cells = 0.0_dkind			
+		Y_prod%pr(droplet_material_index)%cells = 0.0_dkind		
+
 		do part = 1, this%particles_number
 
 			if (.not.this%particles(part)%outside_domain) then
 		
-			!# Move particle, account momentum transfer
+				!# Move particle, account momentum transfer
 		
 				particle_time_step = time_step
 				do dim = 1, dimensions
@@ -324,6 +366,7 @@ contains
 				i = initial_cell(1)
 				j = initial_cell(2)
 				k = initial_cell(3)
+				this%particles(part)%cell = initial_cell
 
 				Tg_old		= T%cells(i,j,k)
 				rhog_old	= rho%cells(i,j,k)
@@ -333,9 +376,6 @@ contains
 				end do	
 				M_gas_old	= rhog_old * cell_volume 
 				Hg_old		= h_s%cells(i,j,k) * M_gas_old
-
-				E_f_prod%cells(i,j,k) = 0.0_dkind
-				Y_prod%pr(droplet_material_index)%cells(i,j,k) = 0.0_dkind
 			
 				do part_iter = 1, particle_iterations
 			
@@ -349,7 +389,7 @@ contains
 					j = cell(2)
 					k = cell(3)				
 				
-					if ((initial_cell(1) /= cell(1)).and.(initial_cell(2) /= cell(2)).and.(initial_cell(3) /= cell(3))) then
+					if ((this%particles(part)%cell(1) /= cell(1)).and.(this%particles(part)%cell(2) /= cell(2)).and.(this%particles(part)%cell(3) /= cell(3))) then
 						Tg_old		= T%cells(i,j,k)
 						rhog_old	= rho%cells(i,j,k)
 						M_gas_old	= rhog_old * cell_volume 
@@ -361,7 +401,7 @@ contains
 						E_f_prod%cells(i,j,k) = 0.0_dkind
 						Y_prod%pr(droplet_material_index)%cells(i,j,k) = 0.0_dkind					
 					
-						initial_cell = cell
+						this%particles(part)%cell = cell
 					end if
 
 					old_velocity = this%particles(part)%velocity
@@ -388,8 +428,7 @@ contains
 				
 					!# Calculate particle mass and cross section
 					m_liq	= Pi*local_diameter**3 / 6.0_dkind * droplet%material_density
-					A_p		= Pi*local_diameter**2 / 4.0_dkind				
-
+					A_p		= Pi*local_diameter**2
 					!# Calculate particle Reynolds number
 					Re_p	= rhog_old * abs_relative_velocity * local_diameter / nu%cells(i,j,k)
 				
@@ -406,9 +445,6 @@ contains
 						end if
 				
 						particles_in_cell = this%count_particles_in_cell(cell)
-				
-					!# Calculate average mass of gas per particle in the cell
-						M_gas_old	= rhog_old * cell_volume / particles_in_cell
 				
 					!# Calculate new particle coordinates and velocities
 						alpha_p	= M_gas_old / m_liq
@@ -444,10 +480,12 @@ contains
 					Nu_p = 2.0_dkind + 0.6_dkind * sqrt(Re_p) * Pr_p ** (1.0_dkind / 3.0_dkind)
 					Sh_p = 2.0_dkind + 0.6_dkind * sqrt(Re_p) * Sc_p ** (1.0_dkind / 3.0_dkind)
 			
+					D_air_water = D%pr(droplet_material_index)%cells(i,j,k)
+
 					H_h	= Nu_p * kappa%cells(i,j,k)	/ local_diameter
-					H_m	= Sh_p * D%pr(droplet_material_index)%cells(i,j,k) / local_diameter
+					H_m	= Sh_p * D_air_water / local_diameter
 			
-					H_v	= droplet%material_latent_heat
+					H_v	= 2454208.88831280_dkind ! droplet%material_latent_heat
 			
 					mol_mix_w = 0.0_dkind
 					do spec = 1, species_number
@@ -461,9 +499,6 @@ contains
 					Y_vap = X_vap / (X_vap * (1.0_dkind - W_ratio) + W_ratio)
 			
 					dY_dT = (W_ratio/(X_vap*(1.0_dkind - W_ratio) + W_ratio)**2) * H_v * this%thermo%thermo_ptr%molar_masses(droplet_material_index) / r_gase_J * X_vap / this%particles(part)%temperature ** 2
-
-					!# Calculate mass of gas in the cell
-						M_gas_old	= rhog_old * cell_volume 
 				
 					specie_enthalpy_gas		= (this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,droplet_material_index))*Tg_old / this%thermo%thermo_ptr%molar_masses(droplet_material_index)
 					specie_enthalpy_liquid	= (this%thermo%thermo_ptr%calculate_specie_cp(this%particles(part)%temperature,droplet_material_index))*this%particles(part)%temperature / this%thermo%thermo_ptr%molar_masses(droplet_material_index)
@@ -495,7 +530,7 @@ contains
 			
 					dmp = max(0.0_dkind, min(this%particles(part)%mass, particle_time_step * AGHRHO * ( Y_vap -  Yg_old(droplet_material_index) + 0.5_dkind * dY_dT * (Tp_new - this%particles(part)%temperature))))
 			
-					Q	= particle_time_step * A_p * H_h * 0.5_dkind * (Tg_old + Tg_new - Tp_old - Tp_new)
+					Q	= particle_time_step * A_p * H_h * (Tg_new - 0.5_dkind * (Tp_old + Tp_new))!(Tg_old + Tg_new - Tp_old - Tp_new)
 					if (Q > this%particles(part)%mass * H_v) dmp = this%particles(part)%mass
 			
 					if ( dmp < this%particles(part)%mass) then
@@ -510,8 +545,7 @@ contains
 					else
 						Q		= dmp * H_v
 						Tp_new	= droplet%material_boiling_temperature
-
-this%particles(part)%outside_domain = .true.
+						this%particles(part)%outside_domain = .true.
 					end if
 			
 					this%particles(part)%mass			= this%particles(part)%mass - dmp
@@ -529,24 +563,21 @@ this%particles(part)%outside_domain = .true.
 			
 					delta_H		= ((this%thermo%thermo_ptr%calculate_specie_cp(Tp_old,droplet_material_index))*Tp_old - (this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,droplet_material_index))*Tg_old) / this%thermo%thermo_ptr%molar_masses(droplet_material_index)
 			
-					E_f_prod%cells(i,j,k)	=	E_f_prod%cells(i,j,k) + (W_ratio * dmp / M_gas_old + (dmp * delta_H - Q) / rhog_old / Tg_old / mixture_cp) / time_step
+					E_f_prod%cells(i,j,k)	=	E_f_prod%cells(i,j,k) + (W_ratio * dmp / M_gas_old + (dmp * delta_H - Q) / Hg_old) / time_step
 					Y_prod%pr(droplet_material_index)%cells(i,j,k)	= Y_prod%pr(droplet_material_index)%cells(i,j,k) + dmp / cell_size(1) / time_step
 
 					Yg_old		= Yg_new
 					Hg_old		= Hg_new
 					rhog_old	= rhog_new
 					Tg_old		= Tg_new
-				end do		
+				end do
+			else
+				print *, 'Particle', part, ' with coodinates', this%particles(part)%coords, '  is outside the domain'
+			!	pause
 			end if
 		end do
 
-		
-		
-		
-		
-		
-		time = time + time_step
-		if (time*1e06 >= 10.0_dkind*(output_counter+1)) then
+		if ((time*1e06 >= 50.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
 			write(file_path,'(I6.6,A)')  int(time*1e06),'us'
 			file_name = 'data_save_particles' // trim(fold_sep) // 'particles_' // trim(file_path) // '.plt'
 			open(newunit = lagrangian_droplets_io_unit, file = file_name, status = 'replace', form = 'formatted')
@@ -556,6 +587,9 @@ this%particles(part)%outside_domain = .true.
 			output_counter = output_counter + 1
 			close(lagrangian_droplets_io_unit)
 		end if
+
+		time = time + time_step
+
 		
 		!!$omp end do nowait
 		!!$omp end parallel		
@@ -566,11 +600,10 @@ this%particles(part)%outside_domain = .true.
 	function get_particle_cell(this,particle_coords, out_flag)
 		
 		class(lagrangian_droplets_solver)			,intent(inout)					:: this
-		real(dkind)		,dimension(3)	,intent(in)			:: particle_coords
+		real(dkind)		,dimension(3)				,intent(in)						:: particle_coords
 		logical										,intent(inout)	,optional		:: out_flag
 		
 		integer			,dimension(3)	:: get_particle_cell
-
 		integer		,dimension(3,2)	:: cons_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size
 		
@@ -589,14 +622,13 @@ this%particles(part)%outside_domain = .true.
 		if(present(out_flag))	out_flag	= .false.
 		
 		get_particle_cell(:dimensions) = 0
-		
 		associate(	bc		=> this%boundary%bc_ptr	,&
 					mesh	=> this%mesh%mesh_ptr)		
 		
 		if (dimensions	== 3) then
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-				if (( mesh%mesh(3,1,1,k) - 0.5_dkind*cell_size(3) < particle_coords(3)).and. &
-					( mesh%mesh(3,1,1,k) + 0.5_dkind*cell_size(3) > particle_coords(3))) then
+				if (( 0.5_dkind*(mesh%mesh(3,1,1,k-1) + mesh%mesh(3,1,1,k)) < particle_coords(3)).and. &
+					( 0.5_dkind*(mesh%mesh(3,1,1,k+1) + mesh%mesh(3,1,1,k)) > particle_coords(3))) then
 					get_particle_cell(3) = k
 					exit
 				end if		
@@ -606,8 +638,8 @@ this%particles(part)%outside_domain = .true.
 		
 		if (dimensions	== 2) then
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-				if (( mesh%mesh(2,1,j,get_particle_cell(3)) - 0.5_dkind*cell_size(2) < particle_coords(2)).and. &
-					( mesh%mesh(2,1,j,get_particle_cell(3)) + 0.5_dkind*cell_size(2) > particle_coords(2))) then
+				if (( 0.5_dkind*(mesh%mesh(2,1,j-1,get_particle_cell(3)) + mesh%mesh(2,1,j,get_particle_cell(3))) <= particle_coords(2)).and. &
+					( 0.5_dkind*(mesh%mesh(2,1,j+1,get_particle_cell(3)) + mesh%mesh(2,1,j,get_particle_cell(3))) > particle_coords(2))) then
 					get_particle_cell(2) = j
 					exit
 				end if		
@@ -615,8 +647,9 @@ this%particles(part)%outside_domain = .true.
 		end if
 		
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			if (( mesh%mesh(1,i,get_particle_cell(2),get_particle_cell(3)) - 0.5_dkind*cell_size(1) < particle_coords(1)).and. &
-				( mesh%mesh(1,i,get_particle_cell(2),get_particle_cell(3)) + 0.5_dkind*cell_size(1) > particle_coords(1))) then
+
+			if ((  0.5_dkind*(mesh%mesh(1,i-1,get_particle_cell(2),get_particle_cell(3)) + mesh%mesh(1,i,get_particle_cell(2),get_particle_cell(3))) <= particle_coords(1)).and. &
+				(  0.5_dkind*(mesh%mesh(1,i+1,get_particle_cell(2),get_particle_cell(3)) + mesh%mesh(1,i,get_particle_cell(2),get_particle_cell(3))) > particle_coords(1))) then				
 				get_particle_cell(1) = i
 				exit
 			end if		
@@ -626,8 +659,7 @@ this%particles(part)%outside_domain = .true.
 			do dim = 1, dimensions 
 				if (get_particle_cell(dim) == 0 ) then 
 					out_flag = .true.
-					print *, particle_coords
-					pause
+					exit
 				end if 
 			end do
 			if (bc%bc_markers(get_particle_cell(1),get_particle_cell(2),get_particle_cell(3)) /= 0) then
@@ -654,22 +686,18 @@ this%particles(part)%outside_domain = .true.
 		
 		count_particles_in_cell = 0
 		do part = 1, this%particles_number
-			cell = this%get_particle_cell(this%particles(part)%coords,out_flag)
 			
-			if (( cell(1) == cell_indexes(1)).and.(cell(2) == cell_indexes(2)).and.(cell(3) == cell_indexes(3)).and.(.not.out_flag))	count_particles_in_cell = count_particles_in_cell + 1
+			if (( this%particles(part)%cell(1) == cell_indexes(1)).and.(this%particles(part)%cell(2) == cell_indexes(2)).and.(this%particles(part)%cell(3) == cell_indexes(3)).and.(.not.out_flag))	count_particles_in_cell = count_particles_in_cell + 1
 		end do
 		
 	end function
 	
 	subroutine apply_boundary_conditions_interm_v_d(this)
-
 		class(lagrangian_droplets_solver)		,intent(inout)		:: this
-
 		integer	:: dimensions
 		integer	,dimension(3,2)	:: cons_inner_loop
 		
 		character(len=20)		:: boundary_type_name		
-
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim,dim1,specie_number
 								
@@ -724,19 +752,15 @@ this%particles(part)%outside_domain = .true.
 		!!$omp end parallel
   !
 		!end associate
-
 	end subroutine	
 	
 	subroutine apply_boundary_conditions_main(this)
-
 		class(lagrangian_droplets_solver)		,intent(inout)		:: this
-
 		character(len=20)		:: boundary_type_name
 		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
 		
 		integer					:: dimensions
 		integer	,dimension(3,2)	:: cons_inner_loop
-
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim,dim1
 						
@@ -806,7 +830,6 @@ this%particles(part)%outside_domain = .true.
 		!!$omp end parallel
   !
 		!end associate
-
 	end subroutine
 	
 	
