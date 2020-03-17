@@ -2466,8 +2466,10 @@ contains
 				if(bc%bc_markers(i,j,k) == 0) then
 					if (this%diffusion_flag)  then
 						do spec = 1, species_number
-							delta_t_interm1x = 1.0_dkind/4.0_dkind/(D%pr(spec)%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
-							if(delta_t_interm1x < delta_t_interm1) delta_t_interm1 = delta_t_interm1x
+							if (D%pr(spec)%cells(i,j,k) > 1e-10_dkind) then						
+								delta_t_interm1x = 1.0_dkind/4.0_dkind/(D%pr(spec)%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+								if(delta_t_interm1x < delta_t_interm1) delta_t_interm1 = delta_t_interm1x
+							end if
 						end do
 					end if 
 					if (this%viscosity_flag)	delta_t_interm2 = 1.0_dkind/4.0_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
