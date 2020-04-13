@@ -670,7 +670,7 @@ contains
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then	
 				
-					cell_volume			= mesh%get_cell_volume()
+					cell_volume	= mesh%get_cell_volume()
 					lame_coeffs	= 1.0_dkind
 
 					select case(coordinate_system)
@@ -678,10 +678,10 @@ contains
 
 						case ('cylindrical')
 							! x -> r, y -> z
-							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
-							cell_volume			= cell_volume * mesh%mesh(2,i,j,k)
+							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
+							cell_volume			= cell_volume * mesh%mesh(1,i,j,k)
 						case ('spherical')
 							! x -> r
 							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -824,8 +824,8 @@ contains
 										cell_surface_area	= cell_surface_area
 									case ('cylindrical')
 										! x -> r, y -> z
-										if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(2,i,j,k)									
-										if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(2,i,j,k)			! - 0.5_dkind*cell_size(1)
+										if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(1,i,j,k)									
+										if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(1,i,j,k)			! - 0.5_dkind*cell_size(1)
 									case ('spherical')
 										! x -> r
 										if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))**2		! - 0.5_dkind*cell_size(1)
@@ -886,7 +886,6 @@ contains
 		real(dkind)	:: farfield_density, farfield_pressure, farfield_velocity
 		
 		real(dkind), dimension (3,3)	:: lame_coeffs
-		real(dkind), dimension (3)		:: pois_coeffs
 		character(len=20)				:: coordinate_system
 		
 		integer		:: r_i, r_j, r_k
@@ -984,9 +983,9 @@ contains
 							lame_coeffs			= 1.0_dkind
 						case ('cylindrical')
 							! x -> r, y -> z
-							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
+							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 						case ('spherical')
 							! x -> r
 							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -1144,10 +1143,10 @@ contains
 						case ('cartesian')	
 							lame_coeffs			= 1.0_dkind
 						case ('cylindrical')
-							! x -> z, y -> r
-							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
+							! x -> r, y -> z
+							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 						case ('spherical')
 							! x -> r
 							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -1197,7 +1196,7 @@ contains
 
 				grad_F_b_summ = 0.0_dkind
 				
-				!$omp parallel default(none)  private(i,j,k,dim,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,pois_coeffs,farfield_velocity) , &
+				!$omp parallel default(none)  private(i,j,k,dim,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
 				!$omp& shared(F_a,F_b,grad_F_b,grad_F_b_summ,v_f,v_f_old,p_dyn,H,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init,time_step,cells_number)
 				
@@ -1248,10 +1247,10 @@ contains
 							case ('cartesian')	
 								lame_coeffs			= 1.0_dkind
 							case ('cylindrical')
-								! x -> z, y -> r
-								lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-								lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-								lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
+								! x -> r, y -> z
+								lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+								lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+								lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 							case ('spherical')
 								! x -> r
 								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -1291,20 +1290,15 @@ contains
 					if(bc%bc_markers(i,j,k) == 0) then
 					
 						lame_coeffs		= 1.0_dkind				
-						pois_coeffs		= 0.0_dkind	
-			
+		
 						select case(coordinate_system)
 							case ('cartesian')	
 								lame_coeffs			= 1.0_dkind
-								pois_coeffs			= 0.0_dkind
 							case ('cylindrical')
 								! x -> r, y -> z
-								lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-								lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-								lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
-					
-								pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
-					
+								lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+								lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+								lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 							case ('spherical')
 								! x -> r
 								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -1316,10 +1310,13 @@ contains
 
 						residual	= residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
 						
-						residual	= residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
-
 						do dim = 1, dimensions
-							residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
+
+							residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
+								
+							residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)							
+						
+							residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* lame_coeffs(dim,1))
 
 							residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k)
 
@@ -1334,26 +1331,26 @@ contains
 										case('wall')
 											farfield_velocity = 0.0_dkind
 											if(predictor) then
-												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																						!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
 																																							
 											else
-												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																						!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
 																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 											end if													
 										case('inlet')
 											farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 											if(predictor) then
-												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																						!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
 																																							
 											else
-												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																						!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
 																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 											end if													
@@ -1378,9 +1375,9 @@ contains
 				beta				= 1.0_dkind
 				!	call this%spectral_radii_selection(time_step,predictor,a_norm_init,spectral_radii_jacobi)				
 				!	pause	
-				!$omp parallel default(none)  private(i,j,k,dim,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,pois_coeffs,farfield_velocity) , &
+				!$omp parallel default(none)  private(i,j,k,dim,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(H_summ,H,a_norm,a_norm_init,a_norm_prev,H_int,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,spectral_radii_jacobi)				
+				!$omp& shared(H_summ,H,a_norm,a_norm_init,a_norm_prev,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,spectral_radii_jacobi)				
 				do while ((.not.converged).and.(poisson_iteration <= 50000))
 				
 					!$omp barrier
@@ -1402,20 +1399,15 @@ contains
 							if((mod(i+j+k,2) == 1)) then	
 			  
 								lame_coeffs		= 1.0_dkind				
-								pois_coeffs		= 0.0_dkind	
-			
+		
 								select case(coordinate_system)
 									case ('cartesian')	
 										lame_coeffs			= 1.0_dkind
-										pois_coeffs			= 0.0_dkind
 									case ('cylindrical')
 										! x -> r, y -> z
-										lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-										lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-										lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
-					
-										pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
-					
+										lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+										lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+										lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 									case ('spherical')
 										! x -> r
 										lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -1426,16 +1418,18 @@ contains
 								residual = 0.0_dkind
 								
 								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)								
-								
-								residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
-								
+
 								do dim = 1, dimensions
-									residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
-		     
+								
+									residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
+								
+									residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)
+
 									residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k) 
 
 									residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k) 
-							do plus = 1,2
+
+									do plus = 1,2
 										sign			= (-1)**plus
 										bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										if( bound_number /= 0 ) then
@@ -1444,26 +1438,26 @@ contains
 												case('wall')
 													farfield_velocity = 0.0_dkind
 													if(predictor) then
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																									
 																																							
 													else
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																								
 																																								
 													end if													
 												case('inlet')
 													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													if(predictor) then
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																								
 																																							
 													else
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																							
 													end if													
 											end select		
@@ -1502,20 +1496,15 @@ contains
 							if((mod(i+j+k,2) == 0)) then	
 	    
 								lame_coeffs		= 1.0_dkind				
-								pois_coeffs		= 0.0_dkind	
 			
 								select case(coordinate_system)
 									case ('cartesian')	
 										lame_coeffs			= 1.0_dkind
-										pois_coeffs			= 0.0_dkind
 									case ('cylindrical')
 										! x -> r, y -> z
-										lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-										lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-										lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
-					
-										pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
-					
+										lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+										lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+										lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 									case ('spherical')
 										! x -> r
 										lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -1527,14 +1516,14 @@ contains
 								
 								residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
 
-								residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
-
 								do dim = 1, dimensions
-									residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)) * (1.0_dkind - pois_coeffs(dim)))
-		   
-									residual = residual +	cell_size(1)*grad_F_a(dim,i,j,k)
+									residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
+								
+									residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)
+									
+									residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k)
 
-									residual = residual +	cell_size(1)*grad_F_b(dim,i,j,k) 
+									residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k) 
 
 									do plus = 1,2
 										sign			= (-1)**plus
@@ -1545,24 +1534,24 @@ contains
 												case('wall')
 													farfield_velocity = 0.0_dkind
 													if(predictor) then
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																							
 																																							
 													else
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																							
 													end if													
 												case('inlet')
 													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													if(predictor) then
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																																																
 													else
-														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	
+														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																											
 													end if													
 											end select
@@ -1727,7 +1716,7 @@ contains
 				
 				!$omp parallel default(none)  private(i,j,k,dim,H_residual,r_i,r_j,r_k,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_velocity,farfield_pressure) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(H_summ,p_dyn,rho_old,rho_int,H,H_int,v_f,v_f_old,F_a,F_b,predictor,pressure_converged,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,time_step,time)
+				!$omp& shared(H_summ,p_dyn,rho_old,rho_int,H,v_f,v_f_old,F_a,F_b,predictor,pressure_converged,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,time_step,time)
 
 				
 				!$omp do collapse(3) schedule(guided)	reduction(.and.:pressure_converged)	
@@ -1814,7 +1803,7 @@ contains
 	
 			!$omp parallel default(none)  private(i,j,k,dim,vel_abs,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_velocity,farfield_pressure) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(p_dyn,v,v_f,rho_old,rho_int,H,H_int,predictor,cons_inner_loop,bc,dimensions,cell_size)	
+			!$omp& shared(p_dyn,v,v_f,rho_old,rho_int,H,predictor,cons_inner_loop,bc,dimensions,cell_size)	
 					
 			!$omp do collapse(3) schedule(guided)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -2038,9 +2027,9 @@ contains
 								lame_coeffs			= 1.0_dkind
 							case ('cylindrical')
 								! x -> r, y -> z
-								lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-								lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-								lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+								lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+								lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+								lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 							case ('spherical')
 								! x -> r
 								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -2502,7 +2491,6 @@ contains
 		real(dkind)	:: farfield_density, farfield_pressure, farfield_velocity
 		
 		real(dkind), dimension (3,3)	:: lame_coeffs
-		real(dkind), dimension (3)		:: pois_coeffs
 		character(len=20)				:: coordinate_system
 		
 		real(dkind)	,dimension(3)	:: cell_size		
@@ -2612,36 +2600,32 @@ contains
 								if((mod(i+j+k,2) == 1)) then	
 			  
 									lame_coeffs		= 1.0_dkind				
-									pois_coeffs		= 0.0_dkind	
-			
+		
 									select case(coordinate_system)
 										case ('cartesian')	
 											lame_coeffs			= 1.0_dkind
-											pois_coeffs			= 0.0_dkind
 										case ('cylindrical')
 											! x -> r, y -> z
-											lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-											lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-											lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
-					
-											pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
-					
+											lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+											lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+											lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 										case ('spherical')
 											! x -> r
 											lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
 											lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
 											lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
-									end select								
+									end select							
 
 									residual = 0.0_dkind
 								
 									residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)								
 								
-									residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
-								
 									do dim = 1, dimensions
-										residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* (1.0_dkind - pois_coeffs(dim)))
-		     
+								
+										residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
+								
+										residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)
+
 										residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k) !(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
 
 										residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k) !(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) /  lame_coeffs(dim,2)
@@ -2654,11 +2638,11 @@ contains
 												select case(boundary_type_name)
 													case('wall')
 														if(predictor) then
-															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
 																																																		!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
 																																																		!		+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
 														else
-															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
 																																																		!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
 																																																		!		+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
 														end if
@@ -2690,20 +2674,16 @@ contains
 								if((mod(i+j+k,2) == 0)) then	
 	    
 									lame_coeffs		= 1.0_dkind				
-									pois_coeffs		= 0.0_dkind	
-			
+		
 									select case(coordinate_system)
 										case ('cartesian')	
 											lame_coeffs			= 1.0_dkind
-											pois_coeffs			= 0.0_dkind
 										case ('cylindrical')
 											! x -> r, y -> z
-											lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-											lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-											lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)		
-					
-											pois_coeffs(2)		=  cell_size(1) / (2.0_dkind * lame_coeffs(2,2))
-					
+											lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+											lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+											lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
+
 										case ('spherical')
 											! x -> r
 											lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -2718,11 +2698,13 @@ contains
 									residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
 
 									do dim = 1, dimensions
-										residual = residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * (1.0_dkind + pois_coeffs(dim)) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)) * (1.0_dkind - pois_coeffs(dim)))
-		   
-										residual = residual +	cell_size(1)*grad_F_a(dim,i,j,k) !cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+										residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
+								
+										residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)
 
-										residual = residual +	cell_size(1)*grad_F_b(dim,i,j,k) !cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+										residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k) !cell_size(1)*(F_a%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_a%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
+
+										residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k) !cell_size(1)*(F_b%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) - F_b%cells(dim,i,j,k) * lame_coeffs(dim,1)) / lame_coeffs(dim,2)
 
 										do plus = 1,2
 											sign			= (-1)**plus
@@ -2732,11 +2714,11 @@ contains
 												select case(boundary_type_name)
 													case('wall')
 														if(predictor) then
-															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
 																																																		!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
 																																																		!		+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
 														else
-															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* (1.0_dkind + sign*pois_coeffs(dim))	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
+															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
 																																																		!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
 																																																		!		+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
 														end if

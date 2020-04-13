@@ -729,7 +729,7 @@ contains
 			 
 				do dim = 1,dimensions
 					rho%cells(i,j,k)	=	rho%cells(i,j,k)	- (	rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) -	rho_f(dim,i,j,k)*v_f(dim,dim,i,j,k))/cell_size(1)
-					if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+					if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 						rho%cells(i,j,k)	=	rho%cells(i,j,k) - 2.0_dkind * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																			 * 0.5_dkind * (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	rho_f(dim,i,j,k)*v_f(dim,dim,i,j,k))	&
 																			 * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
@@ -744,7 +744,7 @@ contains
 						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(		rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	&
 																					-	rho_f(dim,i,j,k)*Y_f(spec,dim,i,j,k)*v_f(dim,dim,i,j,k))/cell_size(1)
 																					
-						if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+						if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 							Y%pr(spec)%cells(i,j,k)	=	Y%pr(spec)%cells(i,j,k) - 2.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																							 * 0.5_dkind * (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	rho_f(dim,i,j,k)*Y_f(spec,dim,i,j,k)*v_f(dim,dim,i,j,k))	&
 																							 * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
@@ -772,7 +772,7 @@ contains
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(		rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))	&
 																					-	rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k)) /cell_size(1)
 
-						if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+						if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 							v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k) - 2.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																							* 0.5_dkind * (rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) +	rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k))	&
 																							* ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
@@ -791,7 +791,7 @@ contains
 					E_f%cells(i,j,k)		= 	E_f%cells(i,j,k)		-	((rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	&
 																		-	(rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)																		+	p_f(dim,i,j,k))									*v_f(dim,dim,i,j,k))/cell_size(1)
 								
-					if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+					if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 						E_f%cells(i,j,k)	=	E_f%cells(i,j,k) - 2.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																			  * 0.5_dkind * ((rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	(rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)	+	p_f(dim,i,j,k))*v_f(dim,dim,i,j,k))	&
 																			  * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
@@ -1431,7 +1431,7 @@ contains
 				
 					rho%cells(i,j,k)	=	rho%cells(i,j,k)	- (	mean_higher - mean_lower )	/cell_size(1)
 					
-					if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+					if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 						rho%cells(i,j,k)	=	rho%cells(i,j,k) - 1.0_dkind * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																			 * 0.5_dkind * (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	rho_f(dim,i,j,k)*v_f(dim,dim,i,j,k))	&
 																			 * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)))
@@ -1454,7 +1454,7 @@ contains
 						
 						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
 						
-						if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+						if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 							Y%pr(spec)%cells(i,j,k)	=	Y%pr(spec)%cells(i,j,k) - 1.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																							 * 0.5_dkind * (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	rho_f(dim,i,j,k)*Y_f(spec,dim,i,j,k)*v_f(dim,dim,i,j,k))	&
 																							 * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
@@ -1491,7 +1491,7 @@ contains
 													
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(	mean_higher - mean_lower)	/cell_size(1)
 						
-						if (((coordinate_system == 'cylindrical').and.(dim == 2)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+						if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 							v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k) - 1.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
 																							* 0.5_dkind * (rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) +	rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k))	&
 																							* ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 
@@ -1552,7 +1552,7 @@ contains
 		
 		!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_inner_loop,bc,rho,v,Y,E_f,E_f_prod,E_f_prod_chem,E_f_prod_heat,E_f_prod_visc,E_f_prod_diff,Y_prod,Y_prod_chem,Y_prod_diff,v_prod,v_prod_visc,species_number,dimensions,energy_source,energy_output_rho,energy_output,energy_output_flag,energy_output_time,energy_output_radii,cell_size,coordinate_system)
+		!$omp& shared(cons_inner_loop,bc,mesh,rho,v,Y,E_f,E_f_prod,E_f_prod_chem,E_f_prod_heat,E_f_prod_visc,E_f_prod_diff,Y_prod,Y_prod_chem,Y_prod_diff,v_prod,v_prod_visc,species_number,dimensions,energy_source,energy_output_rho,energy_output,energy_output_flag,energy_output_time,energy_output_radii,cell_size,coordinate_system)
 		!$omp do collapse(3) schedule(guided)		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)

@@ -147,9 +147,9 @@ contains
 					case ('cartesian')	
 						lame_coeffs			= 1.0_dkind
 					case ('cylindrical')
-						lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)
-						lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-						lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)
+						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 					case ('spherical')
 						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
 						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2

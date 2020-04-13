@@ -182,9 +182,9 @@ contains
 						lame_coeffs			= 1.0_dkind
 					case ('cylindrical')
 						! x -> z, y -> r
-						lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-						lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-						lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 					
 					case ('spherical')
 						! x -> r
@@ -226,10 +226,10 @@ contains
 					
 					select case(coordinate_system)
 						case ('cylindrical')
-							if(dim1==1) div_sigma = div_sigma + (sigma%pr(1,2)%cells(i,j,k))/mesh%mesh(2,i,j,k)
-							if(dim1==2) div_sigma = div_sigma + (sigma%pr(2,2)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(2,i,j,k)
-						case ('spherical')
 							if(dim1==1) div_sigma = div_sigma + (sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
+							if(dim1==2) div_sigma = div_sigma + (sigma%pr(1,2)%cells(i,j,k))/mesh%mesh(1,i,j,k)
+						case ('spherical')
+							if(dim1==1) div_sigma = div_sigma + 2.0_dkind*(sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
 					end select							
 					
 					v_prod%pr(dim1)%cells(i,j,k)	=  div_sigma !* time_step
@@ -305,11 +305,11 @@ contains
 					case ('cartesian')	
 						lame_coeffs			= 1.0_dkind
 					case ('cylindrical')
-						! x -> z, y -> r
-						lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - cell_size(1)			
-						lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-						lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + cell_size(1)	
-					
+						! x -> r, y -> z
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
+						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + cell_size(1)	
+
 					case ('spherical')
 						! x -> r
 						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
@@ -329,7 +329,7 @@ contains
 						select case(coordinate_system)
 							case ('cylindrical')
 								this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
-								this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(2)%cells(i,j,k)/mesh%mesh(2,i,j,k))
+								this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k))
 							case ('spherical')
 								this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
 								this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k)) 
