@@ -1307,17 +1307,14 @@ contains
 						end select						
 					
 						residual	= 0.0_dkind
-
-						residual	= residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
 						
-						do dim = 1, dimensions
+						residual	= residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)
 
+						do dim = 1, dimensions
 							residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
 								
-							residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)							
+							residual	= residual -	(H%cells(i,j,k) - H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3)))* lame_coeffs(dim,1) / lame_coeffs(dim,2)
 						
-							residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * lame_coeffs(dim,3) + H%cells(i-i_m(dim,1),j-i_m(dim,2),k-i_m(dim,3))* lame_coeffs(dim,1))
-
 							residual	= residual +	cell_size(1)*grad_F_a(dim,i,j,k)
 
 							residual	= residual +	cell_size(1)*grad_F_b(dim,i,j,k)
@@ -1332,12 +1329,12 @@ contains
 											farfield_velocity = 0.0_dkind
 											if(predictor) then
 												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																						!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
 																																							
 											else
 												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																						!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
 																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 											end if													
@@ -1345,18 +1342,18 @@ contains
 											farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 											if(predictor) then
 												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-																																						!- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step	
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &	
+																																						- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																							
 											else
 												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1))*lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-																																						!- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
-																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
+																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &
+																																						- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																								+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 											end if													
 									end select
 								end if
-							end do	
+							end do
 						end do
 
 						a_norm_init = a_norm_init + abs(residual)
@@ -1439,12 +1436,12 @@ contains
 													farfield_velocity = 0.0_dkind
 													if(predictor) then
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-																																									
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
+																																								
 																																							
 													else
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																								
 																																								
 													end if													
@@ -1452,13 +1449,14 @@ contains
 													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													if(predictor) then
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
-																																								
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &
+																																								- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																							
 													else
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
-																																							
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &
+																																								- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																										+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 													end if													
 											end select		
 										end if
@@ -1466,7 +1464,7 @@ contains
 								end do								
 								
 								H%cells(i,j,k)	= H%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*residual
-     
+  
 								a_norm = a_norm + abs(residual)
      
 							end if
@@ -1496,7 +1494,7 @@ contains
 							if((mod(i+j+k,2) == 0)) then	
 	    
 								lame_coeffs		= 1.0_dkind				
-			
+		
 								select case(coordinate_system)
 									case ('cartesian')	
 										lame_coeffs			= 1.0_dkind
@@ -1535,24 +1533,25 @@ contains
 													farfield_velocity = 0.0_dkind
 													if(predictor) then
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 																																							
 																																							
 													else
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 																																							
 													end if													
 												case('inlet')
 													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													if(predictor) then
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
-																																																																
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &	
+																																								- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 													else
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
-																																											
+																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &	
+																																								- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																										+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 													end if													
 											end select
 										end if
@@ -1592,7 +1591,7 @@ contains
 
 					if (poisson_iteration < 100) converged = .false.
 						
-					if ((poisson_iteration > 2000).and.(a_norm_prev < a_norm)) then
+					if ((poisson_iteration > 500).and.(a_norm_prev < a_norm)) then
 						converged = .true.
 						print *, 'Not converged***************************************'
 			!			pause
@@ -1632,7 +1631,7 @@ contains
 									boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 									select case(boundary_type_name)
 										case('wall')
-										if(predictor) then
+											if(predictor) then
 												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
 																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
 																																		+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
@@ -1687,20 +1686,17 @@ contains
 												
 										case('inlet')
      
-											if (dim==1) then
-												farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+											farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 												
-												if (predictor) then	
-													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
-																																		- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step
-												else		
-													H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  H%cells(i,j,k)	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
-																																				+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&
-																																		- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
-																																				+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
-												end if
-										
+											if (predictor) then
+												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&	
+																																- sign*(	farfield_velocity - v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))* cell_size(1)/time_step
+											else
+												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
+																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&	
+- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																		+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)
 											end if
 									end select
 								end if
@@ -2639,12 +2635,12 @@ contains
 													case('wall')
 														if(predictor) then
 															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																																																		!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
-																																																		!		+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
+																																																!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																																!		+	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) / time_step) * cell_size(1)		
 														else
 															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	!- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																																																		!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
-																																																		!		+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
+																																																!		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))				&		
+																																																!		+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
 														end if
 												end select
 											end if
@@ -2694,8 +2690,6 @@ contains
 									residual = 0.0_dkind
 								
 									residual = residual + cell_size(1)*cell_size(1)*ddiv_v_dt%cells(i,j,k)								
-								
-									residual = residual - (2.0_dkind*dimensions)*H%cells(i,j,k)
 
 									do dim = 1, dimensions
 										residual	= residual +	(H%cells(i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) - H%cells(i,j,k))* lame_coeffs(dim,3) / lame_coeffs(dim,2)
@@ -2741,7 +2735,7 @@ contains
 							beta		= 1.0_dkind/(1.0_dkind - 0.25_dkind * spectral_radii_jacobi*spectral_radii_jacobi * beta)
 						end if
 						
-						if((mod(poisson_iteration(func_iter),1000) == 0).and.(a_norm_init > 1e-10)) then
+						if((mod(poisson_iteration(func_iter),100) == 0).and.(a_norm_init > 1e-10)) then
 							print *, poisson_iteration(func_iter),  a_norm/a_norm_init, a_norm_init, a_norm, beta, spectral_radii_jacobi
 						end if	
 						
