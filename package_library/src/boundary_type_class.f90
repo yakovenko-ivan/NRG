@@ -347,4 +347,11 @@ if(present(farfield_pressure).and.present(farfield_temperature).and.present(farf
 		this%farfield_density = farfield_pressure
 	end subroutine
 
+	pure subroutine	set_farfield_velocity(this,farfield_velocity)
+		class(boundary_type)	,intent(inout)		:: this
+		real(dkind)				,intent(in)			:: farfield_velocity
+
+		this%farfield_velocity = farfield_velocity
+	end subroutine	
+
 end module
