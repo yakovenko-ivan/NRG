@@ -472,10 +472,10 @@ contains
 						case ('cartesian')	
 							lame_coeffs			= 1.0_dkind
 						case ('cylindrical')
-							! x -> z, y -> r
-							lame_coeffs(2,1)	=  mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1)			
-							lame_coeffs(2,2)	=  mesh%mesh(2,i,j,k)
-							lame_coeffs(2,3)	=  mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(1)	
+							! x -> r, y -> z
+							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
 						case ('spherical')
 							! x -> r
 							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
@@ -653,7 +653,7 @@ contains
 			
 			time = time + 0.5_dkind*time_step
 			
-			if(time <= 2.0e-03_dkind) then
+			if(time <= 2.0e-01_dkind) then
 				energy_source = 1.0e08_dkind
 			else
 				energy_source = 0.0_dkind
@@ -965,7 +965,7 @@ contains
 				spectral_radii_jacobi = spectral_radii_jacobi + cell_size(1)**2 * cos(Pi/cons_utter_loop(dim,2)) / (dimensions * cell_size(1)**2)
 			end do
 			
-			spectral_radii_jacobi =	    0.9999913706818E+00_dkind
+			spectral_radii_jacobi =	0.9999599414062E+00_dkind
 
 			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity) , &
 			!$omp& firstprivate(this) , &
@@ -1370,8 +1370,11 @@ contains
 				H_max				= 0.0_dkind
 				a_norm_prev			= a_norm_init
 				beta				= 1.0_dkind
-				!	call this%spectral_radii_selection(time_step,predictor,a_norm_init,spectral_radii_jacobi)				
-				!	pause	
+			
+		!		call this%spectral_radii_selection(time_step,predictor,a_norm_init,spectral_radii_jacobi)				
+				
+		!		pause
+				
 				!$omp parallel default(none)  private(i,j,k,dim,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
 				!$omp& shared(H_summ,H,a_norm,a_norm_init,a_norm_prev,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,spectral_radii_jacobi)				
@@ -1583,11 +1586,11 @@ contains
 					!	pause
 					end if						
 						
-					if((mod(poisson_iteration,100) == 0).and.(a_norm_init > 1e-10)) then
+					if((mod(poisson_iteration,250) == 0).and.(a_norm_init > 1e-10)) then
 						print *, poisson_iteration,  a_norm/a_norm_init, a_norm_init, a_norm, beta
 					end if					
 						
-					if ((a_norm > 1.0e-02*a_norm_init).and.(converged)) converged = .false.	
+					if ((a_norm > 1.0e-01*a_norm_init).and.(converged)) converged = .false.	
 
 					if (poisson_iteration < 100) converged = .false.
 						
@@ -1597,7 +1600,7 @@ contains
 			!			pause
 					end if
 						
-					if (a_norm < 1e-05) converged = .true.
+					if ((a_norm < 5e-01).and.(poisson_iteration > 50)) converged = .true.
 						
 					a_norm_prev = a_norm
 
@@ -1611,10 +1614,6 @@ contains
 				!$omp end parallel
 				
 				print *, 'Poisson iteration:', poisson_iteration
-
-				!print *,  H_max
-				
-				!pause
 
 				overall_poisson_iteration = overall_poisson_iteration + poisson_iteration
 
@@ -1695,7 +1694,7 @@ contains
 											else
 												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																		+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)	&	
-- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+																																- sign*(	farfield_velocity - 0.5_dkind*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
 																																		+ v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)
 											end if
 									end select
@@ -2550,7 +2549,7 @@ contains
 			
 			a_norm_prev			= a_norm_init
 			
-			a = 0.9_dkind
+			a = 0.99_dkind
 			b = 0.999999_dkind
 
 			!spectral_radii_jacobi = 0.0_dkind
@@ -2779,7 +2778,7 @@ contains
 						
 						if ((a_norm > 1.0e-01*a_norm_init).and.(converged)) converged = .false.	
 						
-						if (a_norm < 1e-02) converged = .true.
+						if (a_norm < 1e-05) converged = .true.
 
 						poisson_iteration(func_iter) = poisson_iteration(func_iter) + 1
 
