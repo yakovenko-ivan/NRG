@@ -39,6 +39,8 @@ module fds_low_mach_solver_class
 	real(dkind)	,dimension(:)	,allocatable	:: concs
 	!$omp threadprivate(concs)
 
+	real(dkind)	,dimension(:)	,allocatable	:: farfield_velocity_array
+
 	type fds_solver
 		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag
 		real(dkind)		:: courant_fraction
@@ -89,6 +91,7 @@ module fds_low_mach_solver_class
 		procedure	,private	:: apply_boundary_conditions
 		procedure	,private	:: apply_poisson_boundary_conditions
 		procedure	,private	:: spectral_radii_selection
+		procedure	,private	:: farfield_values_modifier
 		procedure				:: solve_problem
 		procedure				:: calculate_time_step
 		procedure				:: get_time_step
@@ -126,11 +129,12 @@ contains
 		
 		character(len=40)	:: var_name
 		
-		integer				:: bound_number, plus, sign
+		integer				:: bound_number, plus, sign, bound
 		character(len=20)	:: boundary_type_name
 
 		real(dkind)	,dimension(3)	:: cell_size
 		real(dkind)					:: x, y
+		real(dkind)					:: farfield_velocity
 		integer	:: dimensions
 		integer	:: i,j,k,dim,dim1
 		
@@ -305,7 +309,7 @@ contains
 											cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
-											
+
 		cons_utter_loop	= manager%domain%get_local_utter_cells_bounds()	
 		cons_inner_loop = manager%domain%get_local_inner_cells_bounds()	
 
@@ -364,10 +368,21 @@ contains
 	
 		species_number = manager%chemistry%chem_ptr%species_number
 		
+		do bound = 1, size(constructor%boundary%bc_ptr%boundary_types)
+			boundary_type_name = constructor%boundary%bc_ptr%boundary_types(bound)%get_type_name()
+			if (boundary_type_name == 'inlet') then
+				farfield_velocity = constructor%boundary%bc_ptr%boundary_types(bound)%get_farfield_velocity()
+			end if
+		end do		
+
+		allocate(farfield_velocity_array(cons_allocation_bounds(2,1):cons_allocation_bounds(2,2)))
+		farfield_velocity_array = farfield_velocity
+
 		!$omp parallel
 		allocate(concs(species_number))
 		concs = 0.0_dkind
 		!$omp end parallel
+
 		
 	end function
 
@@ -376,13 +391,12 @@ contains
 		integer				,intent(in)		:: iteration
 		
 		integer	:: droplets_phase_counter
-		
 		integer	:: specie
-
-
 
 		this%time = this%time + this%time_step		
 
+		call this%farfield_values_modifier(iteration)
+		
 		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
 		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
 		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
@@ -1198,7 +1212,7 @@ contains
 				
 				!$omp parallel default(none)  private(i,j,k,dim,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(F_a,F_b,grad_F_b,grad_F_b_summ,v_f,v_f_old,p_dyn,H,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init,time_step,cells_number)
+				!$omp& shared(F_a,F_b,grad_F_b,grad_F_b_summ,v_f,v_f_old,p_dyn,H,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init,time_step,cells_number,farfield_velocity_array)
 				
 				do dim = 1, dimensions
 					loop(3,1) = cons_inner_loop(3,1)
@@ -1208,9 +1222,9 @@ contains
 					loop(2,2) = cons_utter_loop(2,2)*I_m(dim,2) + cons_inner_loop(2,2)*(1 - I_m(dim,2))	
 
 					loop(1,1) = cons_inner_loop(1,1)
-					loop(1,2) = cons_utter_loop(1,2)*I_m(dim,1) + cons_inner_loop(1,2)*(1 - I_m(dim,1))					
-			
-					!$omp do collapse(3) schedule(guided)	
+					loop(1,2) = cons_utter_loop(1,2)*I_m(dim,1) + cons_inner_loop(1,2)*(1 - I_m(dim,1))	
+
+					!$omp do collapse(3) schedule(guided)
 					do k = loop(3,1),loop(3,2)
 					do j = loop(2,1),loop(2,2)
 					do i = loop(1,1),loop(1,2)
@@ -1339,7 +1353,7 @@ contains
 																																						!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 											end if													
 										case('inlet')
-											farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+											farfield_velocity = farfield_velocity_array(j)
 											if(predictor) then
 												residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																								+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &	
@@ -1377,7 +1391,7 @@ contains
 				
 				!$omp parallel default(none)  private(i,j,k,dim,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(H_summ,H,a_norm,a_norm_init,a_norm_prev,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,spectral_radii_jacobi)				
+				!$omp& shared(H_summ,H,a_norm,a_norm_init,a_norm_prev,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v_f,v_f_old,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,spectral_radii_jacobi,farfield_velocity_array)				
 				do while ((.not.converged).and.(poisson_iteration <= 50000))
 				
 					!$omp barrier
@@ -1449,7 +1463,7 @@ contains
 																																								
 													end if													
 												case('inlet')
-													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+													farfield_velocity = farfield_velocity_array(j)
 													if(predictor) then
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &
@@ -1545,7 +1559,7 @@ contains
 																																							
 													end if													
 												case('inlet')
-													farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+													farfield_velocity = farfield_velocity_array(j)
 													if(predictor) then
 														residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																										+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &	
@@ -1685,7 +1699,7 @@ contains
 												
 										case('inlet')
      
-											farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+											farfield_velocity = farfield_velocity_array(j)
 												
 											if (predictor) then
 												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = H%cells(i,j,k) - sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
@@ -1709,7 +1723,7 @@ contains
 				call this%calculate_dynamic_pressure(time_step,predictor)
 				pressure_converged = .true.				
 				
-				!$omp parallel default(none)  private(i,j,k,dim,H_residual,r_i,r_j,r_k,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_velocity,farfield_pressure) , &
+				!$omp parallel default(none)  private(i,j,k,dim,H_residual,r_i,r_j,r_k,plus,sign,bound_number,boundary_type_name,farfield_pressure) , &
 				!$omp& firstprivate(this) , &
 				!$omp& shared(H_summ,p_dyn,rho_old,rho_int,H,v_f,v_f_old,F_a,F_b,predictor,pressure_converged,cons_inner_loop,cons_utter_loop,bc,dimensions,cell_size,time_step,time)
 
@@ -1796,7 +1810,7 @@ contains
 					v_f_old			=> this%v_f_old%v_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 	
-			!$omp parallel default(none)  private(i,j,k,dim,vel_abs,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_velocity,farfield_pressure) , &
+			!$omp parallel default(none)  private(i,j,k,dim,vel_abs,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_pressure) , &
 			!$omp& firstprivate(this) , &
 			!$omp& shared(p_dyn,v,v_f,rho_old,rho_int,H,predictor,cons_inner_loop,bc,dimensions,cell_size)	
 					
@@ -2239,7 +2253,7 @@ contains
 											end if	
 										end if
 										
-										farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+										farfield_velocity		=  farfield_velocity_array(j)
 										
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
@@ -2645,7 +2659,7 @@ contains
 																																									!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 														end if													
 													case('inlet')
-														farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+														farfield_velocity = farfield_velocity_array(j)
 														if(predictor) then
 															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																											+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &
@@ -2735,7 +2749,7 @@ contains
 																																									!		+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))* cell_size(1)/(0.5_dkind*time_step)	
 														end if													
 													case('inlet')
-														farfield_velocity = this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+														farfield_velocity = farfield_velocity_array(j)
 														if(predictor) then
 															residual = residual + (H%cells(i,j,k) - H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
 																																											+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * cell_size(1)   &
@@ -2827,6 +2841,33 @@ contains
 
 		end associate
 
+	end subroutine
+	
+	subroutine farfield_values_modifier(this, iteration)
+		class(fds_solver)	,intent(in)		:: this
+		integer				,intent(in)		:: iteration
+		
+		integer				:: j, bound
+		character(len=20)	:: boundary_type_name
+		real(dkind)			:: RND 
+		real(dkind)	,save	:: farfield_velocity		
+		
+		if (iteration == 0) then
+			do bound = 1, size(this%boundary%bc_ptr%boundary_types)
+				boundary_type_name = this%boundary%bc_ptr%boundary_types(bound)%get_type_name()
+				if (boundary_type_name == 'inlet') then
+					farfield_velocity = this%boundary%bc_ptr%boundary_types(bound)%get_farfield_velocity()
+				end if
+			end do
+		end if
+
+		if (mod(iteration,100) == 0) then
+			do j = 1,size(farfield_velocity_array)
+				call RANDOM_NUMBER(RND)  
+				farfield_velocity_array(j) = farfield_velocity + RND*(0.5_dkind*farfield_velocity)
+			end do
+		end if
+		
 	end subroutine
 	
 	pure function get_time_step(this)
