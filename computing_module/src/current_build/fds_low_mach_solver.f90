@@ -2842,7 +2842,7 @@ contains
 		end associate
 
 	end subroutine
-	
+
 	subroutine farfield_values_modifier(this, iteration)
 		class(fds_solver)	,intent(in)		:: this
 		integer				,intent(in)		:: iteration
@@ -2852,7 +2852,7 @@ contains
 		real(dkind)			:: RND 
 		real(dkind)	,save	:: farfield_velocity		
 		
-		if (iteration == 0) then
+		if (iteration == 1) then
 			do bound = 1, size(this%boundary%bc_ptr%boundary_types)
 				boundary_type_name = this%boundary%bc_ptr%boundary_types(bound)%get_type_name()
 				if (boundary_type_name == 'inlet') then

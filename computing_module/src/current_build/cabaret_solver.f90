@@ -241,6 +241,7 @@ contains
 			call constructor%state_eq%apply_state_equation_for_initial_conditions()
 		else
 			call constructor%state_eq%apply_state_equation()
+			call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
 		end if		
 		
 		call constructor%mpi_support%exchange_conservative_scalar_field(constructor%p%s_ptr)
