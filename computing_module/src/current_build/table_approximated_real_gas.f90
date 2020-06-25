@@ -457,13 +457,14 @@ contains
 			!	p%cells(i,j,k) = T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)
 		
 			!#  Old e = cv*T equation of state. 
-				
-				p%cells(i,j,k) = e_i%cells(i,j,k) * rho%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dkind) 
+
 				T%cells(i,j,k) = p%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)				
 				
 				cp					= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
 				cv					= cp - r_gase_J 
-				gamma%cells(i,j,k)	= cp / cv					
+				gamma%cells(i,j,k)	= cp / cv		
+				
+				p%cells(i,j,k) = e_i%cells(i,j,k) * rho%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dkind) 
 
 			!# New de = cv*dT equation of state		
 			!	c_v_old%cells(i,j,k)	= cv

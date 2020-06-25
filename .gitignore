@@ -18,4 +18,11 @@ package_library/release_OMP
 package_library/debug_seq
 package_library/release_seq
 NRG_GIT_stable_1/
+package_utilities/package_utilities
+package_utilities/debug_MPI
+package_utilities/release_MPI
+package_utilities/debug_OMP
+package_utilities/release_OMP
+package_utilities/debug_seq
+package_utilities/release_seq
 *.bak

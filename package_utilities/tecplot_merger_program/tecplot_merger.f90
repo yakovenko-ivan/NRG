@@ -104,7 +104,7 @@ program computing_module
 		write(header_file_name,'(A,A,A,A,A,A)') trim(data_save_folder) , trim(fold_sep), trim(save_time) ,trim(fold_sep), trim(save_time) , '_header.plt'
 		write(file_name,'(A,A,A,A)') trim(data_save_folder) , trim(fold_sep), trim(save_time), '.plt'
 		write(system_command,'(A,A,A,A)') 'cp ',trim(header_file_name), '  ', trim(file_name)
-		call execute_command_line(system_command) 
+		call system(system_command) 
 	
 		open(newunit = write_io, file = file_name, status = 'old', form = 'binary', position = 'append') 
 

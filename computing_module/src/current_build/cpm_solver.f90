@@ -245,7 +245,7 @@ contains
 				end do
 			end if            
 		else
-		!	call constructor%state_eq%apply_state_equation()
+			call constructor%state_eq%apply_state_equation()
 			call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
 		end if		
 		

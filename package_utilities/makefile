@@ -10,7 +10,7 @@ tmerger: all
 
 all: tecplot_merger.o
 
-output_merger.o	: tecplot_merger.f90
+tecplot_merger.o	: tecplot_merger.f90
 
 %.o: %.f90
 	$(FCOMP) $(FLAGS) -c $<
