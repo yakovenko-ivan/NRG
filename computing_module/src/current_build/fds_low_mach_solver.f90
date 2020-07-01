@@ -2824,12 +2824,12 @@ contains
 					end if
 				end if
 			end do
-			
-			close(io_unit)
-			
+
 			spectral_radii_jacobi = x(1)
 			
-			print *, 'Optimal spectral radii', spectral_radii_jacobi
+			write(io_unit,'(A,E20.13)')  'Optimal spectral radii', spectral_radii_jacobi
+			
+			close(io_unit)
 			
 			do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
 			do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
