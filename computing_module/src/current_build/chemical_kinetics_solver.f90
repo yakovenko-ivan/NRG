@@ -6,6 +6,7 @@ module chemical_kinetics_solver_class
 	use boundary_conditions_class
 	use data_manager_class
 	use computational_domain_class
+	use computational_mesh_class
 	use thermophysical_properties_class
 	use chemical_properties_class
 	
@@ -88,6 +89,7 @@ module chemical_kinetics_solver_class
 		type(thermophysical_properties_pointer)		:: thermo
 		type(chemical_properties_pointer)			:: chem
 		type(boundary_conditions_pointer)			:: boundary
+		type(computational_mesh_pointer)			:: mesh
 		character(len=20)							:: ODE_solver = 'slatec'
 	contains
 		procedure				:: solve_chemical_kinetics
@@ -131,6 +133,7 @@ contains
 		constructor%domain				= manager%domain
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
 		constructor%chem%chem_ptr		=> manager%chemistry%chem_ptr
+		constructor%mesh%mesh_ptr		=> manager%computational_mesh_pointer%mesh_ptr
 
 		reactions_number    = manager%chemistry%chem_ptr%reactions_number
 		species_number      = manager%chemistry%chem_ptr%species_number
@@ -171,11 +174,16 @@ contains
 		real(dkind) :: specie_enthalpy
 
 		logical	:: acetylene_flag
-		integer	,dimension(3,2)	:: cons_inner_loop
+		real(dkind)	,dimension(3)	:: cell_size
+		
+		integer		,dimension(3,2)	:: cons_inner_loop
 		integer :: i,j,k,dim1,dim2, i_specie, i_react
+
 
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 
+		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		
 		if (this%chem%chem_ptr%get_chemical_specie_index('C2H2') /= 0) acetylene_flag	= .true.
 		
 		associate (	T				=> this%T%s_ptr								, &
@@ -186,13 +194,14 @@ contains
 					Y_prod 			=> this%Y_prod%v_ptr						, &
 					molar_masses    => this%thermo%thermo_ptr%molar_masses		, &
 					enhanced_efficiencies    => this%chem%chem_ptr%enhanced_efficiencies	, &
+					mesh			=> this%mesh%mesh_ptr						, &
 					chem			=> this%chem%chem_ptr)
 					
 
 	!$omp parallel default(none) private(i,j,k,i_react,i_specie,specie_enthalpy,N,NSTATE,NTASK,NROOT,IERROR,MINT,MITER,IMPL,MU,ML,MXORD,MXSTEP,LENW,LENIW,NDE,MATDIM,IERFLG,EPS,HMAX,TIN,TOUT,EWT) , &
 	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	, &			
 	!$omp& firstprivate(this)	, &
-	!$omp& shared(T,p,rho,Y,E_f_prod,Y_prod,molar_masses,enhanced_efficiencies,time_step,species_number,reactions_number,cons_inner_loop,acetylene_flag)
+	!$omp& shared(T,p,rho,Y,E_f_prod,Y_prod,molar_masses,enhanced_efficiencies,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag,mesh)
 	!$omp do collapse(3) schedule(static)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
