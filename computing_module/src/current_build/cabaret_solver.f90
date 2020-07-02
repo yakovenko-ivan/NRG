@@ -542,7 +542,7 @@ contains
 		real(dkind)	:: g_inv, alpha = 0.0_dkind
 		real(dkind)	:: f, corr, diss_l, diss_r, diss = 1.0_dkind
 		integer		,save :: dissipator_active = 0
-		real(dkind) :: max_inv, min_inv
+		real(dkind) :: max_inv, min_inv, maxmin_inv
 		real(dkind) :: mean_higher, mean_lower
 		real(dkind)	:: sources
 		real(dkind)	:: mean_sources
@@ -853,7 +853,7 @@ contains
 		end do
 		!$omp end parallel		
 		
-		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half,G_half_old,G_half_lower,G_half_higher,r,R_half,R_old,q,Q_half,Q_old,v_inv,v_inv_half,v_inv_old,r_new,q_new,v_inv_new,f,g_inv,max_inv,min_inv,r_corrected,q_corrected,v_inv_corrected,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,sign,bound_number) , &
+		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half,G_half_old,G_half_lower,G_half_higher,r,R_half,R_old,q,Q_half,Q_old,v_inv,v_inv_half,v_inv_old,r_new,q_new,v_inv_new,f,g_inv,max_inv,min_inv,maxmin_inv,r_corrected,q_corrected,v_inv_corrected,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,sign,bound_number) , &
 		!$omp& firstprivate(this) , &
 		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,bc,v_s,v_s_old,rho,rho_old,p,p_old,v,v_old,E_f,gamma,p_f,v_f,rho_f,rho_prod,v_prod,E_f_prod,p_f_new,rho_f_new,v_f_new,Max_v_s,Min_v_s,diss,dissipator_active,mesh,cell_size,lock,coordinate_system)
 		do dim = 1,dimensions
@@ -915,19 +915,19 @@ contains
 					diss_r = 0.0_dkind
 					
 					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
-						if (( v_s_f(dim,i,j,k) > (max(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) + 300.0_dkind))	&
-						.or.( v_s_f(dim,i,j,k) < (min(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) - 300.0_dkind))) then
-							diss_l = diss
+						if (( v_s_f(dim,i,j,k) > (max(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) + 100.0_dkind))	&
+						.or.( v_s_f(dim,i,j,k) < (min(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) - 100.0_dkind))) then
+					!		diss_l = diss
 							print *, 'Left dissipator active: ', dim, i,j,k, v_s_f(dim,i,j,k), v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), v_s%cells(i,j,k)
 							dissipator_active = dissipator_active + 1
 							print *, 'Activation count: ',dissipator_active
 						end if
 					end if
-
+     
 					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
-						if (( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > (max(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) + 300.0_dkind))	&
-						.or.( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) < (min(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) - 300.0_dkind))) then 
-							diss_r = diss
+						if (( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > (max(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) + 100.0_dkind))	&
+						.or.( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) < (min(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) - 100.0_dkind))) then 
+					!		diss_r = diss
 							print *, 'Right dissipator active: ', dim, i,j,k, v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_s%cells(i,j,k) 
 							dissipator_active = dissipator_active + 1
 							print *, 'Activation count: ',dissipator_active	
@@ -951,7 +951,17 @@ contains
 
 					max_inv = max(r(1),R_half,r(2)) + g_inv*this%time_step
 					min_inv = min(r(1),R_half,r(2)) + g_inv*this%time_step
-					
+					maxmin_inv = abs(max_inv - min_inv)
+
+				!	if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+				!		if (abs(max_inv) > 1e-02) then
+				!			if(abs(maxmin_inv) > 1.0e-02) then
+					max_inv = max_inv + (-0.025_dkind)*maxmin_inv
+					min_inv = min_inv - (-0.025_dkind)*maxmin_inv
+				!			end if
+				!		end if
+				!	end if
+
 					if ((min_inv <= r_new(1)).and.(r_new(1) <= max_inv))    r_corrected(1) = r_new(1)
 					if (r_new(1) < min_inv)                                 r_corrected(1) = min_inv
 					if (max_inv < r_new(1))                                 r_corrected(1) = max_inv
@@ -964,7 +974,17 @@ contains
 
 					max_inv = max(q(1),Q_half,q(2)) + g_inv*this%time_step
 					min_inv = min(q(1),Q_half,q(2)) + g_inv*this%time_step
-					
+					maxmin_inv = abs(max_inv - min_inv)
+				
+				!	if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+				!		if (abs(max_inv) > 1e-02) then
+				!			if(abs(maxmin_inv) > 1.0e-02) then
+					max_inv = max_inv + (-0.025_dkind)*maxmin_inv
+					min_inv = min_inv - (-0.025_dkind)*maxmin_inv
+				!			end if
+				!		end if
+				!	end if
+	
 					if ((min_inv <= q_new(1)).and.(q_new(1) <= max_inv))    q_corrected(1) = q_new(1)
 					if (q_new(1) < min_inv)                                 q_corrected(1) = min_inv
 					if (max_inv < q_new(1))                                 q_corrected(1) = max_inv
@@ -979,6 +999,16 @@ contains
 
 						max_inv = max(v_inv(dim2,1),v_inv_half(dim2),v_inv(dim2,2)) + g_inv*this%time_step
 						min_inv = min(v_inv(dim2,1),v_inv_half(dim2),v_inv(dim2,2)) + g_inv*this%time_step
+						maxmin_inv = abs(max_inv - min_inv)
+					
+					!	if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+					!		if (abs(max_inv) > 1e-02) then
+					!			if(abs(maxmin_inv) > 1.0e-02) then
+						max_inv = max_inv + (-0.025_dkind)*maxmin_inv
+						min_inv = min_inv - (-0.025_dkind)*maxmin_inv
+					!			end if
+					!		end if
+					!	end if
 						
 						if ((min_inv <= v_inv_new(dim2,1)).and.(v_inv_new(dim2,1) <= max_inv))		v_inv_corrected(dim2,1) = v_inv_new(dim2,1)
 						if (v_inv_new(dim2,1) < min_inv)											v_inv_corrected(dim2,1) = min_inv
@@ -1256,7 +1286,7 @@ contains
 		call this%mpi_support%exchange_flow_scalar_field(rho_f_new)
 		call this%mpi_support%exchange_flow_scalar_field(p_f_new)
 
-		!$omp parallel default(none)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,max_inv,min_inv,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,spec_summ,bound_number) , &
+		!$omp parallel default(none)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,max_inv,min_inv,maxmin_inv,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,spec_summ,bound_number) , &
 		!$omp& firstprivate(this) , &
 		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,species_number,bc,Y,Y_f,Y_f_new,Y_prod,v,v_f_new,v_s,v_s_f,p,p_f,p_f_new,rho,rho_f,rho_f_new,gamma,E_f_prod,Max_v_s,Min_v_s,diss,diss_r,diss_l,cell_size,lock)		
 
@@ -1290,20 +1320,20 @@ contains
 					diss_l = 0.0_dkind
 					diss_r = 0.0_dkind
 
-					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
-						if (( v_s_f(dim,i,j,k) > (max(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) + 300.0_dkind))	&
-						.or.( v_s_f(dim,i,j,k) < (min(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) - 300.0_dkind))) then
-							diss_l = diss
+					!if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
+					!	if (( v_s_f(dim,i,j,k) > (max(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) + 300.0_dkind))	&
+					!	.or.( v_s_f(dim,i,j,k) < (min(v_s%cells(i,j,k),v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) - 300.0_dkind))) then
+					!		diss_l = diss
 
-						end if
-					end if
+					!	end if
+					!end if
 
-					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
-						if (( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > (max(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) + 300.0_dkind))	&
-						.or.( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) < (min(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) - 300.0_dkind))) then
-							diss_r = diss
-						end if
-					end if
+					!if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
+					!	if (( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > (max(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) + 300.0_dkind))	&
+					!	.or.( v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) < (min(v_s%cells(i,j,k),v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) - 300.0_dkind))) then
+					!		diss_r = diss
+					!	end if
+					!end if
 
 					do spec = 1,species_number
 						y_inv_new(spec,1)	= (2.0_dkind*Y_inv_half(spec) - (1.0_dkind-diss_l)*y_inv(spec,2))/(1.0_dkind+diss_l)
@@ -1321,9 +1351,21 @@ contains
 						
 						g_inv = ((Y_inv_half(spec) - Y_inv_old(spec))/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k))*(y_inv(spec,2) - y_inv(spec,1))/cell_size(1))
 						
+
 						max_inv	= max(y_inv(spec,1),Y_inv_half(spec),y_inv(spec,2)) +  g_inv*this%time_step
 						min_inv	= min(y_inv(spec,1),Y_inv_half(spec),y_inv(spec,2)) +  g_inv*this%time_step
 						
+						maxmin_inv = abs(max_inv - min_inv)
+					
+					!	if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
+					!		if (abs(max_inv) > 1e-02) then
+					!			if(abs(maxmin_inv) > 1.0e-02) then
+									max_inv = max_inv + (-0.05_dkind)*maxmin_inv
+									min_inv = min_inv - (-0.05_dkind)*maxmin_inv
+					!			end if
+					!		end if
+					!	end if
+
 						if ((min_inv <= y_inv_new(spec,1)).and.(y_inv_new(spec,1) <= max_inv))		y_inv_corrected(spec,1) = y_inv_new(spec,1)
 						if (y_inv_new(spec,1) < min_inv)											y_inv_corrected(spec,1) = min_inv
 						if (max_inv < y_inv_new(spec,1))											y_inv_corrected(spec,1) = max_inv
@@ -1541,6 +1583,7 @@ contains
 		!$omp end do nowait		
 		!$omp end parallel
 
+		call this%apply_boundary_conditions_main()
 		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)
 		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
 		if (this%viscosity_flag)	call this%viscosity_solver%solve_viscosity(this%time_step)
@@ -2120,7 +2163,9 @@ v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= v_s%cells(i,j
 										if(.not.bc%boundary_types(bound_number)%is_slip()) then
 											do dim1 = 1, dimensions
 												if(dim1 /= dim) then
-													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dkind * v%pr(dim1)%cells(i,j,k) !- 10.0_dkind * v%pr(dim1)%cells(i,j,k)!v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dkind * v%pr(dim1)%cells(i,j,k)
+													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v%pr(dim1)%cells(i,j,k) 
+													! v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dkind * v%pr(dim1)%cells(i,j,k) 
+													!- 10.0_dkind * v%pr(dim1)%cells(i,j,k)
 												end if
 											end do
 										end if
