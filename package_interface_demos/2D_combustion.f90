@@ -49,7 +49,7 @@ program package_interface
 	
 	character(len=500)			:: initial_work_dir
 	character(len=100)			:: work_dir
-	character(len=10)			:: solver_name
+	character(len=15)			:: solver_name
 	
 	real(dkind)	:: domain_length, ignition_region
 	real(dkind)	:: CFL_coeff
@@ -63,7 +63,7 @@ program package_interface
 	
 	ierr = getcwd(initial_work_dir)
 	
-	do task1 = 2, 2
+	do task1 = 3, 3
 	do task2 = 1, 4
 	do task3 = 3, 3
 	do task4 = 3, 3
@@ -77,6 +77,9 @@ program package_interface
 			case(2)
 				work_dir = trim(work_dir) // 'CABARET'
 				solver_name = 'CABARET'
+			case(3)
+				work_dir = trim(work_dir) // 'fds_low_mach'
+				solver_name = 'fds_low_mach'				
 		end select
 		
 		ierr = system('mkdir '// work_dir)		
@@ -249,7 +252,7 @@ program package_interface
 														farfield_pressure		= 101325.0_dkind	,	&
 														farfield_temperature	= 300.0_dkind		,	&
 														farfield_velocity		= 0.0_dkind			,	&	
-														farfield_species_names	= (/'H2,O2,N2'/)	,	&	
+														farfield_species_names	= (/'H2','O2','N2'/)	,	&	
 														farfield_concentrations	= (/1.0_dkind, nu, nu * 3.762_dkind/)	,	&
 														priority				= 2)
 															

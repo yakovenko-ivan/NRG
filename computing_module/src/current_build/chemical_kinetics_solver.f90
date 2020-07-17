@@ -29,9 +29,6 @@ module chemical_kinetics_solver_class
 	
 	!$OMP THREADPRIVATE(mixture_concentration,rate_constants,chemical_coeffs,conc_in, conc_out,IWORK,WORK, temperature, pressure)
 
-	real(dkind)					:: mixture_concentration_H2Air
-	real(dkind)	,dimension(9)	:: smw = (/2.016,32.,16.,1.008,17.01,18.01,33.01,34.01,28.01/)
-	real(dkind)	,dimension(9)	:: sl
 	integer			:: reactions_number
 	integer			:: species_number
 
