@@ -164,7 +164,7 @@ program package_interface
 		problem_data_manager	= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics)
 					
 			call problem_data_manager%create_boundary_conditions(	problem_boundaries				, &	
-																	number_of_boundary_types	= 2	, &
+																	number_of_boundary_types	= 3	, &
 																	default_boundary			= 1)
 																
 			call problem_data_manager%create_computational_mesh(problem_mesh)
@@ -251,12 +251,20 @@ program package_interface
 														farfield_pressure		= 101325.0_dkind	,	&
 														farfield_temperature	= 300.0_dkind		,	&
 														farfield_velocity		= 0.0_dkind			,	&	
+														farfield_species_names	= (/'H2O','N2'/)	,	&	
+														farfield_concentrations	= (/1.0_dkind, nu * 3.762_dkind/)	,	&
+														priority				= 2)
+														
+		call problem_boundaries%create_boundary_type (	type_name				= 'inlet'	,	&
+														farfield_pressure		= 101325.0_dkind	,	&
+														farfield_temperature	= 300.0_dkind		,	&
+														farfield_velocity		= 1.0_dkind			,	&	
 														farfield_species_names	= (/'H2','O2','N2'/)	,	&	
 														farfield_concentrations	= (/1.0_dkind, nu, nu * 3.762_dkind/)	,	&
-														priority				= 2)
+														priority				= 3)														
 															
-		problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 1
-		problem_boundaries%bc_markers(utter_loop(1,2),:,:)	= 1 	
+		problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 3
+		problem_boundaries%bc_markers(utter_loop(1,2),:,:)	= 2 	
 	
 		!***********************************************************************************************
 	
