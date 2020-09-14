@@ -75,6 +75,8 @@ module cpm_solver_class
 		procedure	,private	:: calculate_interm_E_Y
 		procedure				:: solve_problem
 		procedure				:: calculate_time_step
+		procedure				:: set_CFL_coefficient	
+		procedure				:: get_CFL_coefficient		
 		procedure				:: get_time_step
 		procedure				:: get_time
 	end type
@@ -881,6 +883,20 @@ contains
 	
 	end subroutine
 		
+	subroutine set_CFL_coefficient(this,coefficient)
+		class(cpm_solver)	,intent(inout)		:: this
+		real(dkind)				,intent(in)		:: coefficient
+	
+		this%courant_fraction = coefficient
+		
+	end subroutine
+	
+	pure function get_CFL_coefficient(this)
+		real(dkind)						:: get_CFL_coefficient
+		class(cpm_solver)	,intent(in)		:: this
+
+		get_CFL_coefficient = this%courant_fraction
+	end function	
 	
 	pure function get_time_step(this)
 		real(dkind)						:: get_time_step
