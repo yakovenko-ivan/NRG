@@ -298,12 +298,12 @@ contains
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
 							! x -> z, y -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(2,i,j,k)									
-							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1))		
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(1,i,j,k)									
+							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		! - 0.5_dkind*cell_size(1)
 						case ('spherical')
 							! x -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
-					end select			
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))**2	! - 0.5_dkind*cell_size(1)
+					end select				
 		
                     av_velocity     = 0.5_dkind *(v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_p_int%pr(dim)%cells(i,j,k))
                     dif_velocity    = time_step *(v_p_int%pr(dim)%cells(i,j,k) - v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(dim)
@@ -320,8 +320,8 @@ contains
 							if( bound_number /= 0 ) then
 								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 								select case(boundary_type_name)
-									case ('wall')		! Particles stay near right wall
-										if ((dim == 1).and.(sign == 1)) then
+									case ('wall')		! Particles stay near top wall
+										if ((dim == 2).and.(sign == 1)) then
 											m_flux_p%cells(dim,i,j,k) = max(0.0_dkind,m_flux_p%cells(dim,i,j,k))							
 										end if
 								end select
@@ -395,10 +395,10 @@ contains
 					case ('cartesian')
 						cell_volume			= cell_volume
 					case ('cylindrical')
-						cell_volume			= cell_volume * mesh%mesh(2,i,j,k)
+						cell_volume			= cell_volume * mesh%mesh(1,i,j,k)
 					case ('spherical')
 						cell_volume			= cell_volume * mesh%mesh(1,i,j,k)**2
-				end select			
+				end select				
  
 				rho_p_old			= rho_p%cells(i,j,k)
 				do dim = 1,dimensions
@@ -515,8 +515,8 @@ contains
 											if(dim1 == dim)	v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p_int%pr(dim1)%cells(i,j,k)
 										end do
 										
-									case ('wall')		! Particles stay near right wall
-										if ((dim == 1).and.(sign == 1)) then
+									case ('wall')		! Particles stay near top wall
+										if ((dim == 2).and.(sign == 1)) then
 											do dim1 = 1, dimensions
 												v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
 												v_p_int%pr(dim1)%cells(i,j,k)	= 0.0_dkind
@@ -602,7 +602,7 @@ contains
 												end if
 											end do
 										end if
-										if ((dim == 1).and.(sign == 1)) then
+										if ((dim == 2).and.(sign == 1)) then
 											do dim1 = 1, dimensions
 												v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
 												v_p%pr(dim1)%cells(i,j,k) = 0.0_dkind
