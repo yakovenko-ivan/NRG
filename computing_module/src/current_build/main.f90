@@ -174,10 +174,12 @@ program computing_module
 			print *, ' Current time = ', day,'  ',h,':',m,':',s
 		end if
 		
-		if ((precision_flag).and.(calculation_time > 165.0e-09_dkind)) then
-			call problem_data_save%set_save_time(1.0_dkind)
-			call problem_cabaret_solver%set_CFL_coefficient(0.1_dkind)
-			precision_flag = .false.
+!		if ((precision_flag).and.(calculation_time > 165.0e-09_dkind)) then
+		if (time_step < 3.66e-08_dkind * problem_cpm_solver%get_CFL_coefficient()) then
+!			call problem_data_save%set_save_time(1.0_dkind)
+			call problem_cpm_solver%set_CFL_coefficient(0.1_dkind)
+		else
+			call problem_cpm_solver%set_CFL_coefficient(0.75_dkind)
 		end if
 	
 		call problem_data_io%output_all_data(calculation_time			,stop_flag)	
