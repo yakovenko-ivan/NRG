@@ -395,7 +395,7 @@ contains
 
 		this%time = this%time + this%time_step		
 
-		call this%farfield_values_modifier(iteration)
+	!	call this%farfield_values_modifier(iteration)
 		
 		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
 		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
@@ -1654,8 +1654,8 @@ contains
 																																		+	(v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) / time_step) * cell_size(1)
 											end if
 										case('outlet')
-											if (sign == 1) then		!# Правая граница
-												if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Выток, берутся значения слева
+											if (sign == 1) then		!# РџСЂР°РІР°СЏ РіСЂР°РЅРёС†Р°
+												if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Р’С‹С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃР»РµРІР°
 												
 													if (predictor) then	
 														H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/rho_old%cells(i,j,k)
@@ -1666,7 +1666,7 @@ contains
 													do dim1 = 1,dimensions
 														H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind*(	(0.5_dkind *( v_f%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) + v_f%pr(dim1)%cells(dim1,i,j,k))) **2) 
 													end do
-												else																					!# Вток, берутся значения справа
+												else																					!# Р’С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃРїСЂР°РІР°
 													farfield_density		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_density()
 													farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
@@ -1674,8 +1674,8 @@ contains
 													H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		=	p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/farfield_density + 0.5_dkind*(farfield_velocity **2)
 											
 												end if
-											else					!# Левая граница
-												if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Выток, берутся значения справа
+											else					!# Р›РµРІР°СЏ РіСЂР°РЅРёС†Р°
+												if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Р’С‹С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃРїСЂР°РІР°
 										
 													if (predictor) then	
 														H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/rho_old%cells(i,j,k)
@@ -1687,7 +1687,7 @@ contains
 														H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + 0.5_dkind*(	(0.5_dkind *( v_f%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) + v_f%pr(dim1)%cells(dim1,i,j,k))) **2) 
 													end do
 												
-												else																					!# Вток, берутся значения справа
+												else																					!# Р’С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃРїСЂР°РІР°
 													farfield_density		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_density()
 													farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
 													farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
@@ -1848,16 +1848,16 @@ contains
 											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										end if
 									case('outlet')
-										if (sign == 1) then		!# Правая граница
-											if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Выток, берутся значения слева
+										if (sign == 1) then		!# РџСЂР°РІР°СЏ РіСЂР°РЅРёС†Р°
+											if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Р’С‹С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃР»РµРІР°
 												p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.0_dkind 
-											else																					!# Вток, берутся значения справа
+											else																					!# Р’С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃРїСЂР°РІР°
 												p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.0_dkind
 											end if
-										else					!# Левая граница
-											if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Выток, берутся значения справа
+										else					!# Р›РµРІР°СЏ РіСЂР°РЅРёС†Р°
+											if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Р’С‹С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃРїСЂР°РІР°
 												p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	0.0_dkind 
-											else																					!# Вток, берутся значения справа
+											else																					!# Р’С‚РѕРє, Р±РµСЂСѓС‚СЃСЏ Р·РЅР°С‡РµРЅРёСЏ СЃРїСЂР°РІР°
 												p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	0.0_dkind
 											end if
 										end if
@@ -1960,6 +1960,8 @@ contains
 								select case(boundary_type_name)
 									case('wall')
 										v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) = 0.0_dkind 
+									case('outlet')
+										v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) = v_f%pr(dim)%cells(dim,i,j,k)								
 								end select
 							end if
 						end do
