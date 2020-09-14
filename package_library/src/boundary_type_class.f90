@@ -41,6 +41,7 @@ module boundary_type_class
 		procedure	:: set_farfield_pressure
 		procedure	:: set_farfield_temperature
 		procedure	:: set_farfield_density
+		procedure	:: set_farfield_concentrations
 
 		! Logger		
 		procedure	:: write_log
@@ -191,7 +192,7 @@ contains
 			this%wall_temperature			= 0.0_dkind
 			this%wall_conductivity_ratio	= 0.0_dkind
 
-if(present(farfield_pressure).and.present(farfield_temperature).and.present(farfield_velocity).and.present(farfield_concentrations).and.present(farfield_species_names)) then
+			if(present(farfield_pressure).and.present(farfield_temperature).and.present(farfield_velocity).and.present(farfield_concentrations).and.present(farfield_species_names)) then
 				this%farfield_pressure			= farfield_pressure
 				this%farfield_temperature		= farfield_temperature
 				this%farfield_velocity			= farfield_velocity
@@ -353,5 +354,12 @@ if(present(farfield_pressure).and.present(farfield_temperature).and.present(farf
 
 		this%farfield_velocity = farfield_velocity
 	end subroutine	
+	
+	pure subroutine	set_farfield_concentrations(this,farfield_concentrations)
+		class(boundary_type)		,intent(inout)		:: this
+		real(dkind), dimension(:)	,intent(in)			:: farfield_concentrations
+
+		this%farfield_concentrations = farfield_concentrations
+	end subroutine		
 
 end module
