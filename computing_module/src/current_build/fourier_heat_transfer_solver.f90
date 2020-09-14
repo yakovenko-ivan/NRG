@@ -101,7 +101,8 @@ contains
 		real(dkind)	,dimension(3)	:: cell_size
 		character(len=20)	:: coordinate_system
 		
-		integer	:: sign
+		character(len=20)		:: boundary_type_name
+		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim
 
 		call this%calculate_thermal_c_coeff()
@@ -127,7 +128,7 @@ contains
 		call this%mpi_support%exchange_conservative_scalar_field(kappa)
 		call this%mpi_support%exchange_conservative_scalar_field(T)					
 				
-	!$omp parallel default(none)  private(i,j,k,dim,div_thermo_flux,thermo_flux1,thermo_flux2,lame_coeffs) , &
+	!$omp parallel default(none)  private(i,j,k,dim,div_thermo_flux,thermo_flux1,thermo_flux2,lame_coeffs,sign,bound_number,boundary_type_name) , &
 	!$omp& firstprivate(this)	,&
 	!$omp& shared(E_f_prod,rho,kappa,T,time_step,cons_inner_loop,dimensions,cell_size,mesh,bc,coordinate_system)
 	!$omp do collapse(3) schedule(static)
@@ -167,7 +168,21 @@ contains
 					continue
                 end do
 				E_f_prod%cells(i,j,k)	=  div_thermo_flux !* time_step 
-			end if			
+			
+				do dim = 1,dimensions
+					do plus = 1,2
+						sign			= (-1)**plus
+						bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+						if( bound_number /= 0 ) then
+							boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+							select case(boundary_type_name)
+								case('inlet','outlet')
+									E_f_prod%cells(i,j,k) = 0.0_dkind
+							end select
+						end if
+					end do
+				end do			
+			end if				
 		end do
 		end do
 		end do

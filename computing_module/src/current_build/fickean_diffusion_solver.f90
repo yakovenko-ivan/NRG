@@ -132,7 +132,8 @@ contains
 		real(dkind)	,dimension(3)	:: cell_size			
 		character(len=20)	:: coordinate_system
 		
-		integer	:: sign
+		character(len=20)		:: boundary_type_name
+		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim,specie_number,specie_number1
 		
 		call this%calculate_diffusivity_coeff()
@@ -168,7 +169,7 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(D)
 		call this%mpi_support%exchange_conservative_vector_field(Y)
 					
-	!$omp parallel default(none)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs) , &
+	!$omp parallel default(none)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name) , &
 	!$omp& firstprivate(this)	,&
 	!$omp& shared(D, mol_mix_conc, rho, E_f_prod, Y, Y_prod, T, time_step,cons_inner_loop,dimensions,species_number,bc,cell_size, mesh,coordinate_system) 
 	!$omp do collapse(3) schedule(guided)
@@ -243,7 +244,25 @@ contains
 						end if							
 					end do
 				end do
-			end if
+		
+				do dim = 1,dimensions
+					do plus = 1,2
+						sign			= (-1)**plus
+						bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+						if( bound_number /= 0 ) then
+							boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+							select case(boundary_type_name)
+								case('inlet','outlet')
+									do specie_number = 1,species_number
+										Y_prod%pr(specie_number)%cells(i,j,k) = 0.0_dkind
+									end do
+									E_f_prod%cells(i,j,k) = 0.0_dkind
+							end select
+						end if
+					end do
+				end do
+			
+			end if			
 		end do
 		end do
 		end do
