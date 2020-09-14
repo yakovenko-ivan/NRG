@@ -199,7 +199,7 @@ contains
 	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	, &			
 	!$omp& firstprivate(this)	, &
 	!$omp& shared(T,p,rho,Y,E_f_prod,Y_prod,molar_masses,enhanced_efficiencies,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag,mesh)
-	!$omp do collapse(3) schedule(static)
+	!$omp do collapse(3) schedule(dynamic)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
