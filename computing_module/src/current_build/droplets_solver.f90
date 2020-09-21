@@ -295,41 +295,41 @@ contains
                 local_diameter = 6.0_dkind * mass_d%cells(i,j,k) / Pi / droplet%material_density 
                 local_diameter = local_diameter ** 0.3333
 				
-				velabs = 0.0_dkind
-                do dim = 1,dimensions
-					velabs = velabs + ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ** 2.0
-                end do	
+				!velabs = 0.0_dkind
+    !            do dim = 1,dimensions
+				!	velabs = velabs + ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ** 2.0
+    !            end do	
 				
                 !************************* foam decay (dynamic) **************************************************
-                if ((this%phase_number == 1).and.(foam_marker%cells(i,j,k) == 0.0_dkind).and.(rho%cells(i,j,k)*velabs > 2.0e+5_dkind))then
-                    foam_marker%cells(i,j,k)	=	1.0_dkind
-            !        time_decay%cells(i,j,k)		=	1.0_dkind
-                endif
-				
-                if ((foam_marker%cells(i,j,k) == 1.0_dkind).and.(rho_d%cells(i,j,k) > 0.01_dkind))then
-					if((this%phase_number == 1).and.(rho%cells(i,j,k)*velabs > 25.0e+5_dkind))then
-						if(time_boil%cells(i,j,k) < 0.0_dkind)then
-							time_boil%cells(i,j,k)    = 0.0_dkind
-						else
-							time_boil%cells(i,j,k)    = time_boil%cells(i,j,k)+time_step
-						endif
-					end if
-                end if
+     !           if ((this%phase_number == 1).and.(foam_marker%cells(i,j,k) == 0.0_dkind).and.(rho%cells(i,j,k)*velabs > 2.0e+5_dkind))then
+     !               foam_marker%cells(i,j,k)	=	1.0_dkind
+     !       !        time_decay%cells(i,j,k)		=	1.0_dkind
+     !           endif
+				 !
+     !           if ((foam_marker%cells(i,j,k) == 1.0_dkind).and.(rho_d%cells(i,j,k) > 0.01_dkind))then
+					!if((this%phase_number == 1).and.(rho%cells(i,j,k)*velabs > 25.0e+5_dkind))then
+					!	if(time_boil%cells(i,j,k) < 0.0_dkind)then
+					!		time_boil%cells(i,j,k)    = 0.0_dkind
+					!	else
+					!		time_boil%cells(i,j,k)    = time_boil%cells(i,j,k)+time_step
+					!	endif
+					!end if
+     !           end if
                 
              !   if(this%phase_number == 1)	werhop%cells(i,j,k)		=	rho%cells(i,j,k)*velabs/0.03*local_diameter*rho_d%cells(i,j,k)
              !   if(this%phase_number == 2)	werhop2%cells(i,j,k)	=	rho%cells(i,j,k)*velabs/0.03*local_diameter*rho_d%cells(i,j,k)
                 
-                velabs = velabs ** 0.5
+    !            velabs = velabs ** 0.5
 
 				F_stokes = 0.0_dkind
 				
 				do dim = 1,dimensions
-					if (foam_marker%cells(i,j,k) == 1.0_dkind) then
+	!				if (foam_marker%cells(i,j,k) == 1.0_dkind) then
 						F_stokes			= 3.0_dkind * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k))
-					else
-                    	F_stokes			= 2.0_dkind / local_diameter * rho%cells(i,j,k) / droplet%material_density * velabs * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k))
-						F_stokes			= F_stokes * 20.0_dkind 
-                    end if
+					!else
+     !               	F_stokes			= 2.0_dkind / local_diameter * rho%cells(i,j,k) / droplet%material_density * velabs * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k))
+					!	F_stokes			= F_stokes * 20.0_dkind 
+     !               end if
 			
 					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_d%cells(i,j,k) / rho%cells(i,j,k) * time_step
 					v_d_int%pr(dim)%cells(i,j,k)	= v_d%pr(dim)%cells(i,j,k) + F_stokes * time_step
@@ -348,9 +348,9 @@ contains
 					temp_cr = 371.55    
                 end if
 				
-                if (foam_marker%cells(i,j,k) == 1.0_dkind) then
+     !           if (foam_marker%cells(i,j,k) == 1.0_dkind) then
 					if (T_d_int%cells(i,j,k) > temp_cr) T_d_int%cells(i,j,k) = temp_cr
-                end if
+     !           end if
                 
                 if (T%cells(i,j,k) >= temp_cr) then
                     evaporation_rate = 2.0_dkind * local_diameter * Pi * kappa%cells(i,j,k)/droplet%material_heat_capacity  &
@@ -358,18 +358,18 @@ contains
                     
             !*********************** evaporation (boiling) front ***************************
             !*******************************************************************************
-					if (foam_marker%cells(i,j,k) == 0.0_dkind) then
-						marker1				= 0.0_dkind
-						evaporation_rate	= 0.0_dkind
-						do dim = 1,dimensions
-							if((T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > temp_cr).and.(foam_marker%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 1.0_dkind))then
-								evaporation_rate = evaporation_rate + 0.6_dkind * abs(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))-T%cells(i,j,k)) * 1.0e-4_dkind / droplet%material_latent_heat /mass_d%cells(i,j,k)
-							end if
-							if((T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > temp_cr).and.(foam_marker%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) == 1.0_dkind))then
-								evaporation_rate = evaporation_rate + 0.6_dkind * abs(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))-T%cells(i,j,k)) * 1.0e-4_dkind / droplet%material_latent_heat /mass_d%cells(i,j,k)
-							end if
-						end do
-					end if
+					!if (foam_marker%cells(i,j,k) == 0.0_dkind) then
+					!	marker1				= 0.0_dkind
+					!	evaporation_rate	= 0.0_dkind
+					!	do dim = 1,dimensions
+					!		if((T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > temp_cr).and.(foam_marker%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 1.0_dkind))then
+					!			evaporation_rate = evaporation_rate + 0.6_dkind * abs(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))-T%cells(i,j,k)) * 1.0e-4_dkind / droplet%material_latent_heat /mass_d%cells(i,j,k)
+					!		end if
+					!		if((T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > temp_cr).and.(foam_marker%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) == 1.0_dkind))then
+					!			evaporation_rate = evaporation_rate + 0.6_dkind * abs(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))-T%cells(i,j,k)) * 1.0e-4_dkind / droplet%material_latent_heat /mass_d%cells(i,j,k)
+					!		end if
+					!	end do
+					!end if
 
                 
 					!if((this%phase_number == 3).and.(rho_d%cells(i,j,k) >= 200.0_dkind))then

@@ -17,6 +17,7 @@ module fds_low_mach_solver_class
 	use fourier_heat_transfer_solver_class
 	use fickean_diffusion_solver_class
 	use lagrangian_droplets_solver_class
+	use droplets_solver_class
 	
 	use solver_options_class
 	
@@ -53,7 +54,8 @@ module fds_low_mach_solver_class
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(table_approximated_real_gas)	:: state_eq
 
-		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver		
+!		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver			!# Lagrangian droplets solver
+		type(droplets_solver)			, dimension(:)	    ,allocatable	:: droplets_solver			!# Continuum droplets solver
 		
 		type(computational_domain)					:: domain
 		type(thermophysical_properties_pointer)		:: thermo		
@@ -74,7 +76,8 @@ module fds_low_mach_solver_class
 		
 		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	::  rho_prod_droplets, E_f_prod_droplets
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_droplets		
-		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets
+!		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Lagrangian droplets solver
+		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Continuum droplets solver
 		
 		real(dkind)	,dimension(:,:,:,:)	,allocatable	:: vorticity, grad_F_a, grad_F_b
 		real(dkind)	,dimension(:,:,:)	,allocatable	:: p_old
@@ -265,16 +268,19 @@ contains
 			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
 			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
 				droplets_params = problem_solver_options%get_droplets_params(droplets_phase_counter)
-				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)
+!				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
+				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%E_f_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr
 				write(var_name,'(A,I2.2)') 'density_production_droplets', droplets_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%rho_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
-				write(var_name,'(A,I2.2)') 'velocity_production_droplets', droplets_phase_counter
-				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)
-				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr	
+				write(var_name,'(A,I2.2)') 'velocity_production_droplets', droplets_phase_counter						
+!				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian droplets solver
+!				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian droplets solver
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum droplets solver								
+				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'concentration_production_droplets', droplets_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%Y_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
@@ -404,7 +410,11 @@ contains
 		
 		if(this%additional_droplets_phases_number /= 0) then
 			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)		
+!				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
+				call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
+				call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
+				call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
+				call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)			!# Continuum droplets solver		
 			end do		
 		end if  		
 		
@@ -1092,7 +1102,10 @@ contains
 
 							if (this%additional_droplets_phases_number /= 0) then
 								do droplets_phase_counter = 1, this%additional_droplets_phases_number
-									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)
+!									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)							!# Lagrangian droplets solver
+									if (bc%bc_markers(i,j,k) == 0) then
+										F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) !# Continuum droplets solver
+									end if
 								end do		
 							end if
 							
@@ -1117,7 +1130,10 @@ contains
 							
 							if (this%additional_droplets_phases_number /= 0) then
 								do droplets_phase_counter = 1, this%additional_droplets_phases_number
-									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)
+!									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)							!# Lagrangian droplets solver
+									if (bc%bc_markers(i,j,k) == 0) then
+										F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) !# Continuum droplets solver		
+									end if
 								end do
 							end if							
 							
