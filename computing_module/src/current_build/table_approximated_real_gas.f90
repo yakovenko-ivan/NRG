@@ -959,6 +959,10 @@ contains
 
 										call this%thermo%thermo_ptr%change_cell_units_mole_to_dimless(concs)									
 
+										do specie_number = 1, size(concs)
+											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 0.0_dkind
+										end do
+										
 										do specie_number = 1, size(farfield_species_names)
 											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
 											Y%pr(specie_index)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	concs(specie_index)
