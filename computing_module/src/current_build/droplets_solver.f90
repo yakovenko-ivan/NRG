@@ -293,7 +293,7 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
                 
                 local_diameter = 6.0_dkind * mass_d%cells(i,j,k) / Pi / droplet%material_density 
-                local_diameter = local_diameter ** 0.3333
+                local_diameter = local_diameter ** 0.3333333
 				
 				!velabs = 0.0_dkind
     !            do dim = 1,dimensions

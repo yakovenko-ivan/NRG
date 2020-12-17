@@ -170,12 +170,13 @@ contains
 		integer		,dimension(3,2)	:: cons_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size
 		
-		real(dkind)	:: delta, part_number_x, part_number_max, a ,b
+		real(dkind)	:: delta, part_number_max, a ,b, dimless_length
+		integer		,dimension(3)	:: part_number
 		real(dkind)	,dimension(3)	:: coords
 		real(dkind)	,dimension(:,:)	,allocatable	:: lengths
 		
 		integer	:: dimensions
-		integer :: i,j,k, part, dim, particle
+		integer :: i,j,k, part_x, part_y, part_z, dim, particle
 
 		integer, dimension(3)	:: cell, initial_cell
 		logical	:: out_flag
@@ -190,77 +191,46 @@ contains
 		
 		delta = 0.0006_dkind
 		
-		part_number_max = (lengths(1,2)-lengths(1,1)) /delta
-
-		this%particles_number = 0
-		do part = 1, part_number_max**2
-			a = int((part-1) / int(part_number_max))
-			b = mod((part-1) , int(part_number_max))
-			coords(1) = 0.5_dkind*delta + delta * a + 0.00001_dkind*delta
-			coords(2) = 0.5_dkind*delta + delta * b	+ 0.00001_dkind*delta		
-			cell = this%get_particle_cell(coords,out_flag)
-			if (((coords(1) > 0.125_dkind*(lengths(1,2)-lengths(1,1))) .or. (coords(2) > 0.125_dkind*(lengths(2,2)-lengths(2,1)))).and.	&
-!				((coords(1) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta) .or. (coords(2) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta)).and.		&
-				(not(out_flag))) then
-				this%particles_number    = this%particles_number + 1
-			end if
+		
+		lengths(1,1) = 0.01_dkind
+		lengths(1,2) = 0.02_dkind
+		
+		part_number = 1
+		do dim = 1,dimensions
+			part_number(dim) =  (lengths(dim,2)-lengths(dim,1)) /delta
 		end do
 
+		this%particles_number = part_number(1)*part_number(2)*part_number(3)
+		
 		allocate(this%particles(this%particles_number))	
 		
-		particle = 0
-		do part = 1, part_number_max**2
-		!	do dim = 1, dimensions 
-				a = int((part-1) / int(part_number_max))
-				b = mod((part-1) , int(part_number_max))
-				coords(1) = 0.5_dkind*delta + delta * a + 0.00001_dkind*delta
-				coords(2) = 0.5_dkind*delta + delta * b	+ 0.00001_dkind*delta		
-				cell = this%get_particle_cell(coords,out_flag)
-				if (((coords(1) > 0.125_dkind*(lengths(1,2)-lengths(1,1))) .or. (coords(2) > 0.125_dkind*(lengths(2,2)-lengths(2,1)))).and.	&
-!					((coords(1) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta) .or. (coords(2) < 0.125_dkind*(lengths(1,2)-lengths(1,1))+2*delta)).and.		&
-					(not(out_flag))) then
+		do part_x = 1, part_number(1)
+		do part_y = 1, part_number(2)
+		do part_z = 1, part_number(3)
+		
+			particle = part_x + (part_y-1)*part_number(1) + (part_z-1)*part_number(1)*part_number(2)
+		
+			this%particles(particle)%coords			= 0.0_dkind
+			this%particles(particle)%velocity		= 0.0_dkind
+			this%particles(particle)%dm				= 0.0_dkind  
+			this%particles(particle)%outside_domain = .false.
 				
-					particle = particle + 1 
-				
-					do dim = 1, 3
-						this%particles(particle)%velocity(dim)	= 0.0_dkind
-						this%particles(particle)%coords(dim)	= 0.0_dkind
-					end do						
-					
-					this%particles(particle)%coords(1) = coords(1) 
-					this%particles(particle)%coords(2) = coords(2) 
-					this%particles(particle)%velocity(1)	= 0.0_dkind
-					this%particles(particle)%velocity(2)	= 0.0_dkind
-					this%particles(particle)%dm			= 0.0_dkind  
-					this%particles(particle)%outside_domain = .false.
-				
-					this%particles(particle)%temperature = 300.0_dkind
-					this%particles(particle)%mass		= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
-				
-					initial_cell = this%get_particle_cell(this%particles(particle)%coords,out_flag)
-					this%particles(particle)%cell = initial_cell
-					this%particles(particle)%outside_domain = out_flag
-				end if
-		!	end do
+			this%particles(particle)%temperature	= 300.0_dkind
+			this%particles(particle)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+			do dim = 1, dimensions
+				dimless_length = real((part_x-1)*I_m(dim,1)+(part_y-1)*I_m(dim,2)+(part_z-1)*I_m(dim,3),dkind)
+			
+				this%particles(particle)%velocity(dim)	= 0.0_dkind
+				this%particles(particle)%coords(dim)	= lengths(dim,1) + dimless_length*delta
+			end do
+			
+			initial_cell = this%get_particle_cell(this%particles(particle)%coords,out_flag)
+			this%particles(particle)%cell = initial_cell
+			this%particles(particle)%outside_domain = out_flag				
 		end do
-		
-		!this%particles_number = 1
-		!allocate(this%particles(this%particles_number))	
-		!
-		!this%particles(1)%coords(1)		= 0.01_dkind 
-		!this%particles(1)%coords(2)		= 0.0_dkind
-		!this%particles(1)%velocity(1)	= 0.0_dkind
-		!this%particles(1)%velocity(2)	= 0.0_dkind
-		!this%particles(1)%dm			= 0.0_dkind  
-		!this%particles(1)%outside_domain = .false.
-		!		
-		!this%particles(1)%temperature = 300.0_dkind
-		!this%particles(1)%mass		= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
-		!		
-		!initial_cell = this%get_particle_cell(this%particles(1)%coords,out_flag)
-		!this%particles(1)%cell = initial_cell
-		!this%particles(1)%outside_domain = out_flag
-		
+		end do
+		end do
+				
 		continue
 		
 	end subroutine
@@ -627,7 +597,7 @@ contains
 		
 		if (dimensions	== 3) then
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-				if (( 0.5_dkind*(mesh%mesh(3,1,1,k-1) + mesh%mesh(3,1,1,k)) < particle_coords(3)).and. &
+				if (( 0.5_dkind*(mesh%mesh(3,1,1,k-1) + mesh%mesh(3,1,1,k)) <= particle_coords(3)).and. &
 					( 0.5_dkind*(mesh%mesh(3,1,1,k+1) + mesh%mesh(3,1,1,k)) > particle_coords(3))) then
 					get_particle_cell(3) = k
 					exit
