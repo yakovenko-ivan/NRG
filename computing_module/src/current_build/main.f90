@@ -73,7 +73,7 @@ program computing_module
 #endif
 
 #ifdef OMP
-	call omp_set_num_threads(6)
+	call omp_set_num_threads(4)
 #endif
 
 	open(newunit = log_unit, file = problem_setup_log_file, status = 'old', form = 'formatted', position = 'append')
@@ -175,12 +175,12 @@ program computing_module
 		end if
 		
 !		if ((precision_flag).and.(calculation_time > 165.0e-09_dkind)) then
-		if (time_step < 3.66e-08_dkind * problem_cpm_solver%get_CFL_coefficient()) then
+!		if (time_step < 3.66e-08_dkind * problem_cpm_solver%get_CFL_coefficient()) then
 !			call problem_data_save%set_save_time(1.0_dkind)
-			call problem_cpm_solver%set_CFL_coefficient(0.1_dkind)
-		else
-			call problem_cpm_solver%set_CFL_coefficient(0.75_dkind)
-		end if
+!			call problem_cpm_solver%set_CFL_coefficient(0.1_dkind)
+!		else
+!			call problem_cpm_solver%set_CFL_coefficient(0.75_dkind)
+!		end if
 	
 		call problem_data_io%output_all_data(calculation_time			,stop_flag)	
 		call problem_post_proc_manager%process_data(calculation_time	,stop_flag)
