@@ -934,7 +934,7 @@ contains
 					!	end if
 					!end if
 					
-					alpha_loc = 0.0_dkind
+					alpha_loc = alpha
 					if (( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ).and.( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) )) then
 						if (( v_s%cells(i,j,k) > (max(v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),v_s_f(dim,i,j,k)) + 100.0_dkind))	&
 						.or.( v_s%cells(i,j,k) < (min(v_s_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),v_s_f(dim,i,j,k)) - 100.0_dkind))) then 
@@ -943,7 +943,7 @@ contains
 							dissipator_active = dissipator_active + 1
 							print *, 'Activation count: ',dissipator_active	
 						end if
-					end if					
+					end if
 					
 					r_new(1) = (2.0_dkind*R_half - (1.0_dkind-diss_l)*r(2))/(1.0_dkind+diss_l)
 					q_new(1) = (2.0_dkind*Q_half - (1.0_dkind-diss_l)*q(2))/(1.0_dkind+diss_l)
@@ -1297,9 +1297,9 @@ contains
 		call this%mpi_support%exchange_flow_scalar_field(rho_f_new)
 		call this%mpi_support%exchange_flow_scalar_field(p_f_new)
 
-		!$omp parallel default(none)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,max_inv,min_inv,maxmin_inv,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,spec_summ,bound_number,diss_r,diss_l) , &
+		!$omp parallel default(none)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,max_inv,min_inv,maxmin_inv,alpha_loc,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,spec_summ,bound_number,diss_r,diss_l) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,species_number,bc,Y,Y_f,Y_f_new,Y_prod,v,v_f_new,v_s,v_s_f,p,p_f,p_f_new,rho,rho_f,rho_f_new,gamma,E_f_prod,Max_v_s,Min_v_s,diss,cell_size,lock)		
+		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,species_number,bc,Y,Y_f,Y_f_new,Y_prod,v,v_f_new,v_s,v_s_f,p,p_f,p_f_new,rho,rho_f,rho_f_new,gamma,E_f_prod,Max_v_s,Min_v_s,diss,alpha,cell_size,lock)		
 
 		do dim = 1,dimensions
 
@@ -1362,11 +1362,15 @@ contains
 						
 						g_inv = ((Y_inv_half(spec) - Y_inv_old(spec))/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k))*(y_inv(spec,2) - y_inv(spec,1))/cell_size(1))
 						
-
+						alpha_loc = alpha
+						
 						max_inv	= max(y_inv(spec,1),Y_inv_half(spec),y_inv(spec,2)) +  g_inv*this%time_step
 						min_inv	= min(y_inv(spec,1),Y_inv_half(spec),y_inv(spec,2)) +  g_inv*this%time_step
-						
+
 						maxmin_inv = abs(max_inv - min_inv)
+						
+						max_inv = max_inv + (-alpha_loc)*maxmin_inv
+						min_inv = min_inv - (-alpha_loc)*maxmin_inv
 					
 					!	if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
 					!		if (abs(max_inv) > 1e-02) then
@@ -1594,8 +1598,10 @@ contains
 		!$omp end do nowait		
 		!$omp end parallel
 
-		call this%state_eq%apply_state_equation() 		
+		call this%mpi_support%exchange_conservative_vector_field(v)	
+
 		call this%apply_boundary_conditions_main()
+
 		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)
 		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
 		if (this%viscosity_flag)	call this%viscosity_solver%solve_viscosity(this%time_step)
@@ -1686,7 +1692,7 @@ contains
 		!$omp end do nowait
 		!$omp end parallel			
 		
-		!call this%state_eq%apply_state_equation() 		
+		call this%state_eq%apply_state_equation() 		
 		
 		!$omp parallel default(none)  private(i,j,k,dim,spec) , &
 		!$omp& firstprivate(this) , &
@@ -2109,7 +2115,7 @@ contains
 		class(cabaret_solver)		,intent(inout)		:: this
 
 		integer					:: dimensions
-		integer	,dimension(3,2)	:: cons_inner_loop
+		integer	,dimension(3,2)	:: cons_utter_loop
 		character(len=20)		:: boundary_type_name
 		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
 
@@ -2117,7 +2123,7 @@ contains
 		integer :: i,j,k,plus,dim,dim1,dim2,specie_number
 
 		dimensions			= this%domain%get_domain_dimensions()
-		cons_inner_loop		= this%domain%get_local_inner_cells_bounds()		
+		cons_utter_loop		= this%domain%get_local_utter_cells_bounds()		
 		
 		associate(  T				=> this%T%s_ptr					, &
 					mol_mix_conc	=> this%mol_mix_conc%s_ptr		, &
@@ -2132,67 +2138,71 @@ contains
 
 		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,farfield_pressure,farfield_density,wall_temperature,boundary_type_name) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_inner_loop)
+		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_utter_loop)
 		!$omp do collapse(3) schedule(static)
 
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+			do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
+			do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
+			do i = cons_utter_loop(1,1),cons_utter_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1,dimensions
 						do plus = 1,2
 							sign			= (-1)**plus
-							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-							if( bound_number /= 0 ) then
+							if(((i+sign)*I_m(dim,1) + (j+sign)*I_m(dim,2) + (k+sign)*I_m(dim,3) <= cons_utter_loop(dim,2)).and. &
+							   ((i+sign)*I_m(dim,1) + (j+sign)*I_m(dim,2) + (k+sign)*I_m(dim,3) >= cons_utter_loop(dim,1))) then
 
-								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-								select case(boundary_type_name)
-									case('wall')
+								bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+								if( bound_number /= 0 ) then
 
-										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= p%cells(i,j,k)
-										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho%cells(i,j,k)
-										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= T%cells(i,j,k)
-										mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= mol_mix_conc%cells(i,j,k)
+									boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+									select case(boundary_type_name)
+										case('wall')
 
-v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= v_s%cells(i,j,k)
-								
-										do dim1 = 1, dimensions
-											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v%pr(dim1)%cells(i,j,k)
-											else
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
-											end if
-										end do
+											p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= p%cells(i,j,k)
+											rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho%cells(i,j,k)
+											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= T%cells(i,j,k)
+											mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= mol_mix_conc%cells(i,j,k)
 
-										do specie_number = 1, this%chem%chem_ptr%species_number
-											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(specie_number)%cells(i,j,k)
-										end do
-		
-										if(bc%boundary_types(bound_number)%is_conductive()) then
-											wall_temperature = bc%boundary_types(bound_number)%get_wall_temperature()
-											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = wall_temperature
-										end if
-										if(.not.bc%boundary_types(bound_number)%is_slip()) then
+											v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= v_s%cells(i,j,k)
+									
 											do dim1 = 1, dimensions
-												if(dim1 /= dim) then
-													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -v%pr(dim1)%cells(i,j,k) 
-													! v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dkind * v%pr(dim1)%cells(i,j,k) 
-													!- 10.0_dkind * v%pr(dim1)%cells(i,j,k)
+												if(dim1 == dim) then
+													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v%pr(dim1)%cells(i,j,k)
+												else
+													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
 												end if
 											end do
-										end if
+
+											do specie_number = 1, this%chem%chem_ptr%species_number
+												Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(specie_number)%cells(i,j,k)
+											end do
+			
+											if(bc%boundary_types(bound_number)%is_conductive()) then
+												wall_temperature = bc%boundary_types(bound_number)%get_wall_temperature()
+												T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = wall_temperature
+											end if
+											if(.not.bc%boundary_types(bound_number)%is_slip()) then
+												do dim1 = 1, dimensions
+													if(dim1 /= dim) then
+														v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v%pr(dim1)%cells(i,j,k) 
+														! v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dkind * v%pr(dim1)%cells(i,j,k) 
+														!- 10.0_dkind * v%pr(dim1)%cells(i,j,k)
+													end if
+												end do
+											end if
 
 
-									case ('outlet')
-										farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-										farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
-										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
-									case ('inlet')
-									!	farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-									!	farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
-									!	v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
-								end select
+										case ('outlet')
+											farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
+											farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
+											v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+										case ('inlet')
+										!	farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
+										!	farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
+										!	v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+									end select
 
+								end if
 							end if
 						end do
 					end do
