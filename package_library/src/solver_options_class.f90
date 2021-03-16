@@ -11,7 +11,7 @@ module solver_options_class
 	public  solver_options ,solver_options_c
 	
 	type	:: solid_particles_phase
-		real(dkind)	:: radii, material_conductivity, material_density, mass
+		real(dkind)	:: diameter, material_heat_capacity, material_density
 	end type
 	
 	type	:: liquid_droplets_phase
@@ -96,14 +96,14 @@ contains
 
 		integer	:: io_unit
 	
-		real(dkind)	:: particles_radii, particles_material_conductivity, particles_material_density, particles_mass
+		real(dkind)	:: particles_diameter, particles_material_heat_capacity, particles_material_density
 		real(dkind)	:: droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature
 		character(len=20)	:: droplets_material
 		logical		:: droplets_combustible
 		
 		integer	:: particles_phase_counter, droplets_phase_counter
 
-		namelist /particles_phase/	particles_radii, particles_material_conductivity, particles_material_density, particles_mass
+		namelist /particles_phase/	particles_diameter, particles_material_heat_capacity, particles_material_density
 		namelist /droplets_phase/	droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature, droplets_material, droplets_combustible
 		
 		open(newunit = io_unit, file = solver_data_file_name, status = 'old', form = 'formatted')
@@ -111,10 +111,9 @@ contains
 		
 		do particles_phase_counter = 1, size(constructor_file%particles)
 			read(unit = io_unit, nml = particles_phase)
-			constructor_file%particles(particles_phase_counter)%radii						= particles_radii
-			constructor_file%particles(particles_phase_counter)%material_conductivity		= particles_material_conductivity
+			constructor_file%particles(particles_phase_counter)%diameter					= particles_diameter
+			constructor_file%particles(particles_phase_counter)%material_heat_capacity		= particles_material_heat_capacity
 			constructor_file%particles(particles_phase_counter)%material_density			= particles_material_density
-			constructor_file%particles(particles_phase_counter)%mass						= particles_mass
 		end do
 		
 		rewind(io_unit)
@@ -324,14 +323,14 @@ contains
 		type(solid_particles_phase)	,intent(in)	,optional	:: solid_particles_parameters
 		type(liquid_droplets_phase)	,intent(in)	,optional	:: liquid_droplets_parameters
 
-		real(dkind)	:: particles_radii, particles_material_conductivity, particles_material_density, particles_mass
+		real(dkind)	:: particles_diameter, particles_material_heat_capacity, particles_material_density
 		real(dkind)	:: droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature	
 		character(len=20)	:: droplets_material
 		logical		:: droplets_combustible
 		
 		integer	:: io_unit
 		
-		namelist /particles_phase/	particles_radii, particles_material_conductivity, particles_material_density, particles_mass
+		namelist /particles_phase/	particles_diameter, particles_material_heat_capacity, particles_material_density
 		namelist /droplets_phase/	droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature, droplets_material, droplets_combustible	
 		
 		select case(trim(phase_type))
@@ -344,12 +343,10 @@ contains
 				end if			
 				if (present(solid_particles_parameters)) then
 					this%particles(this%particles_phase_counter) = solid_particles_parameters
-					this%particles(this%particles_phase_counter)%mass	= 4.0_dkind / 3.0_dkind * Pi * solid_particles_parameters%radii**3 * solid_particles_parameters%material_density
 					open(newunit = io_unit, file = solver_data_file_name, status = 'old', form = 'formatted', position = 'append')
-					particles_radii						= this%particles(this%particles_phase_counter)%radii
-					particles_material_conductivity	= this%particles(this%particles_phase_counter)%material_conductivity
+					particles_diameter					= this%particles(this%particles_phase_counter)%diameter
+					particles_material_heat_capacity	= this%particles(this%particles_phase_counter)%material_heat_capacity
 					particles_material_density			= this%particles(this%particles_phase_counter)%material_density
-					particles_mass						= this%particles(this%particles_phase_counter)%mass
 					write(unit = io_unit, nml = particles_phase)
 					close(io_unit)
 				else

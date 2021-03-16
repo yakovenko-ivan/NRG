@@ -276,10 +276,10 @@ contains
 			do operations_counter = 2, size(this%post_processor_operations)
 				call this%post_processor_operations(operations_counter)%set_point(leading_point_indexes)
 				if(associated(this%post_processor_operations(operations_counter)%operation_field_scal%s_ptr)) then
-					call this%post_processor_operations(operations_counter)%process_operation(this%boundaries,point_indexes,this%values(operations_counter+2))
+					call this%post_processor_operations(operations_counter)%process_operation(this%boundaries,point_indexes,this%values(operations_counter+this%domain%get_domain_dimensions()+1))
 				end if
 				if(associated(this%post_processor_operations(operations_counter)%operation_field_vect%v_ptr)) then
-					call this%post_processor_operations(operations_counter)%process_operation(this%boundaries,point_indexes,this%values(operations_counter+2))
+					call this%post_processor_operations(operations_counter)%process_operation(this%boundaries,point_indexes,this%values(operations_counter+this%domain%get_domain_dimensions()+1))
 				end if
 			end do
 
