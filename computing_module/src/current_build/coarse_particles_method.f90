@@ -26,12 +26,15 @@ module coarse_particles_method
 	type(field_scalar_cons)	,target	:: E_f_prod_gd
 	type(field_scalar_flow)	,target	:: m_flux
 	type(field_vector_cons)	,target	:: v_prod_gd	
+	type(field_vector_flow)	,target	:: v_f
 
 	type	:: coarse_particles
 		type(field_scalar_cons_pointer)		:: p, E_f_prod, rho, E_f, e_i, E_f_int, p_int, foam_marker
 		type(field_scalar_flow_pointer)		:: m_flux
 		type(field_vector_cons_pointer)		:: v_prod, v, v_int, Y_int, Y
 		type(field_scalar_cons_pointer)		:: p_dyn, p_stat, div_v		
+		type(field_vector_flow_pointer)		:: v_f
+		
 		type(computational_domain)			:: domain
 		type(mpi_communications)			:: mpi_support		
 		type(boundary_conditions_pointer)	:: boundary
@@ -96,9 +99,11 @@ contains
 		
 		call manager%create_scalar_field(E_f_prod_gd,'energy_production_gas_dynamics'	,'E_f_prod_gd')
 		constructor%E_f_prod%s_ptr		=> E_f_prod_gd
-		call manager%create_scalar_field(m_flux		,'mass_flux'							,'m_flux')
+		call manager%create_scalar_field(m_flux	,'mass_flux'							,'m_flux')
 		constructor%m_flux%s_ptr		=> m_flux
-
+		call manager%create_vector_field(v_f	,'velocity_flow'						,'v_f'		,'spatial')
+		constructor%v_f%v_ptr			=> v_f
+		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
 		constructor%v%v_ptr				=> vect_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_interm')
@@ -110,6 +115,8 @@ contains
 		
 		call manager%create_vector_field(v_prod_gd	,'velocity_production_gas_dynamics'		,'v_prod_gd'	,'spatial')
 		constructor%v_prod%v_ptr		=> v_prod_gd
+		
+		
 
 		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr
 		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
@@ -378,6 +385,7 @@ contains
 					E_f_int		=> this%E_f_int%s_ptr	, &
 					v			=> this%v%v_ptr			, &
 					v_int		=> this%v_int%v_ptr		, &
+					v_f			=> this%v_f%v_ptr		, &
 					Y			=> this%Y%v_ptr			, &
 					Y_int		=> this%Y_int%v_ptr		, &
 					mesh		=> this%mesh%mesh_ptr	, &
@@ -390,7 +398,7 @@ contains
 
 	!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,spec,rho_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,m_flux,rho,E_f_int,E_f,v,v_int,Y,Y_int,dimensions,species_number,cons_inner_loop,coordinate_system)
+	!$omp& shared(bc,mesh,m_flux,rho,E_f_int,E_f,v,v_int,v_f,Y,Y_int,dimensions,species_number,cons_inner_loop,coordinate_system)
 	!$omp do collapse(3) schedule(guided)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -473,8 +481,21 @@ contains
 		end do
 		end do
 		end do
-
-	!$omp end do nowait
+	!$omp end do 
+		
+	!$omp do collapse(3) schedule(guided)	
+		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+			if(bc%bc_markers(i,j,k) == 0) then
+				do dim = 1,dimensions
+					v_f%pr(dim)%cells(dim,i,j,k) = 0.5_dkind * ( v%pr(dim)%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+				end do
+			end if
+		end do
+		end do
+		end do		
+		
 	!$omp end parallel
 
 		end associate

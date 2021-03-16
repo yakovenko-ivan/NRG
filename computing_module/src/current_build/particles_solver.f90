@@ -22,9 +22,9 @@ module particles_solver_class
 	private
 	public	:: particles_solver, particles_solver_c
 
-	type(field_scalar_cons)	,target	:: T_p, T_p_int, E_f_prod_p, rho_p, alpha_p
-	type(field_scalar_flow)	,target	:: m_flux_p
-	type(field_vector_cons)	,target	:: v_prod_p, v_p, v_p_int	
+	type(field_scalar_cons)	,dimension(:)	,allocatable ,target	:: T_p, T_p_int, E_f_prod_p, rho_p, alpha_p
+	type(field_scalar_flow)	,dimension(:)	,allocatable ,target	:: m_flux_p
+	type(field_vector_cons)	,dimension(:)	,allocatable ,target	:: v_prod_p, v_p, v_p_int	
 
 	type	:: particles_solver
 		type(field_scalar_cons_pointer)		:: T_p, T_p_int, E_f_prod, rho_p, alpha_p, T, rho, nu, kappa
@@ -40,12 +40,13 @@ module particles_solver_class
 
 		real(dkind)							:: particle_mass
 	contains
-		procedure				::  calculate_density_from_fraction
+		procedure				::  set_initial_distributions
 		procedure				::	particles_euler_step_v_E
 		procedure				::	particles_lagrange_step
 		procedure				::	particles_final_step
 		procedure				::  apply_boundary_conditions_main
 		procedure				::  apply_boundary_conditions_interm_v_p
+		procedure				::	pre_constructor
 	end type
 
 	interface	particles_solver_c
@@ -53,6 +54,15 @@ module particles_solver_class
 	end interface
 
 contains
+
+	subroutine pre_constructor(this,number_of_phases)
+		class(particles_solver)	,intent(inout)	:: this	
+		integer					,intent(in)		:: number_of_phases
+		
+		allocate(	T_p(number_of_phases), T_p_int(number_of_phases), rho_p(number_of_phases), E_f_prod_p(number_of_phases), &
+					m_flux_p(number_of_phases), alpha_p(number_of_phases), v_p(number_of_phases), v_p_int(number_of_phases), v_prod_p(number_of_phases))	
+	
+	end subroutine
 
 	type(particles_solver)	function constructor(manager,solid_particles,phase_number)
 
@@ -89,48 +99,48 @@ contains
 		
 		write(var_name,'(A,I2.2)')		'temperature_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'T_p', phase_number
-		call manager%create_scalar_field(T_p,	var_name,	var_short_name)
-		constructor%T_p%s_ptr		=> T_p
+		call manager%create_scalar_field(T_p(phase_number),	var_name,	var_short_name)
+		constructor%T_p%s_ptr		=> T_p(phase_number)
 		
 		write(var_name,'(A,I2.2)')		'temperature_particles_interm', phase_number
 		write(var_short_name,'(A,I2.2)')	'T_p_int', phase_number
-		call manager%create_scalar_field(T_p_int,	var_name,	var_short_name)
-		constructor%T_p_int%s_ptr		=> T_p_int
+		call manager%create_scalar_field(T_p_int(phase_number),	var_name,	var_short_name)
+		constructor%T_p_int%s_ptr		=> T_p_int(phase_number)
 		
 		write(var_name,'(A,I2.2)')		'density_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'rho_p', phase_number
-		call manager%create_scalar_field(rho_p,	var_name,	var_short_name)
-		constructor%rho_p%s_ptr		=> rho_p
+		call manager%create_scalar_field(rho_p(phase_number),	var_name,	var_short_name)
+		constructor%rho_p%s_ptr		=> rho_p(phase_number)
 		
 		write(var_name,'(A,I2.2)')		'volume_fraction_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'alpha_p', phase_number
-		call manager%create_scalar_field(alpha_p,	var_name,	var_short_name)
-		constructor%alpha_p%s_ptr		=> alpha_p
+		call manager%create_scalar_field(alpha_p(phase_number),	var_name,	var_short_name)
+		constructor%alpha_p%s_ptr		=> alpha_p(phase_number)
 				
 		write(var_name,'(A,I2.2)')		'velocity_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'v_p', phase_number		
-		call manager%create_vector_field(v_p,	var_name,	var_short_name,	'spatial')
-		constructor%v_p%v_ptr		=> v_p		
+		call manager%create_vector_field(v_p(phase_number),	var_name,	var_short_name,	'spatial')
+		constructor%v_p%v_ptr		=> v_p(phase_number)		
 		
 		write(var_name,'(A,I2.2)')		'velocity_particles_interm', phase_number
 		write(var_short_name,'(A,I2.2)')	'v_p_int', phase_number		
-		call manager%create_vector_field(v_p_int,	var_name,	var_short_name,	'spatial')
-		constructor%v_p_int%v_ptr		=> v_p_int			
+		call manager%create_vector_field(v_p_int(phase_number),	var_name,	var_short_name,	'spatial')
+		constructor%v_p_int%v_ptr		=> v_p_int(phase_number)			
 		
 		write(var_name,'(A,I2.2)')		'mass_flux_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'm_flux_p', phase_number		
-		call manager%create_scalar_field(m_flux_p,		var_name,	var_short_name)
-		constructor%m_flux_p%s_ptr		=> m_flux_p		
+		call manager%create_scalar_field(m_flux_p(phase_number),		var_name,	var_short_name)
+		constructor%m_flux_p%s_ptr		=> m_flux_p(phase_number)		
 		
 		write(var_name,'(A,I2.2)')		'energy_production_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'E_f_prod_p', phase_number
-		call manager%create_scalar_field(E_f_prod_p,	var_name,	var_short_name)
-		constructor%E_f_prod%s_ptr		=> E_f_prod_p
+		call manager%create_scalar_field(E_f_prod_p(phase_number),	var_name,	var_short_name)
+		constructor%E_f_prod%s_ptr		=> E_f_prod_p(phase_number)
 
 		write(var_name,'(A,I2.2)')		'velocity_production_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'v_prod_p', phase_number		
-		call manager%create_vector_field(v_prod_p,	var_name,	var_short_name,	'spatial')
-		constructor%v_prod%v_ptr		=> v_prod_p
+		call manager%create_vector_field(v_prod_p(phase_number),	var_name,	var_short_name,	'spatial')
+		constructor%v_prod%v_ptr		=> v_prod_p(phase_number)
 		
 		constructor%rho_p%s_ptr%cells	= constructor%particles_params%material_density * constructor%alpha_p%s_ptr%cells
 		
@@ -142,7 +152,7 @@ contains
 		
 	end function
 
-	subroutine calculate_density_from_fraction(this)
+	subroutine set_initial_distributions(this)
 		class(particles_solver)	,intent(inout)	:: this
 
 		integer		,dimension(3,2)	:: cons_inner_loop
@@ -166,6 +176,7 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
 				rho_p%cells(i,j,k)	= alpha_p%cells(i,j,k) * particle%material_density
 				T_p%cells(i,j,k)	= 300.0_dkind !T%cells(i,j,k)
+				this%particle_mass	= 1.0_dkind/6.0_dkind*particle%diameter**3 * particle%material_density
 			end if
 		end do
 		end do
@@ -222,15 +233,15 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				do dim = 1,dimensions
-					F_stokes						= 6.0_dkind * Pi * particle%radii * nu%cells(i,j,k) / particle%mass * ( v%pr(dim)%cells(i,j,k) - v_p%pr(dim)%cells(i,j,k))
+					F_stokes						= 3.0_dkind * Pi * particle%diameter * nu%cells(i,j,k) / this%particle_mass * ( v%pr(dim)%cells(i,j,k) - v_p%pr(dim)%cells(i,j,k))
 					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_p%cells(i,j,k) / rho%cells(i,j,k) * time_step
 					v_p_int%pr(dim)%cells(i,j,k)	= v_p%pr(dim)%cells(i,j,k) + F_stokes * time_step
 
 					E_f_prod%cells(i,j,k)			= - F_stokes * v%pr(dim)%cells(i,j,k) * rho_p%cells(i,j,k) / rho%cells(i,j,k) * time_step
 				end do		
 					
-				Q_stokes					= 3.0_dkind * kappa%cells(i,j,k) * Nusselt / (2.0_dkind * particle%radii ** 2 * particle%material_conductivity * particle%material_density) * (T%cells(i,j,k) - T_p%cells(i,j,k))
-				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_p%cells(i,j,k) / rho%cells(i,j,k) * particle%material_conductivity * time_step
+				Q_stokes					= 6.0_dkind * kappa%cells(i,j,k) * Nusselt / (particle%diameter ** 2 * particle%material_heat_capacity * particle%material_density) * (T%cells(i,j,k) - T_p%cells(i,j,k))
+				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_p%cells(i,j,k) / rho%cells(i,j,k) * particle%material_heat_capacity * time_step
 				T_p_int%cells(i,j,k)		= T_p%cells(i,j,k) + Q_stokes * time_step
 			end if
 		end do

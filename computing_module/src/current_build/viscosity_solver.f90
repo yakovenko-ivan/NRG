@@ -478,6 +478,10 @@ contains
 					nu%cells(i,j,k)      = 0.5_dkind * (sum1 + 1.0_dkind / sum2)
 				end if
 				
+				!if ( i > 700 ) then
+				!	nu%cells(i,j,k)      = 100*nu%cells(i,j,k)
+				!end if
+				
 			end if
 		end do
 		end do

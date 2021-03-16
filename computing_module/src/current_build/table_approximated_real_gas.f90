@@ -377,7 +377,7 @@ contains
 	subroutine apply_state_equation(this)
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)	:: velocity, t_initial, t_final, e_internal, cp, cv, h_s
+		real(dkind)	:: velocity, t_initial, t_final, e_internal, cp, cv
 		real(dkind)	:: average_molar_mass
 
 		integer	:: species_number
@@ -406,9 +406,9 @@ contains
 					Y				=> this%Y%v_ptr				, &
 					mesh			=> this%mesh%mesh_ptr)
 
-	!$omp parallel default(none) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,h_s,average_molar_mass,T_iter) , &
+	!$omp parallel default(none) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass,T_iter) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,p,rho,e_i,e_i_old,gamma,v_s,mol_mix_conc,E_f,v,Y,c_v_old,dimensions,cons_inner_loop,species_number)
+	!$omp& shared(T,p,rho,e_i,e_i_old,h_s,gamma,v_s,mol_mix_conc,E_f,v,Y,c_v_old,dimensions,cons_inner_loop,species_number)
 
 	!$omp do collapse(3) schedule(guided)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -466,6 +466,8 @@ contains
 				
 				p%cells(i,j,k) = e_i%cells(i,j,k) * rho%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dkind) 
 
+				h_s%cells(i,j,k)	= cp*T%cells(i,j,k) / mol_mix_conc%cells(i,j,k)
+				
 			!# New de = cv*dT equation of state		
 			!	c_v_old%cells(i,j,k)	= cv
 			!	e_i_old%cells(i,j,k)	= e_i%cells(i,j,k)* mol_mix_conc%cells(i,j,k)
