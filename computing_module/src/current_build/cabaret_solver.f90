@@ -2115,7 +2115,7 @@ contains
 		class(cabaret_solver)		,intent(inout)		:: this
 
 		integer					:: dimensions
-		integer	,dimension(3,2)	:: cons_utter_loop
+		integer	,dimension(3,2)	:: cons_utter_loop, cons_inner_loop
 		character(len=20)		:: boundary_type_name
 		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
 
@@ -2123,7 +2123,8 @@ contains
 		integer :: i,j,k,plus,dim,dim1,dim2,specie_number
 
 		dimensions			= this%domain%get_domain_dimensions()
-		cons_utter_loop		= this%domain%get_local_utter_cells_bounds()		
+		cons_utter_loop		= this%domain%get_local_utter_cells_bounds()	
+		cons_inner_loop		= this%domain%get_local_inner_cells_bounds()	
 		
 		associate(  T				=> this%T%s_ptr					, &
 					mol_mix_conc	=> this%mol_mix_conc%s_ptr		, &
@@ -2138,18 +2139,18 @@ contains
 
 		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,farfield_pressure,farfield_density,wall_temperature,boundary_type_name) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_utter_loop)
+		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_utter_loop, cons_inner_loop)
 		!$omp do collapse(3) schedule(static)
 
-			do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
-			do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
-			do i = cons_utter_loop(1,1),cons_utter_loop(1,2)
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1,dimensions
 						do plus = 1,2
 							sign			= (-1)**plus
-							if(((i+sign)*I_m(dim,1) + (j+sign)*I_m(dim,2) + (k+sign)*I_m(dim,3) <= cons_utter_loop(dim,2)).and. &
-							   ((i+sign)*I_m(dim,1) + (j+sign)*I_m(dim,2) + (k+sign)*I_m(dim,3) >= cons_utter_loop(dim,1))) then
+							!if(((i+sign)*I_m(dim,1) + (j+sign)*I_m(dim,2) + (k+sign)*I_m(dim,3) <= cons_utter_loop(dim,2)).and. &
+							!   ((i+sign)*I_m(dim,1) + (j+sign)*I_m(dim,2) + (k+sign)*I_m(dim,3) >= cons_utter_loop(dim,1))) then
 
 								bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 								if( bound_number /= 0 ) then
@@ -2203,7 +2204,7 @@ contains
 									end select
 
 								end if
-							end if
+							!end if
 						end do
 					end do
 				end if
