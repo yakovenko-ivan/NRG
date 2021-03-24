@@ -25,6 +25,7 @@ all: $(SLATEC_OBJ)
 all: particles_solver.o
 all: droplets_solver.o
 all: lagrangian_droplets_solver.o
+all: lagrangian_particles_solver.o
 all: viscosity_solver.o
 all: fickean_diffusion_solver.o
 all: chemical_kinetics_solver.o
@@ -41,6 +42,7 @@ all: main.o
 particles_solver.o				: particles_solver.f90
 droplets_solver.o				: droplets_solver.f90
 lagrangian_droplets_solver.o			: lagrangian_droplets_solver.f90
+lagrangian_particles_solver.o			: lagrangian_particles_solver.f90
 viscosity_solver.o				: viscosity_solver.f90
 fickean_diffusion_solver.o			: fickean_diffusion_solver.f90
 chemical_kinetics_solver.o 			: chemical_kinetics_solver.f90 
