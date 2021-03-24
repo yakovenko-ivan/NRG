@@ -645,6 +645,7 @@ contains
 			
 		end do
 		
+		area_intersects_local_domain = .false.
 		if(flag1.and.flag2) then
 			area_intersects_local_domain = .true.
 		end if
