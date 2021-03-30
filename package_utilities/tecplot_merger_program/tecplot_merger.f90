@@ -1,6 +1,6 @@
 program computing_module
 
-!	use IFPORT
+	use IFPORT
 
 	use global_data
 	use kind_parameters
@@ -85,26 +85,29 @@ program computing_module
 							global_inner_cells_bounds(3,1):global_inner_cells_bounds(3,2)))
 
 	data_save_folder = trim(problem_data_save%get_data_save_folder())
-	write(system_command,'(A,A,A)') 'ls . -d ', trim(data_save_folder) , '/*/ > dir.txt'
-	call system(system_command) 
+!	write(system_command,'(A,A,A)') 'ls . -d ', trim(data_save_folder) , '/*/ > dir.txt'	!# Linux	
+	write(system_command,'(A,A,A)') 'dir /ad /b ', trim(data_save_folder) , ' >> dir.txt'	!# Windows	
+	call execute_command_line(system_command) 
 
 	open(newunit = dir_io, file = 'dir.txt', status = 'old', form = 'formatted')
-	read(dir_io,'(A)') file_path
+!	read(dir_io,'(A)') file_path							!# Linux
 
 	do 
 		read(dir_io,'(A)',iostat = error) file_path
 		if (error /= 0) exit
 
-		sep_index = index(file_path,trim(fold_sep))
+!		sep_index = index(file_path,trim(fold_sep))			!# Linux
 
-		save_time = file_path(sep_index+1:)
-		sep_index = index(save_time,trim(fold_sep))
-		save_time = save_time(:sep_index-1)
+!		save_time = file_path(sep_index+1:)					!# Linux
+		save_time = file_path								!# Windows
+!		sep_index = index(save_time,trim(fold_sep))			!# Linux
+!		save_time = save_time(:sep_index-1)					!# Linux
 
 		write(header_file_name,'(A,A,A,A,A,A)') trim(data_save_folder) , trim(fold_sep), trim(save_time) ,trim(fold_sep), trim(save_time) , '_header.plt'
-		write(file_name,'(A,A,A,A)') trim(data_save_folder) , trim(fold_sep), trim(save_time), '.plt'
-		write(system_command,'(A,A,A,A)') 'cp ',trim(header_file_name), '  ', trim(file_name)
-		call system(system_command) 
+		write(file_name,'(A,A,A,A)') trim(data_save_folder) , trim(fold_sep), trim(save_time), '.plt'	
+!		write(system_command,'(A,A,A,A)') 'cp ',trim(header_file_name), '  ', trim(file_name)	!# Linux
+		write(system_command,'(A,A,A,A)') 'copy ',trim(header_file_name), '  ', trim(file_name)	!# Windows
+		call execute_command_line(system_command) 
 	
 		open(newunit = write_io, file = file_name, status = 'old', form = 'binary', position = 'append') 
 
