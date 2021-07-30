@@ -294,52 +294,21 @@ contains
                 
                 local_diameter = 6.0_dkind * mass_d%cells(i,j,k) / Pi / droplet%material_density 
                 local_diameter = local_diameter ** 0.3333333
-				
-				!velabs = 0.0_dkind
-    !            do dim = 1,dimensions
-				!	velabs = velabs + ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ** 2.0
-    !            end do	
-				
-                !************************* foam decay (dynamic) **************************************************
-     !           if ((this%phase_number == 1).and.(foam_marker%cells(i,j,k) == 0.0_dkind).and.(rho%cells(i,j,k)*velabs > 2.0e+5_dkind))then
-     !               foam_marker%cells(i,j,k)	=	1.0_dkind
-     !       !        time_decay%cells(i,j,k)		=	1.0_dkind
-     !           endif
-				 !
-     !           if ((foam_marker%cells(i,j,k) == 1.0_dkind).and.(rho_d%cells(i,j,k) > 0.01_dkind))then
-					!if((this%phase_number == 1).and.(rho%cells(i,j,k)*velabs > 25.0e+5_dkind))then
-					!	if(time_boil%cells(i,j,k) < 0.0_dkind)then
-					!		time_boil%cells(i,j,k)    = 0.0_dkind
-					!	else
-					!		time_boil%cells(i,j,k)    = time_boil%cells(i,j,k)+time_step
-					!	endif
-					!end if
-     !           end if
-                
-             !   if(this%phase_number == 1)	werhop%cells(i,j,k)		=	rho%cells(i,j,k)*velabs/0.03*local_diameter*rho_d%cells(i,j,k)
-             !   if(this%phase_number == 2)	werhop2%cells(i,j,k)	=	rho%cells(i,j,k)*velabs/0.03*local_diameter*rho_d%cells(i,j,k)
-                
-    !            velabs = velabs ** 0.5
 
 				F_stokes = 0.0_dkind
 				
 				do dim = 1,dimensions
-	!				if (foam_marker%cells(i,j,k) == 1.0_dkind) then
-						F_stokes			= 3.0_dkind * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k))
-					!else
-     !               	F_stokes			= 2.0_dkind / local_diameter * rho%cells(i,j,k) / droplet%material_density * velabs * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k))
-					!	F_stokes			= F_stokes * 20.0_dkind 
-     !               end if
+					F_stokes			= 3.0_dkind * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ! [m/s^2]
 			
-					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_d%cells(i,j,k) / rho%cells(i,j,k) * time_step
-					v_d_int%pr(dim)%cells(i,j,k)	= v_d%pr(dim)%cells(i,j,k) + F_stokes * time_step
+					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_d%cells(i,j,k) / rho%cells(i,j,k)					! [m/s^2]
+					v_d_int%pr(dim)%cells(i,j,k)	= v_d%pr(dim)%cells(i,j,k) + F_stokes * time_step						
 
-					E_f_prod%cells(i,j,k)			= - F_stokes * v%pr(dim)%cells(i,j,k) * rho_d%cells(i,j,k) / rho%cells(i,j,k) * time_step
+					E_f_prod%cells(i,j,k)			= - F_stokes * v%pr(dim)%cells(i,j,k) * rho_d%cells(i,j,k)				! [J/m^3/s]
 				end do		
 					
 				Q_stokes					= 3.0_dkind * kappa%cells(i,j,k) * Nusselt / (0.5_dkind * local_diameter ** 2 * droplet%material_heat_capacity * droplet%material_density) * (T%cells(i,j,k) - T_d%cells(i,j,k))
 
-				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_d%cells(i,j,k) / rho%cells(i,j,k) * droplet%material_heat_capacity * time_step
+				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_d%cells(i,j,k) * droplet%material_heat_capacity ! [J/m^3/s]
 				T_d_int%cells(i,j,k)		= T_d%cells(i,j,k) + Q_stokes * time_step
 
                 if (droplet%combustible == .false.) then
@@ -348,75 +317,17 @@ contains
 					temp_cr = 371.55    
                 end if
 				
-     !           if (foam_marker%cells(i,j,k) == 1.0_dkind) then
-					if (T_d_int%cells(i,j,k) > temp_cr) T_d_int%cells(i,j,k) = temp_cr
-     !           end if
+				if (T_d_int%cells(i,j,k) > temp_cr) T_d_int%cells(i,j,k) = temp_cr
                 
                 if (T%cells(i,j,k) >= temp_cr) then
                     evaporation_rate = 2.0_dkind * local_diameter * Pi * kappa%cells(i,j,k)/droplet%material_heat_capacity  &
-                                     * log(1.0_dkind+droplet%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/droplet%material_latent_heat)/mass_d%cells(i,j,k)
+                                     * log(1.0_dkind+droplet%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/droplet%material_latent_heat)/mass_d%cells(i,j,k)	! [1/s]
                     
-            !*********************** evaporation (boiling) front ***************************
-            !*******************************************************************************
-					!if (foam_marker%cells(i,j,k) == 0.0_dkind) then
-					!	marker1				= 0.0_dkind
-					!	evaporation_rate	= 0.0_dkind
-					!	do dim = 1,dimensions
-					!		if((T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > temp_cr).and.(foam_marker%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 1.0_dkind))then
-					!			evaporation_rate = evaporation_rate + 0.6_dkind * abs(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))-T%cells(i,j,k)) * 1.0e-4_dkind / droplet%material_latent_heat /mass_d%cells(i,j,k)
-					!		end if
-					!		if((T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > temp_cr).and.(foam_marker%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) == 1.0_dkind))then
-					!			evaporation_rate = evaporation_rate + 0.6_dkind * abs(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))-T%cells(i,j,k)) * 1.0e-4_dkind / droplet%material_latent_heat /mass_d%cells(i,j,k)
-					!		end if
-					!	end do
-					!end if
-
-                
-					!if((this%phase_number == 3).and.(rho_d%cells(i,j,k) >= 200.0_dkind))then
-					!	time_boil%cells(i,j,k)	=	-1.0_dkind
-					!	rho_d%cells(i,j,k)		=	200.0_dkind
-					!end if
-                
-					!if(time_boil%cells(i,j,k) > 0.0_dkind)then
-					!	if(this%phase_number == 1)then
-					!		if(rho_d%cells(i,j,k) > 1.0_dkind)then
-					!			werhop%cells(i,j,k)		=	1.0e+3_dkind*werhop%cells(i,j,k)*time_step  
-					!			mass_d%cells(i,j,k)		=	mass_d%cells(i,j,k)*(1.0_dkind - werhop%cells(i,j,k)/rho_d%cells(i,j,k))    
-					!			rho_d%cells(i,j,k)		=	rho_d%cells(i,j,k) - werhop%cells(i,j,k)
-					!		else
-					!			time_boil%cells(i,j,k)	=	-1.0_dkind
-					!		endif
-					!	endif
-                
-					!	if(this%phase_number == 2)then
-					!		if(rho_d%cells(i,j,k) > 1.0_dkind)then
-					!			werhop2%cells(i,j,k)	=	1.0e+3_dkind*werhop2%cells(i,j,k)*time_step 
-					!			mass_d%cells(i,j,k)		=	mass_d%cells(i,j,k)*(1.0_dkind - werhop2%cells(i,j,k)/rho_d%cells(i,j,k))
-					!			rho_d%cells(i,j,k)		=	rho_d%cells(i,j,k) - werhop2%cells(i,j,k)
-					!		else
-					!			time_boil%cells(i,j,k)	=	-1.0_dkind
-					!		endif
-					!	endif
-     
-					!	if((this%phase_number == 3).and.(werhop%cells(i,j,k) > 0.0_dkind))then
-					!		rho_d%cells(i,j,k)		=	rho_d%cells(i,j,k) + werhop%cells(i,j,k)
-					!		mass_d%cells(i,j,k)		=	Pi/6.0*1.0e-15_dkind * (1.0e+7_dkind/werhop%cells(i,j,k)*1.0e+3_dkind*time_step)**3.0
-					!		numdens_d%cells(i,j,k)	=	rho_d%cells(i,j,k)/mass_d%cells(i,j,k) 
-					!	endif
-     
-					!	if((this%phase_number == 4).and.(werhop2%cells(i,j,k) > 0.0_dkind))then
-					!		rho_d%cells(i,j,k)		=	rho_d%cells(i,j,k) + werhop2%cells(i,j,k)
-					!		mass_d%cells(i,j,k)		=	Pi/6.0*1.0e-15_dkind * (1.0e+7_dkind/werhop2%cells(i,j,k)*1.0e+3_dkind*time_step)**3.0
-					!		numdens_d%cells(i,j,k)	=	rho_d%cells(i,j,k)/mass_d%cells(i,j,k) 
-					!	endif
-     
-					!end if
-
 					if (mass_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step) >= 0.0_dkind) then
 						mass_d%cells(i,j,k) =	mass_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step)
                         
-						if(mass_d%cells(i,j,k) <= 1.0E-16_dkind) then
-							mass_d%cells(i,j,k) = 1.0E-16_dkind
+						if(mass_d%cells(i,j,k) <= 1.0E-15_dkind) then
+							mass_d%cells(i,j,k) = 1.0E-15_dkind
 							evaporation_rate = 0.0_dkind
 						end if
                         
@@ -427,19 +338,19 @@ contains
 							evaporation_rate = 0.0_dkind
 						end if
 
-						rho%cells(i,j,k)    =   rho%cells(i,j,k) + evaporation_rate*rho_d%cells(i,j,k)*time_step
+!						rho%cells(i,j,k)    =   rho%cells(i,j,k) + evaporation_rate*rho_d%cells(i,j,k)*time_step
                         
 						if (droplet%combustible == .false.) then
-							Y_prod%pr(H2O_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)/rho%cells(i,j,k)*time_step
+							Y_prod%pr(H2O_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)	! [kg/m^3/s]
 						else
-							Y_prod%pr(C7H16_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)/rho%cells(i,j,k)*time_step
+							Y_prod%pr(C7H16_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)
 						end if
 
 						do dim = 1,dimensions
-							v_prod%pr(dim)%cells(i,j,k)     = v_prod%pr(dim)%cells(i,j,k)	+ evaporation_rate*rho_d%cells(i,j,k)/rho%cells(i,j,k)*v_d%pr(dim)%cells(i,j,k)*time_step
+							v_prod%pr(dim)%cells(i,j,k)     = v_prod%pr(dim)%cells(i,j,k)	+ evaporation_rate*rho_d%cells(i,j,k)/rho%cells(i,j,k)*v_d%pr(dim)%cells(i,j,k)	! [m/s^2]
 						end do
 
-						E_f_prod%cells(i,j,k)			    = E_f_prod%cells(i,j,k) - evaporation_rate*droplet%material_latent_heat*rho_d%cells(i,j,k)/rho%cells(i,j,k)*time_step
+						E_f_prod%cells(i,j,k)			    = E_f_prod%cells(i,j,k) - evaporation_rate*droplet%material_latent_heat*rho_d%cells(i,j,k)		! [J/m^3/s]
                         
 					else
 						evaporation_rate    = 0.0_dkind
@@ -615,7 +526,12 @@ contains
                 
                 mass_d%cells(i,j,k) = rho_d%cells(i,j,k) / numdens_d%cells(i,j,k)					
                 
-				T_d%cells(i,j,k)		= T_d_int%cells(i,j,k)  * rho_d_old / rho_d%cells(i,j,k)
+				T_d%cells(i,j,k)	= T_d_int%cells(i,j,k)  * rho_d_old / rho_d%cells(i,j,k)
+
+				if (i == 1) then
+					T_d%cells(i,j,k) = 300.0_dkind
+				end if
+				
 				do dim = 1,dimensions
 					v_d%pr(dim)%cells(i,j,k)	= v_d_int%pr(dim)%cells(i,j,k) * rho_d_old / rho_d%cells(i,j,k)
 				end do
@@ -718,6 +634,10 @@ contains
 								
 								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 								select case(boundary_type_name)
+									case ('inlet')
+										do dim1 = 1, dimensions
+											if(dim1 == dim)	v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
+										end do								
 									case ('outlet')
 										do dim1 = 1, dimensions
 											if(dim1 == dim)	v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
@@ -739,12 +659,15 @@ contains
 
 	end subroutine	
 	
-	subroutine apply_boundary_conditions_main(this)
+	subroutine apply_boundary_conditions_main(this, time)
 
 		class(droplets_solver)		,intent(inout)		:: this
+		real(dkind)					,intent(in)			:: time
 
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
+		real(dkind)				:: farfield_density, farfield_pressure, farfield_rhod, wall_temperature
+		real(dkind)				:: delay
+		
 		
 		integer					:: dimensions
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -756,16 +679,20 @@ contains
 			
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
 		
+		delay = 0.2_dkind
+		farfield_rhod = 1.0e-02_dkind
+		
 		associate(  T_d				=> this%T_d%s_ptr			, &
 					rho_d			=> this%rho_d%s_ptr			, &
 					mass_d          => this%mass_d%s_ptr        , &
 					v_d				=> this%v_d%v_ptr			, &
+					droplet			=> this%droplets_params	    , &
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
 		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name,wall_temperature) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(T_d,rho_d,v_d,mass_d,mesh,bc,cons_inner_loop,dimensions)
+		!$omp& shared(T_d,rho_d,v_d,mass_d,droplet,mesh,bc,cons_inner_loop,dimensions,time, farfield_rhod, delay)
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -804,6 +731,30 @@ contains
 												end if
 											end do
 										end if
+									case('inlet')
+									
+										if (time > 0.2) then
+											rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_rhod * (time - 0.2) / delay + 1.0e-05_dkind
+											if (time > 0.2 + delay) then
+												rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_rhod
+											end if
+										else
+											rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 1.0e-05_dkind
+										end if
+										
+										T_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= 300.0_dkind
+										mass_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))     = Pi*droplet%diameter**3 / 6.0_dkind * droplet%material_density
+										do dim1 = 1, dimensions
+											if(dim1 == dim) then
+												v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+											else
+												v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+											end if
+										end do									
+									case ('outlet')
+										do dim1 = 1, dimensions
+											if(dim1 == dim)	v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+										end do
 								end select
 								
 							end if
