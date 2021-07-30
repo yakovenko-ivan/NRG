@@ -73,7 +73,7 @@ program computing_module
 #endif
 
 #ifdef OMP
-	call omp_set_num_threads(4)
+	call omp_set_num_threads(6)
 #endif
 
 	open(newunit = log_unit, file = problem_setup_log_file, status = 'old', form = 'formatted', position = 'append')

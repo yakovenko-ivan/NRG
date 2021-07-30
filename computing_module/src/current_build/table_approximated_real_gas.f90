@@ -392,8 +392,9 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()		
 		
-		associate(  T               => this%T%s_ptr            , &
-					p               => this%p%s_ptr            , &
+		associate(  T               => this%T%s_ptr				, &
+					mixture_cp		=> this%mixture_cp%s_ptr	, &
+					p               => this%p%s_ptr				, &
 					rho             => this%rho%s_ptr          , &
 					E_f				=> this%E_f%s_ptr		   , &
 					e_i             => this%e_i%s_ptr          , &
@@ -408,7 +409,7 @@ contains
 
 	!$omp parallel default(none) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass,T_iter) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,p,rho,e_i,e_i_old,h_s,gamma,v_s,mol_mix_conc,E_f,v,Y,c_v_old,dimensions,cons_inner_loop,species_number)
+	!$omp& shared(T,mixture_cp,p,rho,e_i,e_i_old,h_s,gamma,v_s,mol_mix_conc,E_f,v,Y,c_v_old,dimensions,cons_inner_loop,species_number)
 
 	!$omp do collapse(3) schedule(guided)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -467,6 +468,8 @@ contains
 				p%cells(i,j,k) = e_i%cells(i,j,k) * rho%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dkind) 
 
 				h_s%cells(i,j,k)	= cp*T%cells(i,j,k) / mol_mix_conc%cells(i,j,k)
+				
+				mixture_cp%cells(i,j,k) = cp
 				
 			!# New de = cv*dT equation of state		
 			!	c_v_old%cells(i,j,k)	= cv
@@ -966,7 +969,7 @@ contains
 										end do
 										
 										do specie_number = 1, size(farfield_species_names)
-											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
+											specie_index		= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
 											Y%pr(specie_index)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	concs(specie_index)
 										end do
 

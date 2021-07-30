@@ -414,16 +414,19 @@ contains
 		real(dkind)                     :: mol_frac, smc, reduced_temperature, sum1, sum2
 		real(dkind)                     :: specie_cp, specie_cv
 		real(dkind)                     :: omega_2_2
-
+		
+		integer	:: dimensions
+		integer	:: sign, bound_number
 		integer	:: species_number
 
 		integer	,dimension(3,2)	:: cons_inner_loop			
 		
 		integer :: specie_number
-		integer :: i,j,k
+		integer :: i,j,k,plus,dim,dim1,dim2
 
 		species_number	= this%chem%chem_ptr%species_number
-
+		dimensions		= this%domain%get_domain_dimensions()
+		
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 
 		associate(  T                       => this%T%s_ptr                            , &
@@ -435,9 +438,9 @@ contains
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter	, &
 					bc						=> this%boundary%bc_ptr)
 
-	!$omp parallel default(none)  private(i,j,k,specie_number,sum1,sum2,mol_frac,reduced_temperature,omega_2_2,specie_cp,specie_cv,smc) , &
+	!$omp parallel default(none)  private(i,j,k,specie_number,sum1,sum2,mol_frac,reduced_temperature,omega_2_2,specie_cp,specie_cv,smc,sign,bound_number) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,nu,mol_mix_conc,Y,collision_diameter,molar_masses,potential_well_depth,species_number,cons_inner_loop,bc) 
+	!$omp& shared(T,nu,mol_mix_conc,Y,collision_diameter,molar_masses,potential_well_depth,species_number,cons_inner_loop,bc,dimensions) 
 	!$omp do collapse(3) schedule(static)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -478,9 +481,23 @@ contains
 					nu%cells(i,j,k)      = 0.5_dkind * (sum1 + 1.0_dkind / sum2)
 				end if
 				
-				!if ( i > 700 ) then
-				!	nu%cells(i,j,k)      = 100*nu%cells(i,j,k)
-				!end if
+				if(bc%bc_markers(i,j,k) == 0) then
+					do dim = 1,dimensions
+						do plus = 1,2
+							sign			= (-1)**plus
+							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+							if( bound_number /= 0 ) then
+								do dim1 = 1,dimensions
+								do dim2 = 1,dimensions
+									if (dim1 == dim2) then
+										nu%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= nu%cells(i,j,k)
+									end if
+								end do
+								end do
+							end if
+						end do
+					end do
+				end if				
 				
 			end if
 		end do
@@ -531,7 +548,7 @@ contains
 								do dim1 = 1,dimensions
 								do dim2 = 1,dimensions
 									if (dim1 == dim2) then
-										sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= sigma%pr(dim1,dim2)%cells(i,j,k)
+										sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 2*sigma%pr(dim1,dim2)%cells(i,j,k) - sigma%pr(dim1,dim2)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3))
 									end if
 								end do
 								end do
