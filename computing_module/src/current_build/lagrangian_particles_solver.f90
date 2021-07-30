@@ -163,6 +163,8 @@ contains
 		integer		,dimension(3)	:: part_number
 		real(dkind)	,dimension(3)	:: coords
 		real(dkind)	,dimension(:,:)	,allocatable	:: lengths
+		real(dkind)	:: gamma1, gamma2, d
+		real(dkind)	,dimension(2)	:: AA
 		
 		integer	:: dimensions
 		integer :: i,j,k, part_x, part_y, part_z, dim, particle
@@ -192,43 +194,62 @@ contains
 		part_number(1) = 5
 		part_number(2) = 5
 		
+		delta = (lengths(1,2)-lengths(1,1)) / part_number(1)
+		
 		this%particles_number = part_number(1)*part_number(2)*part_number(3)
 		
 		allocate(this%particles(this%particles_number))	
 		
-		do particle = 1, this%particles_number
-			this%particles(particle)%outside_domain	= .true.
-			this%particles(particle)%coords			= 0.0_dkind
-			this%particles(particle)%velocity		= 0.0_dkind
-		end do 		
-		
-		!do part_x = 1, part_number(1)
-		!do part_y = 1, part_number(2)
-		!do part_z = 1, part_number(3)
-		!
-		!	particle = part_x + (part_y-1)*part_number(1) + (part_z-1)*part_number(1)*part_number(2)
-		!
+		!do particle = 1, this%particles_number
+		!	this%particles(particle)%outside_domain	= .true.
 		!	this%particles(particle)%coords			= 0.0_dkind
 		!	this%particles(particle)%velocity		= 0.0_dkind
-  !
-		!	this%particles(particle)%outside_domain = .false.
-		!		
-		!	this%particles(particle)%temperature	= 300.0_dkind
-		!	this%particles(particle)%mass			= Pi*this%particles_params%diameter**3 / 6.0_dkind * this%particles_params%material_density
-		!	
-		!	do dim = 1, dimensions
-		!		dimless_length = real((part_x-1)*I_m(dim,1)+(part_y-1)*I_m(dim,2)+(part_z-1)*I_m(dim,3),dkind)
-		!	
-		!		this%particles(particle)%velocity(dim)	= 0.0_dkind
-		!		this%particles(particle)%coords(dim)	= 0.251_dkind !lengths(dim,1) + dimless_length*delta
-		!	end do
-		!	
-		!	initial_cell = this%get_particle_cell(this%particles(particle)%coords,out_flag)
-		!	this%particles(particle)%cell = initial_cell
-		!	this%particles(particle)%outside_domain = out_flag				
-		!end do
-		!end do
-		!end do
+		!end do 		
+		
+		do part_x = 1, part_number(1)
+		do part_y = 1, part_number(2)
+		do part_z = 1, part_number(3)
+		
+			particle = part_x + (part_y-1)*part_number(1) + (part_z-1)*part_number(1)*part_number(2)
+		
+			this%particles(particle)%coords			= 0.0_dkind
+			this%particles(particle)%velocity		= 0.0_dkind
+  
+			this%particles(particle)%outside_domain = .false.
+				
+			this%particles(particle)%temperature	= 300.0_dkind
+			this%particles(particle)%mass			= Pi*this%particles_params%diameter**3 / 6.0_dkind * this%particles_params%material_density
+			
+			
+			call sleepqq(1)
+			
+			d = 2
+			do while (d > 1)
+			
+				call RANDOM_SEED()
+				call RANDOM_NUMBER(gamma1)
+				call RANDOM_NUMBER(gamma2)
+				
+				AA(1) = 1.0_dkind - 2.0_dkind*gamma1
+				AA(2) = 1.0_dkind - 2.0_dkind*gamma2
+			
+				d = AA(1)*AA(1) + AA(2)*AA(2)
+			end do
+			
+			do dim = 1, dimensions
+				dimless_length = real((part_x-1)*I_m(dim,1)+(part_y-1)*I_m(dim,2)+(part_z-1)*I_m(dim,3),dkind)
+			
+				this%particles(particle)%velocity(dim)	= AA(dim)/sqrt(d)
+				this%particles(particle)%coords(dim)	= lengths(dim,1) + (dimless_length+0.5)*delta
+			end do
+			
+			initial_cell = this%get_particle_cell(this%particles(particle)%coords,out_flag)
+			this%particles(particle)%cell = initial_cell
+			this%particles(particle)%outside_domain = out_flag	
+			this%particles(particle)%particle_number = particle
+		end do
+		end do
+		end do
 				
 		continue
 		
@@ -418,11 +439,13 @@ contains
 						beta_p	= 0.5_dkind * rhog_old * C_drag * A_p * ( 1/m_sol + 1/M_gas_old) * abs_relative_velocity
 					
 						do dim = 1, dimensions
-							this%particles(part)%coords(dim) =	this%particles(part)%coords(dim) + (this%particles(part)%velocity(dim) + alpha_p * gas_velocity(dim)) * particle_time_step / (1.0_dkind + alpha_p) + &
+						
+							this%particles(part)%velocity(dim)	= (this%particles(part)%velocity(dim) + (this%particles(part)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * particle_time_step / (1.0_dkind + alpha_p)) / (1.0_dkind + beta_p*particle_time_step) !+ !... 	
+							
+							
+							this%particles(part)%coords(dim) =	this%particles(part)%coords(dim) + (this%particles(part)%velocity(dim) + alpha_p * gas_velocity(dim)) * particle_time_step / (1.0_dkind + alpha_p) - &
 																alpha_p * log(1.0_dkind + beta_p*particle_time_step) / beta_p / (1.0_dkind + alpha_p) * relative_velocity(dim)
 														
-							this%particles(part)%velocity(dim)	= (this%particles(part)%velocity(dim) + (this%particles(part)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * particle_time_step / (1.0_dkind + alpha_p)) / (1.0_dkind + beta_p*particle_time_step)	
-					
 							particle_acceleration(dim) = particle_acceleration(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_sol*(old_velocity(dim) - this%particles(part)%velocity(dim))/time_step) 
 
 						end do 
@@ -492,7 +515,7 @@ contains
 			
 					rhog_new	= M_gas_new / cell_volume
 
-					E_f_prod%cells(i,j,k)	=	E_f_prod%cells(i,j,k) - (Q / Hg_old) / time_step
+				!	E_f_prod%cells(i,j,k)	=	E_f_prod%cells(i,j,k) - (Q / Hg_old) / time_step
 
 					E_prod_p1 = E_f_prod%cells(i,j,k)
 					
@@ -506,25 +529,29 @@ contains
 			end if
 		end do
 
-		if ((time*1e06 >= 1.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
+		if ((time*1e06 >= 250.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
 
+			write(file_path,'(A,I6.6,A)') 'particle', int(time*1e06),'us'
+	!		write(file_path,'(A,I3.3)')  'particle', this%particles(part)%particle_number
+			file_name = 'data_save_particles' // trim(fold_sep) // 'particles_' // trim(file_path) // '.plt'
+			open(newunit = lagrangian_particles_io_unit, file = file_name, status = 'replace', position = 'append', form = 'formatted')	
+			
 			do part = 1, this%particles_number
 				if(.not.this%particles(part)%outside_domain) then
-			!		write(file_path,'(A)') 'particle' !int(time*1e06),'us'
-					write(file_path,'(A,I3.3)')  'particle', this%particles(part)%particle_number
-					file_name = 'data_save_particles' // trim(fold_sep) // 'particles_' // trim(file_path) // '.plt'
-					open(newunit = lagrangian_particles_io_unit, file = file_name, status = 'unknown', position = 'append', form = 'formatted')			
+		
 					write (lagrangian_particles_io_unit,'(7E14.6)')	time, this%particles(part)%coords(1:dimensions), this%particles(part)%velocity(1:dimensions), this%particles(part)%temperature, this%particles(part)%mass !, v_prod_p1, E_prod_p1	
-					close(lagrangian_particles_io_unit)
+					
 				end if
 			end do
+			
+			close(lagrangian_particles_io_unit)
 			output_counter = output_counter + 1
 		end if
 
-		if ((time*1e06 >= 100.0_dkind*(particle_release_counter+1))) then
-			particle_release_counter = particle_release_counter + 1
-			call this%release_particle()
-		end if			
+		!if ((time*1e06 >= 100.0_dkind*(particle_release_counter+1))) then
+		!	particle_release_counter = particle_release_counter + 1
+		!	call this%release_particle()
+		!end if			
 		
 		time = time + time_step
 
