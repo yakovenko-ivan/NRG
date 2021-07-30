@@ -319,7 +319,7 @@ contains
         end if
         if(this%additional_droplets_phases_number /= 0) then
 			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-    			call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main()
+    			call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main(this%time)
 			end do	            
 		end if
         
@@ -656,16 +656,23 @@ contains
 
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k) !max(0.0,sign*v%pr(dim1)%cells(i,j,k))
 											else
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
 											end if
 										end do	
 										
 									case ('inlet')
+
+										!**** Relaxing inlet ****
+										!farfield_pressure	= 101325.0_dkind + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
+										!farfield_density	= 1.137416_dkind + (bc%boundary_types(bound_number)%get_farfield_density() - 1.137416_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
 										farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-										farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
-										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+										farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()										
+										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= farfield_pressure
+										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_density
+										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+										continue
 								end select
 								
 							end if
