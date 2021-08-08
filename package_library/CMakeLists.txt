@@ -5,10 +5,7 @@ set(dir "${CMAKE_CURRENT_SOURCE_DIR}")
 
 file(GLOB srcs src/*.f90)
 
-set(
-        MODULE_OUTPUT_DIR
-        "${CMAKE_CURRENT_BINARY_DIR}/include"
-)
+set(MODULE_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/include")
 
 # Create example library target
 add_library(${P_LIBRARY} ${srcs})
@@ -22,11 +19,8 @@ set_target_properties(
         SOVERSION "${PROJECT_VERSION_MAJOR}"
         Fortran_MODULE_DIRECTORY "${MODULE_OUTPUT_DIR}"
 )
-target_link_libraries(
-        ${P_LIBRARY}
-        PRIVATE
-        "${lib-deps}"
-)
+
+
 target_include_directories(
         ${P_LIBRARY}
         INTERFACE
@@ -43,6 +37,8 @@ install(
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
 )
+
+
 install(
         DIRECTORY
         "${MODULE_OUTPUT_DIR}/"

@@ -10,7 +10,7 @@ project(
 set(COMPUTING_MODULE "${PROJECT_NAME}-computing-module")
 set(P_LIBRARY "${PROJECT_NAME}-package-library")
 set(P_UTILITIES "${PROJECT_NAME}-package-utilities")
-
+set(P_EXAMPLES "${PROJECT_NAME}-examples")
 
 # Collect source of library module
 add_subdirectory(package_library)
@@ -18,11 +18,14 @@ add_subdirectory(package_library)
 add_subdirectory(computing_module)
 # Collect source of utilities module
 add_subdirectory(package_utilities)
+# Collect source of examples
+add_subdirectory(package_interface_demos)
 
 
 # Export targets for other projects
 add_library("${PROJECT_NAME}" INTERFACE)
 target_link_libraries("${PROJECT_NAME}" INTERFACE ${P_LIBRARY})
+
 install(
         TARGETS
         "${PROJECT_NAME}"
