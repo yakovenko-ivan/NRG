@@ -2857,14 +2857,14 @@ contains
 		
 		real(dkind)	,dimension(3)	:: cell_size		
 		
-		real(dkind)					:: max_grad_temp, left_grad_temp, right_grad_temp, max_OH, left_OH, right_OH, flame_velocity, flame_surface_length, surface_factor
+		real(dkind)					:: max_grad_temp, left_grad_temp, right_grad_temp, max_CO, left_CO, right_CO, flame_velocity, flame_surface_length, surface_factor
 		real(dkind)					:: a, b 
-		real(dkind)					:: time_diff
+		real(dkind)					:: time_diff, time_delay
 		real(dkind), save			:: previous_flame_location = 0.0_dkind, current_flame_location = 0.0_dkind, farfield_velocity = 0.0_dkind
 		real(dkind), save			:: previous_time = 0.0_dkind, current_time = 0.0_dkind
 		integer		,save			:: correction = 0
 		integer						:: flame_front_index
-		character(len=200)	:: file_name
+		character(len=200)			:: file_name
 		
 		
 		integer	:: dimensions, species_number
@@ -2878,6 +2878,7 @@ contains
 		real(dkind)				:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
 		integer					:: lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2, chain_index, lp_chain
 		
+		integer :: CO_index
 		integer	:: bound_number,sign
 		integer :: i,j,k,plus,dim,dim1,spec, lp_index,lp_index2,lp_index3
 		
@@ -2891,42 +2892,45 @@ contains
 				
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
+		CO_index	= this%chem%chem_ptr%get_chemical_specie_index('CO')
+		
 		associate (	v				=> this%v%v_ptr				, &
 					v_f				=> this%v_f%v_ptr			, &
 					T				=> this%T%s_ptr				, &
 					Y				=> this%Y%v_ptr				, &
 					bc				=> this%boundary%bc_ptr)
 
-		time_diff = 5e-04_dkind
+		time_delay	= 5e-04_dkind			
+		time_diff	= 5e-05_dkind
 					
-		if ( time > correction*time_diff) then			
+		if ( time > (correction+1)*(time_diff) + time_delay) then			
 					
 			current_time = time
 		
 			!# Simple front tracer
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			max_grad_temp = 0.0_dkind
-			max_OH = 0.0_dkind
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
-			if(bc%bc_markers(i,j,k) == 0) then	
+				max_grad_temp = 0.0_dkind
+				max_CO = 0.0_dkind
+				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
+					if(bc%bc_markers(i,j,k) == 0) then	
 					
-			 	!! Grad temp
-			 	!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_grad_temp) then
-			 	!	max_grad_temp = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-			 	!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 	!	flame_front_index = i
-			 	!end if
+			 			!! Grad temp
+			 			!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_grad_temp) then
+			 			!	max_grad_temp = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
+			 			!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+			 			!	flame_front_index = i
+			 			!end if
 					
-			 	! max OH
-			 	if (abs(Y%pr(6)%cells(i,j,k)) > max_OH) then
-			 		max_OH = Y%pr(6)%cells(i,j,k)
-			 		flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 		flame_front_index = i
-			 	end if
+			 			! max CO
+			 			if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_CO) then
+			 				max_CO = Y%pr(CO_index)%cells(i,j,k)
+			 				flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+			 				flame_front_index = i
+			 			end if
 				
-			end if
-			end do
+					end if
+				end do
 			end do
 			end do
 			
@@ -3125,11 +3129,11 @@ contains
 			!a = (right_grad_temp + left_grad_temp - 2.0_dkind * max_grad_temp)/2.0_dkind/cell_size(1)**2
 			!b = (max_grad_temp-left_grad_temp)/cell_size(1) - a*(2.0_dkind*flame_front_coords(1) - cell_size(1))			
 			
-			 left_OH	= Y%pr(6)%cells(flame_front_index-1,1,1)
-			 right_OH	= Y%pr(6)%cells(flame_front_index+1,1,1)		
+			 left_CO	= Y%pr(CO_index)%cells(flame_front_index-1,1,1)
+			 right_CO	= Y%pr(CO_index)%cells(flame_front_index+1,1,1)		
 			
-			 a = (right_OH + left_OH - 2.0_dkind * max_OH)/2.0_dkind/cell_size(1)**2
-			 b = (max_OH-left_OH)/cell_size(1) - a*(2.0_dkind*flame_front_coords(1) - cell_size(1))
+			 a = (right_CO + left_CO - 2.0_dkind * max_CO)/2.0_dkind/cell_size(1)**2
+			 b = (max_CO - left_CO)/cell_size(1) - a*(2.0_dkind*flame_front_coords(1) - cell_size(1))
 			
 			 current_flame_location = -b/2.0_dkind/a
 			
@@ -3142,6 +3146,9 @@ contains
 				farfield_velocity = farfield_velocity_array(1)
 				previous_flame_location = current_flame_location
 			end if
+
+		!	print *, correction, time
+		!	pause 
 			
 			if( (correction /= 0).and.(current_flame_location /=  previous_flame_location) )then 
 				flame_velocity = (current_flame_location - previous_flame_location)/(current_time - previous_time)
@@ -3170,7 +3177,7 @@ contains
 				!
 				!pause
 
-				write (flame_loc_unit,'(6E14.6)') time, current_flame_location, flame_velocity, farfield_velocity_array(1), flame_surface_length, surface_factor
+				write (flame_loc_unit,'(4E14.6)') time, current_flame_location, flame_velocity, farfield_velocity_array(1)! , flame_surface_length, surface_factor
 				
 				previous_flame_location = current_flame_location
 				previous_time = current_time
