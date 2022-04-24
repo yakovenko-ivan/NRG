@@ -44,7 +44,7 @@ install(
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
 )
 
-
+#set(ENV "RELEASE_SEQUENTIAL")
 # select right compiler flugs
 if (ENV MATCHES "DEBUG_OMP")
     message(STATUS "USING DEBUG_OMP COMPILER FLAGS")
