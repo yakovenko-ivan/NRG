@@ -1,7 +1,5 @@
 computing_module/computing_module
-computing_module/src/third_party/soot
-computing_module/src/third_party/dvode
-computing_module/src/third_party/cvode
+computing_module/src/third_party
 computing_module/src/test_versions
 computing_module/src/old_versions
 computing_module/debug_MPI

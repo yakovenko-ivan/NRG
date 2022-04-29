@@ -293,7 +293,7 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
                 
                 local_diameter = 6.0_dkind * mass_d%cells(i,j,k) / Pi / droplet%material_density 
-                local_diameter = local_diameter ** 0.3333333
+                local_diameter = local_diameter ** 0.3333333_dkind
 
 				F_stokes = 0.0_dkind
 				
@@ -528,10 +528,6 @@ contains
                 
 				T_d%cells(i,j,k)	= T_d_int%cells(i,j,k)  * rho_d_old / rho_d%cells(i,j,k)
 
-				if (i == 1) then
-					T_d%cells(i,j,k) = 300.0_dkind
-				end if
-				
 				do dim = 1,dimensions
 					v_d%pr(dim)%cells(i,j,k)	= v_d_int%pr(dim)%cells(i,j,k) * rho_d_old / rho_d%cells(i,j,k)
 				end do
@@ -637,7 +633,7 @@ contains
 									case ('inlet')
 										do dim1 = 1, dimensions
 											if(dim1 == dim)	v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
-										end do								
+										end do
 									case ('outlet')
 										do dim1 = 1, dimensions
 											if(dim1 == dim)	v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
@@ -681,7 +677,7 @@ contains
 		
 		delay = 0.2_dkind
 		farfield_rhod = 1.0e-02_dkind
-		
+
 		associate(  T_d				=> this%T_d%s_ptr			, &
 					rho_d			=> this%rho_d%s_ptr			, &
 					mass_d          => this%mass_d%s_ptr        , &
