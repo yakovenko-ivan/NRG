@@ -22,15 +22,15 @@ module table_approximated_real_gas_class
 	private
 	public  table_approximated_real_gas, table_approximated_real_gas_c
 
-	type(field_scalar_cons)			,target	:: T_old, v_s, gamma, h_s, c_v_old, e_i_old, dp_stat_dt, mixture_cp
+	type(field_scalar_cons)			,target	:: v_s, gamma, h_s, c_v_old, e_i_old, dp_stat_dt, mixture_cp
 	type(field_scalar_flow)			,target	:: gamma_f, c_v_f_old, e_i_f_old
 
 	real(dkind)	,dimension(:)	,allocatable	:: concs
 	!$omp threadprivate(concs)
 
 	type 	:: table_approximated_real_gas
-		type(field_scalar_cons_pointer)				:: p, p_stat, p_stat_old, T, T_old, e_i, E_f, rho, mol_mix_conc, v_s, gamma, h_s, e_i_old, c_v_old, dp_stat_dt, dT_dt, mixture_cp
-		type(field_scalar_flow_pointer)				:: rho_f, p_f, e_i_f, v_s_f, E_f_f, T_f, gamma_f, c_v_f_old, e_i_f_old
+		type(field_scalar_cons_pointer)				:: p, p_stat, p_stat_old, T, e_i, E_f, rho, mol_mix_conc, v_s, gamma, h_s,dp_stat_dt, mixture_cp
+		type(field_scalar_flow_pointer)				:: rho_f, p_f, e_i_f, v_s_f, E_f_f, T_f, gamma_f
 		type(field_vector_cons_pointer)				:: v, Y
 		type(field_vector_flow_pointer)				:: v_f, Y_f
 		type(computational_domain)					:: domain
@@ -90,8 +90,6 @@ contains
 		constructor%mol_mix_conc%s_ptr			=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure_static_change')
 		constructor%dp_stat_dt%s_ptr			=> scal_c_ptr%s_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'temperature_change')
-		constructor%dT_dt%s_ptr					=> scal_c_ptr%s_ptr
 		
 		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'density_flow')
 		constructor%rho_f%s_ptr					=> scal_f_ptr%s_ptr
@@ -108,21 +106,15 @@ contains
 		
 		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
 
-		call manager%create_scalar_field(T_old,'temperature_old', 'T_old')
-		constructor%T_old%s_ptr			=> T_old	
 		call manager%create_scalar_field(mixture_cp,'mixture_cp', 'cp')
 		constructor%mixture_cp%s_ptr		=> mixture_cp			
 		call manager%create_scalar_field(v_s	,'velocity_of_sound','v_s'	)
 		constructor%v_s%s_ptr			=> v_s
-		call manager%create_scalar_field(c_v_old	,'heat_capacity_old','c_v_old'	)
-		constructor%c_v_old%s_ptr		=> c_v_old
 		call manager%create_scalar_field(gamma	,'adiabatic_index'	,'gamma')
 		constructor%gamma%s_ptr			=> gamma
 		call manager%create_scalar_field(h_s	,'sensible_enthalpy'	,'h_s')
 		constructor%h_s%s_ptr		=> h_s
-		call manager%create_scalar_field(e_i_old	,'internal_energy_old'	,'e_i_old')
-		constructor%e_i_old%s_ptr		=> e_i_old
-		
+
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
 		constructor%v%v_ptr				=> vect_c_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
@@ -135,10 +127,7 @@ contains
 		
 		call manager%create_scalar_field(gamma_f	,'adiabatic_index_flow'	,'gamma_flow')
 		constructor%gamma_f%s_ptr		=> gamma_f
-		call manager%create_scalar_field(c_v_f_old	,'heat_capacity_old_flow'	,'c_v_old_flow')
-		constructor%c_v_f_old%s_ptr		=> c_v_f_old		
-		call manager%create_scalar_field(e_i_f_old	,'internal_energy_old_flow'	,'e_i_old_flow')
-		constructor%e_i_f_old%s_ptr		=> e_i_f_old
+
 		
 		constructor%domain				= manager%domain
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
@@ -191,8 +180,6 @@ contains
 						h_s				=> this%h_s%s_ptr			, &
 						mol_mix_conc    => this%mol_mix_conc%s_ptr	, &
 						v_s             => this%v_s%s_ptr			, &
-						c_v_old			=> this%c_v_old%s_ptr		, &
-						e_i_old			=> this%e_i_old%s_ptr		, &
 						Y               => this%Y%v_ptr				, &
 						v               => this%v%v_ptr)
 
@@ -219,35 +206,26 @@ contains
 				concs = 0.0_dkind
 				do specie_number = 1,species_number
 					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dkind) then
-						concs(specie_number)		= Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
+						concs(specie_number)		=	Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
 					end if
 				end do
 				
-				rho%cells(i,j,k)					= p%cells(i,j,k) / (T%cells(i,j,k) * r_gase_J) * mol_mix_conc%cells(i,j,k)
+				rho%cells(i,j,k)		= p%cells(i,j,k) / (T%cells(i,j,k) * r_gase_J) * mol_mix_conc%cells(i,j,k)
 				
 				cp = this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
 				cv = cp - r_gase_J
 				
 				gamma%cells(i,j,k)		= cp / cv	
-	
-			!#  Old e = cv*T equation of state.	
-				e_i%cells(i,j,k)		= p%cells(i,j,k) / rho%cells(i,j,k) / (gamma%cells(i,j,k) - 1.0_dkind) 
-
-			!# New de = cv*dT equation of state			
-			!	h_s%cells(i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs)
-			!	e_i%cells(i,j,k)	= (h_s%cells(i,j,k) - r_gase_J*T%cells(i,j,k)) / mol_mix_conc%cells(i,j,k)
-
-			!	e_i_old%cells(i,j,k)	= e_i%cells(i,j,k) * mol_mix_conc%cells(i,j,k)
-			!	c_v_old%cells(i,j,k)	= cv
 				
-				E_f%cells(i,j,k)		= e_i%cells(i,j,k)				
+				e_i%cells(i,j,k)		= this%thermo%thermo_ptr%calculate_mixture_energy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)
+				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc%cells(i,j,k)
+				
+				E_f%cells(i,j,k)		= e_i%cells(i,j,k) / mol_mix_conc%cells(i,j,k)			
 				do dim = 1,dimensions
-					E_f%cells(i,j,k) = E_f%cells(i,j,k) + 0.5_dkind * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
+					E_f%cells(i,j,k)	= E_f%cells(i,j,k) + 0.5_dkind * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
 				end do
 
-				v_s%cells(i,j,k)	= sqrt(gamma%cells(i,j,k)*p%cells(i,j,k)/rho%cells(i,j,k))				
-				
-				h_s%cells(i,j,k)	= cp*T%cells(i,j,k) / mol_mix_conc%cells(i,j,k)
+				v_s%cells(i,j,k)		= sqrt(gamma%cells(i,j,k)*p%cells(i,j,k)/rho%cells(i,j,k))				
 				
 				mixture_cp%cells(i,j,k)	= cp
 				
@@ -297,8 +275,6 @@ contains
 					Y_f		=> this%Y_f%v_ptr		, &
 					E_f_f	=> this%E_f_f%s_ptr		, &
 					e_i_f	=> this%e_i_f%s_ptr		, &
-					e_i_f_old	=> this%e_i_f_old%s_ptr	, &
-					c_v_f_old	=> this%c_v_f_old%s_ptr	, &
 					T_f		=> this%T_f%s_ptr		, &
 					gamma_f	=> this%gamma_f%s_ptr	, &
 					bc		=> this%boundary%bc_ptr)
@@ -340,20 +316,13 @@ contains
 					cv = cp - r_gase_J 
 
 					gamma_f%cells(dim,i,j,k)	= cp / cv
-					
-				!#  Old e = cv*T equation of state.	
-					e_i_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / (gamma_f%cells(dim,i,j,k) - 1.0_dkind) 
-					
-				!# New de = cv*dT equation of state		
-				!	h_s						= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_f%cells(dim,i,j,k), concs)
-				!	e_i_f%cells(dim,i,j,k)	= (h_s - r_gase_J*T_f%cells(dim,i,j,k)) / average_molar_mass 
-					
-				!	c_v_f_old%cells(dim,i,j,k)	= cv
-				!	e_i_f_old%cells(dim,i,j,k)	= e_i_f%cells(dim,i,j,k) * average_molar_mass
-					
+
+					h_s						= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) 
+					e_i_f%cells(dim,i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_energy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)
+				
 					v_s_f%cells(dim,i,j,k) = sqrt(gamma_f%cells(dim,i,j,k)*p_f%cells(dim,i,j,k)/rho_f%cells(dim,i,j,k))
 					
-					E_f_f%cells(dim,i,j,k) = e_i_f%cells(dim,i,j,k)
+					E_f_f%cells(dim,i,j,k) = e_i_f%cells(dim,i,j,k) / average_molar_mass
 
 					do dim1 = 1, dimensions
 						E_f_f%cells(dim,i,j,k) = E_f_f%cells(dim,i,j,k) + 0.5_dkind*v_f%pr(dim1)%cells(dim,i,j,k)*v_f%pr(dim1)%cells(dim,i,j,k)
@@ -400,8 +369,6 @@ contains
 					e_i             => this%e_i%s_ptr          , &
 					h_s             => this%h_s%s_ptr          , &
 					v_s             => this%v_s%s_ptr          , &
-					c_v_old			=> this%c_v_old%s_ptr		, &
-					e_i_old			=> this%e_i_old%s_ptr		, &						
 					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
 					v				=> this%v%v_ptr			   , &
 					Y				=> this%Y%v_ptr				, &
@@ -409,7 +376,7 @@ contains
 
 	!$omp parallel default(none) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass,T_iter) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,mixture_cp,p,rho,e_i,e_i_old,h_s,gamma,v_s,mol_mix_conc,E_f,v,Y,c_v_old,dimensions,cons_inner_loop,species_number)
+	!$omp& shared(T,mixture_cp,p,rho,e_i,h_s,gamma,v_s,mol_mix_conc,E_f,v,Y,dimensions,cons_inner_loop,species_number)
 
 	!$omp do collapse(3) schedule(guided)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -441,40 +408,19 @@ contains
 					end if
 				end do				
 				
-			!# Experimental iterative procedure. Due to dsicontnuity in T=1000K for sensible enthalpy this approach provides poor results		
-				!t_initial	= T%cells(i,j,k)
-				!do T_iter = 1, 100
-				!	h_s%cells(i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_enthalpy(t_initial, concs)
-				!	cp					= this%thermo%thermo_ptr%calculate_mixture_cp(t_initial, concs)
-				!	t_final				= t_initial + (e_i%cells(i,j,k)*mol_mix_conc%cells(i,j,k) - h_s%cells(i,j,k) + t_initial*r_gase_J)/(cp - r_gase_J)
-				!	t_initial			= t_final
-				!end do
-    
-				!T%cells(i,j,k)			= t_final
-				!p%cells(i,j,k)			= T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)
+				e_i%cells(i,j,k) = e_i%cells(i,j,k) * mol_mix_conc%cells(i,j,k)
 
 			!# New de = cv*dT equation of state		
-			!	T%cells(i,j,k) = T%cells(i,j,k) + (e_i%cells(i,j,k)* mol_mix_conc%cells(i,j,k) - e_i_old%cells(i,j,k))/c_v_old%cells(i,j,k)
-			!	p%cells(i,j,k) = T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)
-		
-			!#  Old e = cv*T equation of state. 
+				T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature(T%cells(i,j,k),e_i%cells(i,j,k),concs)
+				p%cells(i,j,k)			= T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)
 
-				T%cells(i,j,k) = p%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)				
+				cp						= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
+				cv						= cp - r_gase_J 
+				gamma%cells(i,j,k)		= cp / cv		
 				
-				cp					= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
-				cv					= cp - r_gase_J 
-				gamma%cells(i,j,k)	= cp / cv		
-				
-				p%cells(i,j,k) = e_i%cells(i,j,k) * rho%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dkind) 
-
-				h_s%cells(i,j,k)	= cp*T%cells(i,j,k) / mol_mix_conc%cells(i,j,k)
-				
-				mixture_cp%cells(i,j,k) = cp
-				
-			!# New de = cv*dT equation of state		
-			!	c_v_old%cells(i,j,k)	= cv
-			!	e_i_old%cells(i,j,k)	= e_i%cells(i,j,k)* mol_mix_conc%cells(i,j,k)
-				
+				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc%cells(i,j,k)
+				mixture_cp%cells(i,j,k) = cp / mol_mix_conc%cells(i,j,k)
+	
 				if((gamma%cells(i,j,k) < 0.0).or.(p%cells(i,j,k) < 0.0).or.(rho%cells(i,j,k) < 0.0)) then
 					print *, 'Cons EOS exception: ', dim, i,j,k
 					do dim2 = 1, dimensions
@@ -591,7 +537,7 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 		
-		real(dkind)	:: velocity, t_initial, t_final, e_internal, cp, cv, T_new
+		real(dkind)	:: velocity,  e_internal, cp, cv
 		real(dkind)	:: average_molar_mass
 
 		integer	:: species_number
@@ -608,12 +554,10 @@ contains
 		
 		associate(  T               => this%T%s_ptr            , &
 					mixture_cp		=> this%mixture_cp%s_ptr	, &
-					T_old			=> this%T_old%s_ptr		   , &
 					p               => this%p%s_ptr            , &
 					p_stat			=> this%p_stat%s_ptr	   , &
 					p_stat_old		=> this%p_stat_old%s_ptr   , &
 					dp_stat_dt		=> this%dp_stat_dt%s_ptr   , &
-					dT_dt			=> this%dT_dt%s_ptr		   , &
 					rho             => this%rho%s_ptr          , &
 					E_f				=> this%E_f%s_ptr		   , &
 					e_i             => this%e_i%s_ptr          , &
@@ -624,6 +568,12 @@ contains
 					Y				=> this%Y%v_ptr			   , &
 					bc				=> this%boundary%bc_ptr)
 
+	!$omp parallel default(none) private(i,j,k,dim,specie_number,cp,cv,average_molar_mass) , &
+	!$omp& firstprivate(this)	,&
+	!$omp& shared(T,p,h_s,p_stat,p_stat_old,dp_stat_dt,rho,e_i,gamma,v_s,mixture_cp,mol_mix_conc,E_f,v,Y,dimensions,cons_inner_loop,species_number,predictor,time_step,bc)
+
+	!$omp do collapse(3) schedule(static)					
+					
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -650,34 +600,18 @@ contains
 				else 
 					p_stat%cells(i,j,k)	= 0.5_dkind * (p_stat%cells(i,j,k) + p_stat_old%cells(i,j,k) + dp_stat_dt%cells(i,j,k) * time_step)
 				end if					
-				
-				if(predictor) then
-					T_old%cells(i,j,k)	= T%cells(i,j,k)
-				end if						
-				
-				T_new = p_stat%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)
-				
-				if(predictor) then
-					dT_dt%cells(i,j,k)	= (T_new - T_old%cells(i,j,k))/ time_step
-				else 
-					dT_dt%cells(i,j,k)	= (2.0_dkind*T_new - T%cells(i,j,k) - T_old%cells(i,j,k))/ time_step
-				end if				
-				
-				T%cells(i,j,k)      = T_new
-				
-				t_initial           = T%cells(i,j,k)
 
-				cp = this%thermo%thermo_ptr%calculate_mixture_cp(t_initial, concs)
+				T%cells(i,j,k)      = p_stat%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)
+				
+				cp = this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
 				cv = cp - r_gase_J 
 
 				gamma%cells(i,j,k)	= cp / cv
 		
-				h_s%cells(i,j,k)	= cp*T%cells(i,j,k) / mol_mix_conc%cells(i,j,k)
-				
+				h_s%cells(i,j,k)	= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc%cells(i,j,k)
+
 				mixture_cp%cells(i,j,k)	= cp
 				
-			!	h_s%cells(i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_enthalpy_zero(t_initial, concs) / mol_mix_conc%cells(i,j,k) / rho%cells(i,j,k)
-
 				p%cells(i,j,k)      = p_stat%cells(i,j,k)
 				
 			!	print*, p_stat%cells(i,j,k), rho%cells(i,j,k), gamma%cells(i,j,k)
@@ -695,6 +629,9 @@ contains
 		end do
 		end do
 
+	!$omp end do nowait
+	!$omp end parallel		
+		
 		continue
 		
 		end associate		
@@ -728,8 +665,6 @@ contains
 					Y_f		=> this%Y_f%v_ptr		, &
 					E_f_f	=> this%E_f_f%s_ptr		, &
 					e_i_f	=> this%e_i_f%s_ptr		, &
-					e_i_f_old	=> this%e_i_f_old%s_ptr	, &
-					c_v_f_old	=> this%c_v_f_old%s_ptr	, &	
 					T_f		=> this%T_f%s_ptr		, &
 					gamma_f	=> this%gamma_f%s_ptr	, &
 					mesh	=> this%mesh%mesh_ptr	, &
@@ -775,19 +710,18 @@ contains
 
 					gamma_f%cells(dim,i,j,k)	= cp / cv
 					
+					e_i_f%cells(dim,i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_energy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)
+					
 				!# Experimental iterative procedure. Due to discontnuity in T=1000K for sensible enthalpy this approach provides poor results		
 					!h_s					= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_f%cells(dim,i,j,k), concs)
 					!e_i_f%cells(dim,i,j,k)	= (h_s - r_gase_J*T_f%cells(dim,i,j,k)) / average_molar_mass !p%cells(i,j,k)/rho%cells(i,j,k)
 					
 				!#  Old e = cv*T equation of state.	
-					e_i_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / (gamma_f%cells(dim,i,j,k) - 1.0_dkind) 
+				!	e_i_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / (gamma_f%cells(dim,i,j,k) - 1.0_dkind) 
 					
 				!# New de = cv*dT equation of state		
 				!	e_i_f%cells(dim,i,j,k)	= (e_i_f_old%cells(dim,i,j,k) + (T_f%cells(dim,i,j,k) - T_old)*c_v_f_old%cells(dim,i,j,k)) /average_molar_mass 
-					
-				!	c_v_f_old%cells(dim,i,j,k)	= cv
-				!	e_i_f_old%cells(dim,i,j,k)	= e_i_f%cells(dim,i,j,k) * average_molar_mass
-		
+
 					if((gamma_f%cells(dim,i,j,k) < 0.0).or.(p_f%cells(dim,i,j,k) < 0.0).or.(rho_f%cells(dim,i,j,k) < 0.0)) then
 						print *, 'Flow EOS exception: ', dim, i,j,k
 						do dim2 = 1, dimensions
@@ -802,7 +736,7 @@ contains
 
 					v_s_f%cells(dim,i,j,k) = sqrt(gamma_f%cells(dim,i,j,k)*p_f%cells(dim,i,j,k)/rho_f%cells(dim,i,j,k))
 					
-					E_f_f%cells(dim,i,j,k) = e_i_f%cells(dim,i,j,k)
+					E_f_f%cells(dim,i,j,k) = e_i_f%cells(dim,i,j,k) / average_molar_mass
 
 					do dim1 = 1, dimensions
 						E_f_f%cells(dim,i,j,k) = E_f_f%cells(dim,i,j,k) + 0.5_dkind*v_f%pr(dim1)%cells(dim,i,j,k)*v_f%pr(dim1)%cells(dim,i,j,k)
@@ -947,6 +881,10 @@ contains
 											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = T%cells(i,j,k)
 										end if
 
+										do specie_number = 1, species_number
+											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(specie_number)%cells(i,j,k)
+										end do
+										
 									case('outlet','inlet')
 								
 										farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
@@ -995,11 +933,12 @@ contains
 
 										farfield_gamma	= cp / cv	
 								
-										farfield_e_i	= farfield_pressure / farfield_density / (farfield_gamma - 1.0_dkind) 
+										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs)/ mol_mix_conc
+										farfield_e_i	= this%thermo%thermo_ptr%calculate_mixture_energy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)
+										
+										!farfield_e_i	= farfield_pressure / farfield_density / (farfield_gamma - 1.0_dkind) 
 										farfield_E_f	= farfield_e_i + 0.5_dkind * ( farfield_velocity * farfield_velocity )
 										farfield_v_s	= sqrt(farfield_gamma*farfield_pressure/farfield_density)	
-								
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
 				
 										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=	farfield_pressure 
 										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=	farfield_temperature
@@ -1009,6 +948,9 @@ contains
 
 										E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	farfield_E_f 
 
+										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc
+										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
+										
 								end select
 							end if
 						end do
