@@ -569,7 +569,7 @@ contains
 		class(cpm_solver)		,intent(inout)		:: this
 
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
+		real(dkind)				:: farfield_density, farfield_pressure, farfield_velocity, wall_temperature
 		
 		integer					:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -591,7 +591,7 @@ contains
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name,farfield_pressure,farfield_density,wall_temperature) , &
+		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name,farfield_pressure,farfield_density,farfield_velocity,wall_temperature) , &
 		!$omp& firstprivate(this)	,&
 		!$omp& shared(T,p,rho,v,mol_mix_conc,Y,mesh,bc,cons_inner_loop,dimensions,species_number)
 		!$omp do collapse(3) schedule(guided)
@@ -668,13 +668,15 @@ contains
 									case ('inlet')
 
 										!**** Relaxing inlet ****
-										farfield_pressure	= 101325.0_dkind + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
-										farfield_density	= 1.137416_dkind + (bc%boundary_types(bound_number)%get_farfield_density() - 1.137416_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
-										!farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-										!farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()										
+										!farfield_pressure	= 101325.0_dkind + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
+										!farfield_density	= 1.137416_dkind + (bc%boundary_types(bound_number)%get_farfield_density() - 1.137416_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
+										
+										farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
+										farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()	
+										farfield_velocity	= bc%boundary_types(bound_number)%get_farfield_velocity()	
 										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= farfield_pressure
 										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_density
-										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= farfield_velocity !-sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
 										continue
 								end select
 								

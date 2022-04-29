@@ -1879,29 +1879,98 @@ contains
 									
 					case ('outlet')
 								
-						! ******************* Acoustic outlet ***********************************						
-						if (sign == 1) then						
-							!# Выток реализован только для правой границы
-							if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
-								( characteristic_speed(2) < 0.0_dkind )) then		!.and.&
-								!( characteristic_speed(3) >= 0.0_dkind )) then		
+						! ******************* Acoustic outlet ***********************************
+					
+						G_half_inf = 1.0_dkind / (rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+						r_inf = v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + G_half_inf * p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	
+						q_inf = v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - G_half_inf * p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	
+						s_inf = p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2 * rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+					
+						
+						if (( characteristic_speed(1) >= 0.0_dkind )		.and.&
+							( characteristic_speed(2) < 0.0_dkind ))then	!.and.&
+					!		( characteristic_speed(3) >= 0.0_dkind )) then		
+							if (sign == -1) then											!# Меньшая грань (левая/нижняя/дальняя), поток от меньшей к большей грани. 
+								
+								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_corrected(1))/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_corrected(1))/(G_half_inf + G_half)
+								rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k) - s_inf)/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2		
+								
+					!			print *, rho_f_new%cells(dim,i,j,k), rho%cells(i,j,k)
+
+								do dim1 = 1, dimensions
+									if (dim1 /= dim) then
+										v_f_new%pr(dim1)%cells(dim,i,j,k)	= 0.0_dkind
+									end if
+								end do
+								
+								spec_summ = 0.0_dkind
+								do spec = 1,species_number
+									Y_f_new%pr(spec)%cells(dim,i,j,k)	= 	Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))  	
+									spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind)
+								end do
+								do spec = 1,species_number
+									Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
+								end do
+								
+								E_f_f_new%cells(dim,i,j,k)			=	E_f%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+								
+							end if
+							if (sign == 1) then
 							
-								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v%pr(dim)%cells(i,j,k)	!r_corrected(2) - p%cells(i,j,k)*G_half	
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_corrected(2) - q_inf)/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
+								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2))/v_s%cells(i,j,k)**2								
+							
+								do dim1 = 1, dimensions
+									if (dim1 /= dim) then
+										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_inv_corrected(dim1,2)
+									end if
+								end do
 
-								!(g_inf * r_corrected(2) - G_half * g_inf * p_inf) / (G_half + g_inf) 
-								!v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) * ( 2.0_dkind * v_s%cells(i,j,k) - v_s_f(dim,i,j,k)) 
-								!0.5_dkind * (r_corrected(2) + q_corrected(2)) !sqrt(sqrt(((p%cells(i,j,k)-p_inf)*(rho%cells(i,j,k)-rho_inf)/(rho%cells(i,j,k)*rho_inf))**2))
-													
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	 p%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))   !(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
-
-								!(r_corrected(2) + g_inf * p_inf)/( G_half + g_inf )
-								!(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
-													
-								if ( characteristic_speed(3) >= 0.0_dkind ) then
-									rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)	!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
-								else
-									rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - (p_inf) + c_inf**2 * rho_inf) / (c_inf**2)			!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_inf + c_inf**2 * rho_inf) / (c_inf**2)
-								end if
+								spec_summ = 0.0_dkind
+								do spec = 1,species_number
+									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) 	= Y%pr(spec)%cells(i,j,k)  	
+									spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind)
+								end do
+								do spec = 1,species_number
+									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  = max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind) / spec_summ
+								end do								
+							end if
+						end if
+						if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
+							( characteristic_speed(2) < 0.0_dkind )		.and.&
+							( characteristic_speed(3) < 0.0_dkind )) then
+						!	if (sign == -1) then
+						!		p_f_new%cells(dim,i,j,k)			=	(r_inf - q_corrected(1))/(G_half_inf + G_half)
+						!		v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_corrected(1))/(G_half_inf + G_half)
+						!		rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1))/v_s%cells(i,j,k)**2								
+      !
+						!		do dim1 = 1, dimensions
+						!			if (dim1 /= dim) then
+						!				v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_inv_corrected(dim1,1)
+						!			end if
+						!		end do
+						!		
+						!		spec_summ = 0.0_dkind
+						!		do spec = 1,species_number
+						!			Y_f_new%pr(spec)%cells(dim,i,j,k)	= 	Y%pr(spec)%cells(i,j,k)  	
+						!			spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind)
+						!		end do
+						!		do spec = 1,species_number
+						!			Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
+						!		end do
+						!	end if
+							if (sign == 1) then
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_corrected(2) - q_inf)/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
+								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - s_inf)/v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))**2								
+							
+								do dim1 = 1, dimensions
+									if (dim1 /= dim) then
+										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= 0.0_dkind
+									end if
+								end do
 
 								spec_summ = 0.0_dkind
 								do spec = 1,species_number
@@ -1911,47 +1980,85 @@ contains
 								do spec = 1,species_number
 									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  = max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind) / spec_summ
 								end do	
-										
-								E_f_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	E_f%cells(i,j,k)
 
 							end if
-						end if
-						if (sign == -1) then
-							!# Выток реализован только для правой границы
-							if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
-								( characteristic_speed(2) < 0.0_dkind )) then		!.and.&
-								!( characteristic_speed(3) >= 0.0_dkind )) then		
-							
-								v_f_new%pr(dim)%cells(dim,i,j,k)	=	v%pr(dim)%cells(i,j,k)	!r_corrected(2) - p%cells(i,j,k)*G_half	
 
-								!(g_inf * r_corrected(2) - G_half * g_inf * p_inf) / (G_half + g_inf) 
-								!v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) * ( 2.0_dkind * v_s%cells(i,j,k) - v_s_f(dim,i,j,k)) 
-								!0.5_dkind * (r_corrected(2) + q_corrected(2)) !sqrt(sqrt(((p%cells(i,j,k)-p_inf)*(rho%cells(i,j,k)-rho_inf)/(rho%cells(i,j,k)*rho_inf))**2))
-													
-								p_f_new%cells(dim,i,j,k)			=	 p%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))   !(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
-
-								!(r_corrected(2) + g_inf * p_inf)/( G_half + g_inf )
-								!(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
-													
-								if ( characteristic_speed(3) >= 0.0_dkind ) then
-									rho_f_new%cells(dim,i,j,k)			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)	!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
-								else
-									rho_f_new%cells(dim,i,j,k)			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - (p_inf) + c_inf**2 * rho_inf) / (c_inf**2)			!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_inf + c_inf**2 * rho_inf) / (c_inf**2)
-								end if
-
-								spec_summ = 0.0_dkind
-								do spec = 1,species_number
-									Y_f_new%pr(spec)%cells(dim,i,j,k) 	= Y%pr(spec)%cells(i,j,k)  	
-									spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind)
-								end do
-								do spec = 1,species_number
-									Y_f_new%pr(spec)%cells(dim,i,j,k)  = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
-								end do	
-										
-								E_f_f_new%cells(dim,i,j,k)			=	E_f%cells(i,j,k)
-
-							end if						
-						end if
+						end if						
+						
+						
+						
+						!if (sign == 1) then						
+						!	!# Выток реализован только для правой границы
+						!	if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
+						!		( characteristic_speed(2) < 0.0_dkind )) then		!.and.&
+						!		!( characteristic_speed(3) >= 0.0_dkind )) then		
+						!	
+						!		v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v%pr(dim)%cells(i,j,k)	!r_corrected(2) - p%cells(i,j,k)*G_half	
+      !
+						!		!(g_inf * r_corrected(2) - G_half * g_inf * p_inf) / (G_half + g_inf) 
+						!		!v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) * ( 2.0_dkind * v_s%cells(i,j,k) - v_s_f(dim,i,j,k)) 
+						!		!0.5_dkind * (r_corrected(2) + q_corrected(2)) !sqrt(sqrt(((p%cells(i,j,k)-p_inf)*(rho%cells(i,j,k)-rho_inf)/(rho%cells(i,j,k)*rho_inf))**2))
+						!							
+						!		p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	 p%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))   !(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
+      !
+						!		!(r_corrected(2) + g_inf * p_inf)/( G_half + g_inf )
+						!		!(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
+						!							
+						!		if ( characteristic_speed(3) >= 0.0_dkind ) then
+						!			rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)	!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
+						!		else
+						!			rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - (p_inf) + c_inf**2 * rho_inf) / (c_inf**2)			!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_inf + c_inf**2 * rho_inf) / (c_inf**2)
+						!		end if
+      !
+						!		spec_summ = 0.0_dkind
+						!		do spec = 1,species_number
+						!			Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) 	= Y%pr(spec)%cells(i,j,k)  	
+						!			spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind)
+						!		end do
+						!		do spec = 1,species_number
+						!			Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  = max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind) / spec_summ
+						!		end do	
+						!				
+						!		E_f_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	E_f%cells(i,j,k)
+      !
+						!	end if
+						!end if
+						!if (sign == -1) then
+						!	!# Выток реализован только для правой границы
+						!	if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
+						!		( characteristic_speed(2) < 0.0_dkind )) then		!.and.&
+						!		!( characteristic_speed(3) >= 0.0_dkind )) then		
+						!	
+						!		v_f_new%pr(dim)%cells(dim,i,j,k)	=	v%pr(dim)%cells(i,j,k)	!r_corrected(2) - p%cells(i,j,k)*G_half	
+      !
+						!		!(g_inf * r_corrected(2) - G_half * g_inf * p_inf) / (G_half + g_inf) 
+						!		!v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) * ( 2.0_dkind * v_s%cells(i,j,k) - v_s_f(dim,i,j,k)) 
+						!		!0.5_dkind * (r_corrected(2) + q_corrected(2)) !sqrt(sqrt(((p%cells(i,j,k)-p_inf)*(rho%cells(i,j,k)-rho_inf)/(rho%cells(i,j,k)*rho_inf))**2))
+						!							
+						!		p_f_new%cells(dim,i,j,k)			=	 p%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))   !(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
+      !
+						!		!(r_corrected(2) + g_inf * p_inf)/( G_half + g_inf )
+						!		!(r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
+						!							
+						!		if ( characteristic_speed(3) >= 0.0_dkind ) then
+						!			rho_f_new%cells(dim,i,j,k)			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)	!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
+						!		else
+						!			rho_f_new%cells(dim,i,j,k)			=	rho%cells(i,j,k) ! / mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - (p_inf) + c_inf**2 * rho_inf) / (c_inf**2)			!rho%cells(i,j,k)	!(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_inf + c_inf**2 * rho_inf) / (c_inf**2)
+						!		end if
+      !
+						!		spec_summ = 0.0_dkind
+						!		do spec = 1,species_number
+						!			Y_f_new%pr(spec)%cells(dim,i,j,k) 	= Y%pr(spec)%cells(i,j,k)  	
+						!			spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind)
+						!		end do
+						!		do spec = 1,species_number
+						!			Y_f_new%pr(spec)%cells(dim,i,j,k)  = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
+						!		end do	
+						!				
+						!		E_f_f_new%cells(dim,i,j,k)			=	E_f%cells(i,j,k)
+      !
+						!	end if						
+						!end if
 												
 						! ******************* Shock outlet ***********************************
 							
@@ -2194,9 +2301,9 @@ contains
 
 
 										case ('outlet')
-											farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-											farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
-											v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+										!	farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
+										!	farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
+										!	v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
 										case ('inlet')
 										!	farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
 										!	farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
@@ -2246,7 +2353,7 @@ contains
 			allocate(time_step_array(processor_number))
 		end if
 
-		time_step(1)	= this%initial_time_step
+		time_step(1)	= 1.0e-05_dkind !this%initial_time_step
 
 		associate(  v				=> this%v%v_ptr		, &
 					v_s				=> this%v_s%s_ptr		, &
