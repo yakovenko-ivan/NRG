@@ -31,7 +31,7 @@ module fds_low_mach_solver_class
 	private
 	public	:: fds_solver, fds_solver_c
 
-	type(field_scalar_cons)	,target	:: p_dyn	,p_stat		,p_stat_old	,dp_stat_dt	,p_int, dT_dt, T_int, rho_int, rho_old	
+	type(field_scalar_cons)	,target	:: p_dyn	,p_stat		,p_stat_old	,dp_stat_dt	,p_int, T_int, rho_int, rho_old	
 	type(field_scalar_cons)	,target	:: div_v	,div_v_int	,ddiv_v_dt	,H	, H_old, R
 	type(field_scalar_cons)	,target	:: E_f_int
 	type(field_vector_cons)	,target	:: v_int, Y_int, Y_old
@@ -39,15 +39,16 @@ module fds_low_mach_solver_class
 	type(field_vector_flow)	,target	:: v_f, v_f_old	
 
 	real(dkind)	,dimension(:)	,allocatable	:: concs
-	!$omp threadprivate(concs)
+	real(dkind)	,dimension(:)	,allocatable	:: Y_rho_int
+	!$omp threadprivate(concs,Y_rho_int)
 
 	real(dkind)	,dimension(:)	,allocatable	:: farfield_velocity_array, flame_front_coords
 	integer	:: flame_loc_unit, flame_structure_unit
 
 	type subgrid 
         real(dkind), dimension(:,:,:), allocatable :: cells
-    end type   	
-	
+    end type
+
 	type fds_solver
 		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag
 		real(dkind)		:: courant_fraction
@@ -72,9 +73,9 @@ module fds_low_mach_solver_class
 		type(computational_mesh_pointer)			:: mesh
 		type(boundary_conditions_pointer)			:: boundary
 
-		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, dT_dt			, p				, p_int			, v_s			, mol_mix_conc
+		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mol_mix_conc
 		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff	, E_f_int		, h_s			, gamma
-		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_old			, R			
+		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_old			, R
 		type(field_scalar_cons_pointer)	:: nu		, kappa
 		type(field_scalar_flow_pointer)	:: F_a		, F_b
 		
@@ -113,6 +114,8 @@ module fds_low_mach_solver_class
 		procedure	,private	:: V_cycle
 		procedure	,private	:: perturb_velocity_field
 		procedure	,private	:: stabilizing_inlet
+		procedure	,private	:: stabilizing_inlet_1D
+		procedure	,private	:: write_data_table
 		procedure	,private	:: igniter
 		procedure				:: solve_problem
 		procedure				:: calculate_time_step
@@ -211,9 +214,6 @@ contains
 		call manager%create_scalar_field(dp_stat_dt	,'pressure_static_change'				,'dp_stat_dt')
 		constructor%dp_stat_dt%s_ptr				=> dp_stat_dt	
 	
-		call manager%create_scalar_field(dT_dt,'temperature_change','dT_dt')
-		constructor%dT_dt%s_ptr						=> dT_dt
-		
 		call manager%create_scalar_field(rho_int	,'density_interm'						,'rho_int')
 		constructor%rho_int%s_ptr				=> rho_int
 		call manager%create_scalar_field(rho_old	,'density_old'							,'rho_old')
@@ -370,10 +370,33 @@ contains
 
 		cons_utter_loop	= manager%domain%get_local_utter_cells_bounds()	
 		cons_inner_loop = manager%domain%get_local_inner_cells_bounds()	
-
+		flow_inner_loop	= manager%domain%get_local_inner_faces_bounds()	
+		
 		problem_data_io				= data_io_c(manager,calculation_time)									
 		
 		call problem_data_io%input_all_data()
+		
+		do dim = 1, dimensions		
+
+			loop = flow_inner_loop
+
+			do dim1 = 1,dimensions
+				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))
+			end do
+
+			do k = loop(3,1),loop(3,2)
+			do j = loop(2,1),loop(2,2) 
+			do i = loop(1,1),loop(1,2)
+			
+				do dim1 = 1, dimensions
+					constructor%v_f%v_ptr%pr(dim1)%cells(dim,i,j,k) = 0.5_dkind * (constructor%v%v_ptr%pr(dim1)%cells(i,j,k) + constructor%v%v_ptr%pr(dim1)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) )
+				end do			
+			
+			end do
+			end do
+			end do
+				
+		end do
 		
 		if(problem_data_io%get_load_counter() == 1) then
 			call problem_data_io%add_io_scalar_cons_field(constructor%p_dyn)
@@ -426,7 +449,9 @@ contains
 
 		!$omp parallel
 		allocate(concs(species_number))
-		concs = 0.0_dkind
+		allocate(Y_rho_int(species_number))
+		concs		= 0.0_dkind
+		Y_rho_int	= 0.0_dkind
 		!$omp end parallel
 		
 		cells_number = cons_inner_loop(1,2) - cons_inner_loop(1,1) + 1
@@ -582,10 +607,10 @@ contains
 		integer	:: droplets_phase_counter, particles_phase_counter
 		integer	:: specie
 
-		logical	:: perturbed_velocity_field, stabilizing_inlet, ignite
+		logical	:: perturbed_velocity_field, stabilizing_inlet, ignite, stabilized
 		
 		perturbed_velocity_field	= .false.
-		stabilizing_inlet			= .false.
+		stabilizing_inlet			= .true.
 		ignite						= .false.
 		
 		this%time = this%time + this%time_step		
@@ -645,7 +670,17 @@ contains
 
 		call this%calculate_time_step()
 		
-		if (stabilizing_inlet) call this%stabilizing_inlet(this%time)
+!		call this%chem_kin_solver%write_chemical_kinetics_table('15_pcnt_H2-Air_table(T).dat')
+
+		if (stabilizing_inlet) then
+			call this%stabilizing_inlet_1D(this%time, stabilized)
+			if (stabilized) then
+!				call this%chem_kin_solver%write_chemical_kinetics_table('29.5_pcnt_H2-Air_table(T).dat')
+!				call this%write_data_table('29.5_pcnt_H2-Air_initials.dat')
+				stop
+			end if
+		end if
+		
 		
 		!call this%state_eq%check_conservation_laws()
 
@@ -656,7 +691,6 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		
 		real(dkind)	:: B_r, flux_left, flux_right, phi_loc, phi_up, r, s
-		real(dkind)	,dimension(:)	,allocatable	:: Y_rho_int
 		real(dkind)	:: spec_summ
 		
 		real(dkind)	,dimension(3)	:: cell_size		
@@ -679,9 +713,7 @@ contains
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
-		
-		allocate(Y_rho_int(species_number))
-		
+
 		associate (	rho				=> this%rho%s_ptr			, &
 					rho_int			=> this%rho_int%s_ptr		, &
 					v_f				=> this%v_f%v_ptr			, &
@@ -693,7 +725,7 @@ contains
 					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 					
-			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,Y_rho_int,rhs,flux_right,flux_left,lame_coeffs) , &
+			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,rhs,flux_right,flux_left,lame_coeffs) , &
 			!$omp& firstprivate(this) , &
 			!$omp& shared(v_f,Y_prod_diff,Y_prod_chem,Y,Y_old,Y_int,rho,rho_old,rho_int,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,time_step)					
 			!$omp do collapse(3) schedule(guided)	
@@ -830,7 +862,7 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 	
-		real(dkind)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, mixture_cp_dT, dp_dt, D_sum, P_sum, U_sum, div_sum
+		real(dkind)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, dp_dt, D_sum, P_sum, U_sum, div_sum, average_molar_mass, mol_mix_conc
 		
 		real(dkind)					:: cell_volume
 		real(dkind)	,dimension(3)	:: cell_size, cell_surface_area
@@ -861,12 +893,10 @@ contains
 		
 		associate (	div_v_int		=> this%div_v_int%s_ptr		, &
 					T				=> this%T%s_ptr				, &
-					dT_dt			=> this%dT_dt%s_ptr			, &
 					rho				=> this%rho%s_ptr			, &
 					p_stat			=> this%p_stat%s_ptr		, &
 					gamma			=> this%gamma%s_ptr			, &
 					h_s				=> this%h_s%s_ptr			, &
-					mol_mix_conc	=> this%mol_mix_conc%s_ptr	, &
 					dp_stat_dt		=> this%dp_stat_dt%s_ptr	, &
 					v_f				=> this%v_f%v_ptr			, &
 					Y				=> this%Y%v_ptr				, &
@@ -878,6 +908,7 @@ contains
 					E_f_prod_visc	=> this%E_f_prod_visc%s_ptr	, &
 					E_f_prod_diff	=> this%E_f_prod_diff%s_ptr	, &	
 					E_f_prod_droplets	=> this%E_f_prod_droplets, &
+					thermo			=> this%thermo%thermo_ptr	, &
 					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 
@@ -897,9 +928,9 @@ contains
 			
 		!	print *, '2', div_v_int%cells(50,20,1),T%cells(50,20,1),D_sum,P_sum
 			
-			!$omp parallel default(none)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,mixture_cp_dT,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs) , &
+			!$omp parallel default(none)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs, average_molar_mass, mol_mix_conc) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(D_sum,P_sum,U_sum,div_v_int,p_stat,dp_stat_dt,v_f,h_s,E_f_prod_visc,E_f_prod_heat,E_f_prod_diff,E_f_prod_chem,Y_prod_diff,Y_prod_chem,T,dT_dt,Y,rho,mol_mix_conc,energy_source,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,iter)					
+			!$omp& shared(D_sum,P_sum,U_sum,div_v_int,p_stat,dp_stat_dt,v_f,h_s,E_f_prod_visc,E_f_prod_heat,E_f_prod_diff,E_f_prod_chem,Y_prod_diff,Y_prod_chem,T,Y,rho,energy_source,bc,thermo,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh)					
 			!$omp do collapse(3) schedule(guided)	reduction(+:D_sum,P_sum)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -935,20 +966,18 @@ contains
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)	![J/m^3/s]
 					!end if
 
-					concs = 0.0_dkind
-					mixture_cp = 0.0
+					average_molar_mass = 0.0_dkind
 					do spec = 1,species_number
-						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dkind) then
-							mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec)	*Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
-							concs(spec)		= Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec) * mol_mix_conc%cells(i,j,k)
-						end if
-					end do				
-					
-				!	if(mesh%mesh(1,i,j,k) <= mesh%mesh(1,1,j,k) + 4.0e-04_dkind) then
-					if ((i-128.5)**2 + (j-25)**2 < 128) then
-				!		div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) + energy_source * 1.0e+10 * this%time_step *  rho%cells(i,j,k) !* cell_size(1) ! * 4.0_dkind * Pi * mesh%mesh(1,i,j,k) * mesh%mesh(1,i,j,k)
-					end if
-						
+						average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k) / thermo%molar_masses(spec)
+					end do
+				
+					mol_mix_conc		= 1.0_dkind / average_molar_mass
+
+					concs = 0.0_dkind
+					do spec = 1,species_number
+						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mol_mix_conc / thermo%molar_masses(spec)
+					end do		
+
 					if (this%additional_droplets_phases_number /= 0) then
 						do droplets_phase_counter = 1, this%additional_droplets_phases_number
 							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + E_f_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)	![J/m^3/s]
@@ -987,16 +1016,14 @@ contains
 						continue
 					end do	
 				
-					div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * h_s%cells(i,j,k))
-					mixture_cp		= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
-					mixture_cp_dT	= this%thermo%thermo_ptr%calculate_mixture_cp_dT(T%cells(i,j,k),concs)
+					mixture_cp				= thermo%calculate_mixture_cp(T%cells(i,j,k), concs)
 					
-					div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) - 1.0_dkind/mixture_cp*mixture_cp_dT*dT_dt%cells(i,j,k)	
+					div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)
 					
 					do spec = 1, species_number
 					
-						specie_enthalpy = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec))*T%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
-								
+						specie_enthalpy = (thermo%calculate_specie_enthalpy(T%cells(i,j,k),spec) - thermo%calculate_specie_enthalpy(298.15_dkind,spec))  / thermo%molar_masses(spec)
+					
 						do dim = 1, dimensions
 					
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
@@ -1023,28 +1050,27 @@ contains
 								end if
 							end if					
 
-							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  h_s%cells(i,j,k))) * &
+							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * &
 																			  (	-  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* lame_coeffs(dim,3) * (flux_right	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)	&
 																					 -	v_f%pr(dim)%cells(dim,i,j,k)									* lame_coeffs(dim,1) * (flux_left	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)) / lame_coeffs(dim,2))
 							continue													 
 						end do							
 						
 						
-						if (this%diffusion_flag) 	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * h_s%cells(i,j,k))) * &
+						if (this%diffusion_flag) 	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * &
 																		  (	Y_prod_diff%pr(spec)%cells(i,j,k))
 
-						if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  h_s%cells(i,j,k))) * &
+						if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * &
 																		  (	Y_prod_chem%pr(spec)%cells(i,j,k))
 					end do
 					
 					D_sum = D_sum + div_v_int%cells(i,j,k) * cell_volume
-					P_sum = P_sum + (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * h_s%cells(i,j,k)))* cell_volume 
+					P_sum = P_sum + (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * cell_volume 
 				end if
 			end do
 			end do
 			end do
 			!$omp end do
-
 			
 			!$omp do collapse(3) schedule(guided)	reduction(+:U_sum)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -1084,16 +1110,19 @@ contains
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)			
 				if(bc%bc_markers(i,j,k) == 0) then	
 					
-					mixture_cp = 0.0
-					do spec = 1, species_number
-						mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),spec)*Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
+					average_molar_mass = 0.0_dkind
+					do spec = 1,species_number
+						average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k) / thermo%molar_masses(spec)
 					end do
 
-
+					mol_mix_conc	= 1.0_dkind / average_molar_mass				
+				
+					mixture_cp		= thermo%calculate_mixture_cp(T%cells(i,j,k), concs)
+				
 					dp_stat_dt%cells(i,j,k) = (D_sum - U_sum)/ P_sum
 						
 					if (this%all_Neumann_flag) then	
-						div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * h_s%cells(i,j,k)))* dp_stat_dt%cells(i,j,k)
+						div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dkind / p_stat%cells(i,j,k) - 1.0_dkind / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc))* dp_stat_dt%cells(i,j,k)
 					end if
 
 				end if
@@ -1103,7 +1132,7 @@ contains
 			!$omp end do
 			!$omp end parallel
 
-			
+		
 			iter = iter + 1
 		!	print *, '2', div_v_int%cells(50,20,1),T%cells(50,20,1),D_sum,P_sum
 			
@@ -1196,7 +1225,7 @@ contains
 					sub_R			=> this%sub_R				, &
 					sub_E			=> this%sub_E				, &
 					sub_E_old		=> this%sub_E_old)
-						
+
 		
 			ddiv_v_dt%cells	= 0.0_dkind	
 			sum_ddiv_v_dt	= 0.0_dkind
@@ -1204,8 +1233,9 @@ contains
 			F_a%cells		= 0.0_dkind		
 			F_b%cells		= 0.0_dkind		
 			cells_number	= 0.0_dkind
-			
+
 			grad_F_a_summ	= 0.0_dkind
+
 			
 			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity,sign,bound_number,bound_number1,bound_number2,bound_number3,plus,boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3,bc_coeff) , &
 			!$omp& firstprivate(this) , &
@@ -1253,10 +1283,10 @@ contains
 				end if
 			end do
 			end do
-			end do		
+			end do	
 			!$omp end do
 
-			if (this%all_Neumann_flag) then	
+			if (this%all_Neumann_flag) then
 			!$omp do collapse(3) schedule(guided)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -1291,7 +1321,6 @@ contains
 
 					vorticity(dim,i,j,k) = vorticity(dim,i,j,k) / cell_size(1) 
 					if(abs(vorticity(dim,i,j,k)) < 1e-03) vorticity(dim,i,j,k) = 0.0_dkind
-					
 				end do
 				
 				
@@ -1585,7 +1614,7 @@ contains
 			end do		
 			!$omp end do			
 			end if
-			
+
 			!$omp end parallel
 			
 			overall_poisson_iteration = 0			
@@ -1632,6 +1661,7 @@ contains
 														/	(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_int%cells(i,j,k))	&
 														*	(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	!/ cell_size(1)
 							end if
+
 						end if
 					end do
 					end do
@@ -2523,10 +2553,10 @@ contains
 		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
 		integer	,dimension(3,2)	:: loop
 		
+		integer					:: plus, sign, bound_number
 		character(len=20)		:: boundary_type_name
 		
-		integer	:: sign, bound_number
-		integer :: i,j,k,dim,dim1,dim2,spec,plus
+		integer :: i,j,k,dim,dim1,dim2,spec
 	
 		dimensions		= this%domain%get_domain_dimensions()
 		
@@ -2602,7 +2632,7 @@ contains
 										!	if (dim2 /= dim) then
 										!		v_f%pr(dim2)%cells(dim2,i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 2.0_dkind*v_f%pr(dim2)%cells(dim2,i,j,k) - v_f%pr(dim2)%cells(dim2,i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3))
 										!	end if
-										!end do	
+										!end do
 								end select
 							end if
 						end do
@@ -2702,7 +2732,6 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		
 		real(dkind)	:: rhs, B_r, flux_left, flux_right, phi_loc, phi_up, r, s
-		real(dkind)	,dimension(:)	,allocatable	:: Y_rho_int
 		real(dkind)	:: spec_summ
 		
 		real(dkind), dimension (3,3):: lame_coeffs
@@ -2725,8 +2754,6 @@ contains
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
-		allocate(Y_rho_int(species_number))
-		
 		associate (	rho				=> this%rho%s_ptr			, &
 					rho_int			=> this%rho_int%s_ptr		, &
 					v_f				=> this%v_f%v_ptr			, &
@@ -2739,7 +2766,7 @@ contains
 					bc				=> this%boundary%bc_ptr)
 
 					
-			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,Y_rho_int,rhs,flux_right,flux_left,lame_coeffs) , &
+			!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,rhs,flux_right,flux_left,lame_coeffs) , &
 			!$omp& firstprivate(this) , &
 			!$omp& shared(v_f,Y_prod_diff,Y_prod_chem,Y,Y_old,Y_int,rho,rho_old,rho_int,bc,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,mesh,time_step)					
 			!$omp do collapse(3) schedule(guided)			
@@ -2851,6 +2878,153 @@ contains
 
 	end subroutine	
 
+	
+	subroutine stabilizing_inlet_1D(this,time,stabilized)
+		class(fds_solver)	,intent(inout)	:: this
+		real(dkind)			,intent(in)		:: time
+		logical				,intent(out)	:: stabilized
+		
+		real(dkind)	,dimension(3)	:: cell_size		
+		
+		real(dkind)					:: max_val, left_val, right_val, flame_velocity, flame_surface_length, surface_factor
+		real(dkind)					:: a, b 
+		real(dkind)					:: time_diff, time_delay, time_stabilization
+		real(dkind), save			:: previous_flame_location = 0.0_dkind, current_flame_location = 0.0_dkind, farfield_velocity = 0.0_dkind
+		real(dkind), save			:: previous_time = 0.0_dkind, current_time = 0.0_dkind
+		integer		,save			:: correction = 0, counter = 0
+		integer						:: flame_front_index
+		character(len=200)			:: file_name
+		
+		
+		integer	:: dimensions, species_number
+		integer	,dimension(3,2)	:: cons_inner_loop
+
+		real(dkind)				:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
+		integer					:: lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2 
+		
+		integer :: CO_index, H2O2_index, HO2_index
+		integer	:: bound_number,sign
+		integer :: i,j,k,plus,dim,dim1,spec, lp_index,lp_index2,lp_index3
+		
+		
+		character(len=20)		:: boundary_type_name
+		
+		dimensions		= this%domain%get_domain_dimensions()
+		species_number	= this%chem%chem_ptr%species_number
+		
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
+				
+		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+
+!		CO_index	= this%chem%chem_ptr%get_chemical_specie_index('CO')
+!		HO2_index	= this%chem%chem_ptr%get_chemical_specie_index('HO2')
+		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
+		
+		stabilized = .false.
+		
+		associate (	v				=> this%v%v_ptr				, &
+					v_f				=> this%v_f%v_ptr			, &
+					T				=> this%T%s_ptr				, &
+					Y				=> this%Y%v_ptr				, &
+					bc				=> this%boundary%bc_ptr)
+
+	!	time_delay			= 1e-04_dkind			
+	!	time_diff			= 5e-05_dkind
+	!	time_stabilization	= 5e-04_dkind			
+					
+		time_delay			= 1e-05_dkind			
+		time_diff			= 1e-05_dkind
+		time_stabilization	= 5e-06_dkind			
+		
+		if ( time > (correction+1)*(time_diff) + time_delay) then			
+					
+			current_time = time
+		
+			!# 1D front tracer
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+				max_val = 0.0_dkind
+				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
+					if(bc%bc_markers(i,j,k) == 0) then	
+					
+			 			!! Grad temp
+			 			!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
+			 			!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
+			 			!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+			 			!	flame_front_index = i
+			 			!end if
+					
+			 			! max H
+			 			if (abs(Y%pr(HO2_index)%cells(i,j,k)) > max_val) then
+			 				max_val = Y%pr(HO2_index)%cells(i,j,k)
+			 				flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+			 				flame_front_index = i
+			 			end if					
+					
+			 			! max CO
+			 			!if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_val) then
+			 			!	max_val = Y%pr(CO_index)%cells(i,j,k)
+			 			!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+			 			!	flame_front_index = i
+			 			!end if
+				
+					end if
+				end do
+			end do
+			end do
+	
+			!left_val	= T%cells(flame_front_index,1,1) - T%cells(flame_front_index-2,1,1)
+			!right_val	= T%cells(flame_front_index+2,1,1) - T%cells(flame_front_index,1,1)
+			
+			!left_val	= Y%pr(CO_index)%cells(flame_front_index-1,1,1)
+			!right_val	= Y%pr(CO_index)%cells(flame_front_index+1,1,1)	
+			 
+			left_val	= Y%pr(HO2_index)%cells(flame_front_index-1,1,1)
+			right_val	= Y%pr(HO2_index)%cells(flame_front_index+1,1,1)				 
+			
+			a = (right_val + left_val - 2.0_dkind * max_val)/2.0_dkind/cell_size(1)**2
+			b = (max_val - left_val)/cell_size(1) - a*(2.0_dkind*flame_front_coords(1) - cell_size(1))
+			
+			current_flame_location = -b/2.0_dkind/a
+
+			flame_velocity = 0.0_dkind
+			if(correction == 0) then
+				farfield_velocity = farfield_velocity_array(1)
+				previous_flame_location = current_flame_location
+			end if
+			
+			if( (correction /= 0).and.(current_flame_location /=  previous_flame_location) )then 
+				flame_velocity = (current_flame_location - previous_flame_location)/(current_time - previous_time)
+
+		!		farfield_velocity_array = max(farfield_velocity_array - 0.25_dkind*flame_velocity,0.0_dkind)
+				
+				farfield_velocity_array = farfield_velocity_array - 0.25_dkind*flame_velocity
+				
+				
+				write (flame_loc_unit,'(4E14.6)') time, current_flame_location, flame_velocity, farfield_velocity_array(1)
+				
+				previous_flame_location = current_flame_location
+				previous_time = current_time
+				
+				if( (correction /= 0).and.(abs(flame_velocity) < 1e-05))then 
+					counter = counter + 1
+				end if
+				
+			end if
+
+			if(counter > 10) then
+				stabilized = .true.
+			end if
+			
+			correction = correction + 1
+			
+		end if	
+			
+		end associate
+
+	end subroutine	
+	
+	
 	subroutine stabilizing_inlet(this,time)
 		class(fds_solver)	,intent(inout)	:: this
 		real(dkind)			,intent(in)		:: time
@@ -2900,7 +3074,7 @@ contains
 					Y				=> this%Y%v_ptr				, &
 					bc				=> this%boundary%bc_ptr)
 
-		time_delay	= 5e-04_dkind			
+		time_delay	= 1e-04_dkind			
 		time_diff	= 5e-05_dkind
 					
 		if ( time > (correction+1)*(time_diff) + time_delay) then			
@@ -3158,7 +3332,7 @@ contains
 		!	print *, flame_front_coords
 		!	pause
 			
-				farfield_velocity_array = farfield_velocity_array - 0.5_dkind*flame_velocity
+				farfield_velocity_array = farfield_velocity_array - 0.05_dkind*flame_velocity
 				
 		!		surface_factor =  flame_surface_length / (cell_size(1) * (cons_inner_loop(2,2)- cons_inner_loop(2,1)))
 		!		farfield_velocity_array = farfield_velocity * surface_factor				
@@ -3269,7 +3443,7 @@ contains
 
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
+											v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
 											else
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if
@@ -3287,7 +3461,7 @@ contains
 												Y_int%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= Y_int%pr(spec)%cells(i,j,k) !Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 												Y_old%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= Y_old%pr(spec)%cells(i,j,k) !Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 											end do
-											
+
 										else
 											rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = rho%cells(i,j,k)
 											do spec = 1, species_number
@@ -3321,7 +3495,7 @@ contains
 										end if
 										
 										farfield_velocity		=  farfield_velocity_array(j)
-										
+
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  farfield_velocity
@@ -3486,8 +3660,8 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
 				velocity_value		= 0.0_dkind
 				do dim = 1,dimensions
-					velocity_value	= velocity_value + abs(v%pr(dim)%cells(i,j,k))/(cell_size(1))		!#L1 norm
-				!	velocity_value	= velocity_value + (v%pr(dim)%cells(i,j,k)/(cell_size(1)))**2		!#L2 norm
+					velocity_value	= velocity_value + abs(v%pr(dim)%cells(i,j,k))/(cell_size(1))			!#L1 norm
+				!	velocity_value	= velocity_value + (v%pr(dim)%cells(i,j,k)/minval(cell_size(1)))**2		!#L2 norm
 				end do
 
 				if((velocity_value > 0.0_dkind).or.(abs(div_v_int%cells(i,j,k)) > 0.0_dkind)) then
@@ -3519,13 +3693,13 @@ contains
 					if (this%diffusion_flag)  then
 						do spec = 1, species_number
 							if (D%pr(spec)%cells(i,j,k) > 1e-10_dkind) then
-								delta_t_interm1x = 1.0_dkind/4.0_dkind/(D%pr(spec)%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+								delta_t_interm1x = 1.0_dkind/2.5_dkind/(D%pr(spec)%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
 								if(delta_t_interm1x < delta_t_interm1) delta_t_interm1 = delta_t_interm1x
 							end if
 						end do
 					end if 
-					if (this%viscosity_flag)	delta_t_interm2 = 1.0_dkind/4.0_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
-					if (this%heat_trans_flag)	delta_t_interm3 = 1.0_dkind/4.0_dkind/(kappa%cells(i,j,k)/1000.0_dkind/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+					if (this%viscosity_flag)	delta_t_interm2 = 1.0_dkind/2.5_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+					if (this%heat_trans_flag)	delta_t_interm3 = 1.0_dkind/2.5_dkind/(kappa%cells(i,j,k)/1000.0_dkind/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
 					if (min(delta_t_interm1,delta_t_interm2) < time_step2) then
 						time_step2 = min(delta_t_interm1,delta_t_interm2)
 					end if
@@ -4327,6 +4501,96 @@ contains
 		end associate
 		
 	end subroutine	
+	
+	subroutine write_data_table(this,table_file)
+		class(fds_solver)	,intent(inout)  :: this	
+		character(len=*)	,intent(in)		:: table_file
+		
+		real(dkind)			:: max_T, min_T, max_grad_T, lf
+		integer				:: max_grad_index
+		
+		character(len=100)						:: name_string
+		character(len=10)						:: fmt
+		real(dkind)	,dimension(:), allocatable	:: temp
+
+		
+		integer	:: dimensions, species_number
+		integer	,dimension(3,2)	:: cons_inner_loop
+		real	,dimension(3)	:: cell_size
+		
+		integer	:: io_unit
+		integer :: table_size
+		integer	:: i, spec, dim
+		integer	:: ierr
+		
+		open(newunit = io_unit	, file = trim(task_setup_folder) // trim(fold_sep) // trim(table_file), status = 'replace'	, form = 'formatted') 	
+		
+		dimensions		= this%domain%get_domain_dimensions()
+		species_number	= this%chem%chem_ptr%species_number
+		
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
+				
+		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		
+		allocate(temp(species_number+dimensions+3))
+		
+		associate (	rho				=> this%rho%s_ptr			, &
+					T				=> this%T%s_ptr				, &
+					Y				=> this%Y%v_ptr				, &
+					v				=> this%v%v_ptr				, &
+					v_f				=> this%v_f%v_ptr			, &
+					mesh			=> this%mesh%mesh_ptr		, &
+					bc				=> this%boundary%bc_ptr)
+
+		max_grad_T = 0.0	
+		max_T = 0.0
+		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+			if(abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1) > max_grad_T) then
+				max_grad_T = abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1)
+				max_grad_index = i
+			end if
+			if(T%cells(i,1,1) > max_T)	max_T = T%cells(i,1,1)
+		end do
+
+		min_T = 300.0
+		
+		lf = (max_T-min_T)/max_grad_T
+		
+		name_string = 'x'
+		name_string = trim(name_string) // '  ' // trim(T%name_short)
+		name_string = trim(name_string) // '  ' // trim(rho%name_short)
+
+		do dim = 1,dimensions
+			name_string = trim(name_string) // '  ' // trim(v%pr(dim)%name_short)
+		end do			
+		
+		do spec = 1,species_number
+			name_string = trim(name_string) // '  ' // trim(Y%pr(spec)%name_short)
+		end do		
+		
+		write(fmt,'(A,I2,A)') '(', species_number+dimensions+3, 'E14.7)'
+		
+		write(io_unit,'(A)',iostat = ierr)	name_string
+		
+		do i = max_grad_index-10*lf/cell_size(1), max_grad_index+10*lf/cell_size(1)
+			temp(1) = mesh%mesh(1,i,1,1)
+			temp(2) = T%cells(i,1,1)
+			temp(3) = rho%cells(i,1,1)
+			do dim = 1,dimensions
+				temp(dim+3) = v%pr(dim)%cells(i,1,1)
+			end do
+			do spec = 1,species_number
+				temp(spec+dimensions+3) = Y%pr(spec)%cells(i,1,1)
+			end do			
+			write(io_unit,fmt,iostat = ierr) temp
+		end do	
+			
+		print *, max_grad_index, lf 
+			
+		end associate
+		
+	end subroutine	
+	
 	
 	pure function get_time_step(this)
 		real(dkind)						:: get_time_step
