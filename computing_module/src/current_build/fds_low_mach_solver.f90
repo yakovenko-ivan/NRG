@@ -3332,7 +3332,7 @@ contains
 		!	print *, flame_front_coords
 		!	pause
 			
-				farfield_velocity_array = farfield_velocity_array - 0.05_dkind*flame_velocity
+				farfield_velocity_array = farfield_velocity_array - 0.25_dkind*flame_velocity
 				
 		!		surface_factor =  flame_surface_length / (cell_size(1) * (cons_inner_loop(2,2)- cons_inner_loop(2,1)))
 		!		farfield_velocity_array = farfield_velocity * surface_factor				
@@ -3693,13 +3693,13 @@ contains
 					if (this%diffusion_flag)  then
 						do spec = 1, species_number
 							if (D%pr(spec)%cells(i,j,k) > 1e-10_dkind) then
-								delta_t_interm1x = 1.0_dkind/2.5_dkind/(D%pr(spec)%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+								delta_t_interm1x = 1.0_dkind/4.0_dkind/(D%pr(spec)%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
 								if(delta_t_interm1x < delta_t_interm1) delta_t_interm1 = delta_t_interm1x
 							end if
 						end do
 					end if 
-					if (this%viscosity_flag)	delta_t_interm2 = 1.0_dkind/2.5_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
-					if (this%heat_trans_flag)	delta_t_interm3 = 1.0_dkind/2.5_dkind/(kappa%cells(i,j,k)/1000.0_dkind/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+					if (this%viscosity_flag)	delta_t_interm2 = 1.0_dkind/4.0_dkind/(nu%cells(i,j,k)/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
+					if (this%heat_trans_flag)	delta_t_interm3 = 1.0_dkind/4.0_dkind/(kappa%cells(i,j,k)/1000.0_dkind/rho%cells(i,j,k))/(dimensions/cell_size(1)/cell_size(1))
 					if (min(delta_t_interm1,delta_t_interm2) < time_step2) then
 						time_step2 = min(delta_t_interm1,delta_t_interm2)
 					end if
