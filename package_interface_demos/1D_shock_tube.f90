@@ -53,14 +53,11 @@ program package_interface
 	
 	logical	:: stop_flag
 
-	integer	:: task1, task2, task3, task4
+	integer	:: task1
 	integer	:: ierr
 	
 	ierr = getcwd(initial_work_dir)
 	do task1 = 1, 2
-	do task2 = 1, 3	
-	do task3 = 1, 4
-	do task4 = 1, 4
 	
 		work_dir = ''
 		
@@ -72,57 +69,11 @@ program package_interface
 				work_dir = trim(work_dir) // 'CABARET'
 				solver_name = 'CABARET'
 		end select
-		
-		ierr = system('mkdir '// work_dir)		
-		
-		select case(task2)
-			case(1)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'P_high_2atm'
-				P_high	 = 2.0*101325.0_dkind
-			case(2)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'P_high_10atm'
-				P_high	 = 10.0*101325.0_dkind
-			case(3)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'P_high_20atm'
-				P_high	 = 20.0*101325.0_dkind
-		end select
-
-		ierr = system('mkdir '// work_dir)		
-		
-		select case(task3)
-			case(1)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_4.0e-04'
-				delta_x	 = 4.0e-04_dkind
-			case(2)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_2.0e-04'
-				delta_x	 = 2.0e-05_dkind
-			case(3)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_1.0e-04'
-				delta_x	 = 1.0e-04_dkind
-			case(4)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_1.0e-05'
-				delta_x	 = 1.0e-05_dkind
-		end select
-		
-		ierr = system('mkdir '// work_dir)
-	
-		select case(task4)
-			case(1)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'CFL_0.75'
-				CFL_coeff	 = 0.75_dkind
-			case(2)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'CFL_0.5'
-				CFL_coeff	 = 0.5_dkind
-			case(3)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'CFL_0.25'
-				CFL_coeff	 = 0.25_dkind
-			case(4)
-				work_dir = trim(work_dir) // trim(fold_sep) //  'CFL_0.1'
-				CFL_coeff	 = 0.1_dkind
-		end select		
-		
+		work_dir = work_dir // 'STEP=4.0e-04CFL=0.4'
 		ierr = system('mkdir '// work_dir)
 
+		delta_x	 = 4.0e-04_dkind
+		CFL_coeff	 = 0.5_dkind
 		ierr = system('cp -r .'//trim(fold_sep) // trim(task_setup_folder) // ' .' // trim(fold_sep) // trim(work_dir) // trim(fold_sep) // trim(task_setup_folder))
 		ierr = chdir('.' //trim(fold_sep) // work_dir)
 
@@ -192,15 +143,14 @@ program package_interface
 										data_output_folder	= 'data_output')
 
 		!****************************** Setting initial conditions *************************************
-
-			! Ambient pressure and temperature
-			p%cells(:,:,:)								= 1.0_dkind*101325.0_dkind
-			T%cells(:,:,:)								= 300.0_dkind
-
-			! High-pressure chamber
-!			p%cells(:((0.25_dkind)/delta_x),:,:)			= 10.0_dkind*101325.0_dkind !P_high
-			v%pr(1)%cells(:((0.5_dkind)/delta_x),:,:)			    = 2000
-			v%pr(1)%cells(:((0.25_dkind)/delta_x),:,:)			= 300
+			! Ambient Temperature
+			T%cells(:,:,:) = 300.0_dkind
+			! Pressure in chamber
+			p%cells(:,:,:) = 1.0_dkind*101325.0_dkind
+			p%cells(:((0.25_dkind)/delta_x),:,:) = 2.0_dkind*101325.0_dkind
+			! Velocity
+			v%pr(1)%cells(:((0.5_dkind)/delta_x)+1,:,:) = 0
+			v%pr(1)%cells(:((0.25_dkind)/delta_x),:,:) = 0
 			! Velocity
 !			v%pr(1)%cells(:,:,:) = 300.0_dkind
 !			v%pr(1)%cells(:((0.25_dkind)/delta_x),:,:) = 2000.0_dkind
@@ -211,7 +161,7 @@ program package_interface
 			
 			! Gaseous mixture in low-pressure chamber (Test mixture)
 			!Y%pr(1)%cells(((0.5_dkind)/delta_x)+1:,:,:)	= 1.0_dkind					! Hydrogen
-			!Y%pr(2)%cells(((0.5_dkind)/delta_x)+1:,:,:)	= 0.5_dkind					! Oxygen
+!			Y%pr(2)%cells(((0.5_dkind)/delta_x)+1:,:,:)	= 0.5_dkind					! Oxygen
 			!Y%pr(3)%cells(((0.5_dkind)/delta_x)+1:,:,:)	= 1.881_dkind				! Nitrogen
 			!
 			! Gaseous mixture in high-pressure chamber (Driver gas)
@@ -262,10 +212,7 @@ program package_interface
 		call problem_data_save%save_all_data(0.0_dkind,stop_flag,make_save = .true.)
 	
 		ierr = chdir(initial_work_dir)
-		
-	end do
-	end do
-	end do
+
 	end do	
 		
 	continue
