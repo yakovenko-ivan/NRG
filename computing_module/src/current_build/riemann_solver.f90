@@ -70,6 +70,9 @@ contains
                 ! Checking number of iterations
                 if (iter>45000) then
                     print *, 'The problem can not be solved using this method!'
+                    print *, 'rho1 =', rho1, 'p1 =', p1, 'u1=', u1, &
+                            'rho4 =', rho4, 'p4 =', p4, 'u4=', u4, &
+                            'rho =', rrho, 'p =', rp, 'u=', ru
                     exit
                 end if
             end do

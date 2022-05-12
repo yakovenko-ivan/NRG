@@ -55,9 +55,9 @@ program package_interface
 
 	integer	:: task1
 	integer	:: ierr
-	
+	character*1  evalue
 	ierr = getcwd(initial_work_dir)
-	do task1 = 1, 2
+	do task1 = 1, 3
 	
 		work_dir = ''
 		
@@ -68,8 +68,14 @@ program package_interface
 			case(2)
 				work_dir = trim(work_dir) // 'CABARET'
 				solver_name = 'CABARET'
+			case(3)
+				work_dir = trim(work_dir) // 'CABARETM'
+				solver_name = 'CABARETM'
 		end select
-		work_dir = work_dir // 'STEP=4.0e-04CFL=0.4'
+!		character*1  evalue
+		call getenv( 'USE_RIEMANN_MOD', evalue )
+		print *, evalue
+		work_dir =  trim(work_dir) // 'p1=20p2=1dx=4.0e-04CFL=0.5-'
 		ierr = system('mkdir '// work_dir)
 
 		delta_x	 = 4.0e-04_dkind
@@ -147,10 +153,10 @@ program package_interface
 			T%cells(:,:,:) = 300.0_dkind
 			! Pressure in chamber
 			p%cells(:,:,:) = 1.0_dkind*101325.0_dkind
-			p%cells(:((0.25_dkind)/delta_x),:,:) = 2.0_dkind*101325.0_dkind
+			p%cells(:((0.25_dkind)/delta_x),:,:) = 20.0_dkind*101325.0_dkind
 			! Velocity
-			v%pr(1)%cells(:((0.5_dkind)/delta_x)+1,:,:) = 0
-			v%pr(1)%cells(:((0.25_dkind)/delta_x),:,:) = 0
+!			v%pr(1)%cells(:,:,:) = 2000
+!			v%pr(1)%cells(:((0.25_dkind)/delta_x),:,:) = 500
 			! Velocity
 !			v%pr(1)%cells(:,:,:) = 300.0_dkind
 !			v%pr(1)%cells(:((0.25_dkind)/delta_x),:,:) = 2000.0_dkind

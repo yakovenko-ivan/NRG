@@ -586,6 +586,8 @@ contains
 		integer			:: i,j,k,plus,dim,dim1,dim2,spec,iter		
 
 		integer	:: thread
+		character*1  :: use_riemann_mod = '0'
+		call getenv( 'USE_RIEMANN_MOD', use_riemann_mod )
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -1087,12 +1089,6 @@ contains
 							if (( characteristic_speed(1) >= 0.0_dkind ).and.&
 								( characteristic_speed(2) >= 0.0_dkind ).and.&
 								( characteristic_speed(3) >= 0.0_dkind )) then
-								call solve_riemann_problem(&
-										p_f_new%cells(dim,i,j,k), v_f_new%pr(dim)%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k),&
-										p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),&
-										p%cells(i,j,k), v%pr(dim)%cells(i,j,k), rho%cells(i,j,k),&
-										this%time_step&
-								)
 							end if
 					
 							if (( characteristic_speed(1) < 0.0_dkind ).and.&
@@ -1166,12 +1162,20 @@ contains
 							if (( characteristic_speed(1) >= 0.0_dkind ).and.&
 								( characteristic_speed(2) >= 0.0_dkind ).and.&
 								( characteristic_speed(3) >= 0.0_dkind )) then
-								call solve_riemann_problem(&
-											p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
-											p%cells(i,j,k), v%pr(dim)%cells(i,j,k), rho%cells(i,j,k),&
-											p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
-											this%time_step&
-								)
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind * (r_corrected(2) - q_corrected(2)) / G_half
+
+								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
+
+								do dim1 = 1,dimensions
+									if ( dim == dim1 ) then
+										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind * (r_corrected(2) + q_corrected(2))
+									else
+										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v_inv_corrected(dim1,2)
+										if ( characteristic_speed(3) == 0 ) then
+											v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v_f(dim1,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+										end if
+									end if
+								end do
 							end if
 					
 							if (( characteristic_speed(1) < 0.0_dkind ).and.&
@@ -1195,59 +1199,87 @@ contains
 						characteristic_speed(3) = v_f_approx
 
 						if (((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	<	abs(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))) &
-						.and.(	  v%pr(dim)%cells(i,j,k)	>	v_s%cells(i,j,k))) )then 
-						
-							if (characteristic_speed(3) < 0.0_dkind) then
-								rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1) / (v_s%cells(i,j,k)**2)
-							end if
-						
-						end if
-
-						if (((	 v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	 <	  -v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	&
-						.and.	(abs(v%pr(dim)%cells(i,j,k)) < abs(v_s%cells(i,j,k)))))then 
-					
-							v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dkind*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k)) &
-																	*0.5_dkind*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_s%cells(i,j,k))
-		
-							p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_corrected(1))/G_half
-						
-							if( characteristic_speed(3) >= 0.0_dkind ) then
-								rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) + (p_f_new%cells(dim,i,j,k)) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
+						.and.(	  v%pr(dim)%cells(i,j,k)	>	v_s%cells(i,j,k))) )then
+							if(use_riemann_mod == '1') then
+								call solve_riemann_problem(&
+										p_f_new%cells(dim, i, j, k), v_f_new%pr(dim)%cells(dim, i, j, k), rho_f_new%cells(dim, i, j, k), &
+										p%cells(i - I_m(dim, 1), j - I_m(dim, 2), k - I_m(dim, 3)), v%pr(dim)%cells(i - I_m(dim, 1), j - I_m(dim, 2), k - I_m(dim, 3)), rho%cells(i - I_m(dim, 1), j - I_m(dim, 2), k - I_m(dim, 3)), &
+										p%cells(i, j, k), v%pr(dim)%cells(i, j, k), rho%cells(i, j, k), &
+										this%time_step&
+										)
 							else
-								rho_f_new%cells(dim,i,j,k) = (p_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1)) / (v_s%cells(i,j,k)**2)
+								if (characteristic_speed(3) < 0.0_dkind) then
+									rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1) / (v_s%cells(i,j,k)**2)
+								end if
 							end if
-						end if	
+						end if
+						if (((	 v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	 <	  -v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	&
+						.and.	(abs(v%pr(dim)%cells(i,j,k)) < abs(v_s%cells(i,j,k)))))then
+							if(use_riemann_mod == '1') then
+								! noop
+							else
+								v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dkind*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k)) &
+										*0.5_dkind*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_s%cells(i,j,k))
+
+								p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_corrected(1))/G_half
+
+								if( characteristic_speed(3) >= 0.0_dkind ) then
+									rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) + (p_f_new%cells(dim,i,j,k)) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
+								else
+									rho_f_new%cells(dim,i,j,k) = (p_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1)) / (v_s%cells(i,j,k)**2)
+								end if
+							end if
+						end if
 					end if
-					
+
 					!**************************** Higher edge *******************************
-					
+
 					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
 						v_f_approx		= 0.5_dkind*(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
 						v_s_f_approx	= 0.5_dkind*(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			+ v_s%cells(i,j,k))
-				
+
 						characteristic_speed(1) = v_f_approx + v_s_f_approx
 						characteristic_speed(2) = v_f_approx - v_s_f_approx
 						characteristic_speed(3) = v_f_approx
 
 						if (((abs(v%pr(dim)%cells(i,j,k))	<	abs(v_s%cells(i,j,k))) &
 						.and.(	  v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	>	v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))) )then
-							call solve_riemann_problem(&
-									p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
-									p%cells(i,j,k), v%pr(dim)%cells(i,j,k), rho_f_new%cells(dim,i,j,k),&
-									p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
-									this%time_step&
-							)
+							if(use_riemann_mod == '1') then
+								call solve_riemann_problem(&
+										p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
+										p%cells(i,j,k), v%pr(dim)%cells(i,j,k), rho%cells(i,j,k),&
+										p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
+										this%time_step&
+										)
+							else
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind * (r_corrected(2) - q_corrected(2)) / G_half
+
+								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
+
+								do dim1 = 1,dimensions
+									if ( dim == dim1 ) then
+										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind * (r_corrected(2) + q_corrected(2))
+									else
+										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v_inv_corrected(dim1,2)
+										if ( characteristic_speed(3) == 0 ) then
+											v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v_f(dim1,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+										end if
+									end if
+								end do
+							end if
 						end if
 
 						if (((	 v%pr(dim)%cells(i,j,k)	 <	  -v_s%cells(i,j,k))	&
-						.and.	(abs(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) < abs(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))))))then 
-		
-							if( characteristic_speed(3) >= 0.0_dkind ) then
-								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) =  rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
+						.and.	(abs(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) < abs(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))))))then
+							if(use_riemann_mod == '1') then
+								! noop
+							else
+								if( characteristic_speed(3) >= 0.0_dkind ) then
+									rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) =  rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
+								end if
 							end if
-							
-						end if	
-				
+						end if
+
 					end if
 #ifdef OMP						
 					call omp_unset_lock(lock(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
