@@ -21,7 +21,7 @@ module cabaret_solver_class
 
 	use solver_options_class
 
-	use riemann_solver
+	use riemann_solver3
 	implicit none
 
 #ifdef OMP
@@ -1201,11 +1201,11 @@ contains
 						if (((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	<	abs(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))) &
 						.and.(	  v%pr(dim)%cells(i,j,k)	>	v_s%cells(i,j,k))) )then
 							if(use_riemann_mod == '1') then
-								call solve_riemann_problem(&
+								call solve_riemann_problem3(&
 										p_f_new%cells(dim, i, j, k), v_f_new%pr(dim)%cells(dim, i, j, k), rho_f_new%cells(dim, i, j, k), &
 										p%cells(i - I_m(dim, 1), j - I_m(dim, 2), k - I_m(dim, 3)), v%pr(dim)%cells(i - I_m(dim, 1), j - I_m(dim, 2), k - I_m(dim, 3)), rho%cells(i - I_m(dim, 1), j - I_m(dim, 2), k - I_m(dim, 3)), &
 										p%cells(i, j, k), v%pr(dim)%cells(i, j, k), rho%cells(i, j, k), &
-										this%time_step&
+										this%time_step, gamma%cells(i, j, k)&
 										)
 							else
 								if (characteristic_speed(3) < 0.0_dkind) then
@@ -1245,11 +1245,11 @@ contains
 						if (((abs(v%pr(dim)%cells(i,j,k))	<	abs(v_s%cells(i,j,k))) &
 						.and.(	  v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	>	v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))) )then
 							if(use_riemann_mod == '1') then
-								call solve_riemann_problem(&
+								call solve_riemann_problem3(&
 										p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
 										p%cells(i,j,k), v%pr(dim)%cells(i,j,k), rho%cells(i,j,k),&
 										p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
-										this%time_step&
+										this%time_step, gamma%cells(i, j, k)&
 										)
 							else
 								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + 0.5_dkind * (r_corrected(2) - q_corrected(2)) / G_half
