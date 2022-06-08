@@ -217,10 +217,14 @@ contains
 				
 				gamma%cells(i,j,k)		= cp / cv	
 				
-				e_i%cells(i,j,k)		= this%thermo%thermo_ptr%calculate_mixture_energy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)
+				e_i%cells(i,j,k)		= (this%thermo%thermo_ptr%calculate_mixture_energy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc%cells(i,j,k)	
 				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc%cells(i,j,k)
 				
-				E_f%cells(i,j,k)		= e_i%cells(i,j,k) / mol_mix_conc%cells(i,j,k)			
+				E_f%cells(i,j,k)		= e_i%cells(i,j,k) 		
+                
+                !# P = const 
+                !E_f%cells(i,j,k)		= h_s%cells(i,j,k)
+                
 				do dim = 1,dimensions
 					E_f%cells(i,j,k)	= E_f%cells(i,j,k) + 0.5_dkind * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
 				end do
@@ -412,8 +416,12 @@ contains
 
 			!# New de = cv*dT equation of state		
 				T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature(T%cells(i,j,k),e_i%cells(i,j,k),concs)
-				p%cells(i,j,k)			= T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)
-
+				p%cells(i,j,k)			= T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)                
+                
+            !# P = const
+            !   T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature_Pconst(T%cells(i,j,k),e_i%cells(i,j,k),concs)
+			!	rho%cells(i,j,k)		= p%cells(i,j,k) * mol_mix_conc%cells(i,j,k) / T%cells(i,j,k) / r_gase_J
+                
 				cp						= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
 				cv						= cp - r_gase_J 
 				gamma%cells(i,j,k)		= cp / cv		

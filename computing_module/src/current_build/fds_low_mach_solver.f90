@@ -46,8 +46,8 @@ module fds_low_mach_solver_class
 	integer	:: flame_loc_unit, flame_structure_unit
 
 	type subgrid 
-        real(dkind), dimension(:,:,:), allocatable :: cells
-    end type
+		real(dkind), dimension(:,:,:), allocatable :: cells
+	end type
 
 	type fds_solver
 		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag
@@ -98,6 +98,7 @@ module fds_low_mach_solver_class
 		integer												:: number_of_meshes
 		integer			,dimension(:,:,:)	,allocatable	:: subgrid_cons_inner_loop, subgrid_cons_utter_loop
 		type(subgrid)	,dimension(:)		,allocatable	:: sub_E, sub_F, sub_R, sub_E_old, sub_bc
+        real(dkind)		,dimension(:)		,allocatable	:: sub_cells_number
 		
 		real(dkind)				:: rho_0
 	contains
@@ -149,7 +150,7 @@ contains
 		
 		integer				:: species_number
 
-	    type(liquid_droplets_phase)     :: droplets_params
+		type(liquid_droplets_phase)     :: droplets_params
 		type(solid_particles_phase)     :: particles_params
 		integer				:: particles_phase_counter, droplets_phase_counter		
 		
@@ -426,7 +427,7 @@ contains
 		cell_size						= constructor%mesh%mesh_ptr%get_cell_edges_length()
 		
 		constructor%time				= calculation_time
-		constructor%initial_time_step	= 2.5e-08_dkind ! problem_solver_options%get_initial_time_step()
+		constructor%initial_time_step	= problem_solver_options%get_initial_time_step()
 		constructor%time_step			= constructor%initial_time_step
 
 		constructor%rho_0				= constructor%rho%s_ptr%cells(1,1,1)!constructor%rho%s_ptr%cells(1,1,1)
@@ -470,6 +471,8 @@ contains
 
 		allocate(constructor%subgrid_cons_utter_loop(0:constructor%number_of_meshes-1,3,2), constructor%subgrid_cons_inner_loop(0:constructor%number_of_meshes-1,3,2))
 		
+        allocate(constructor%sub_cells_number(0:constructor%number_of_meshes-1))
+        
 		constructor%subgrid_cons_inner_loop = 1
 		constructor%subgrid_cons_utter_loop = 1
 		
@@ -509,7 +512,13 @@ contains
 			constructor%sub_R(mesh)%cells = 0.0_dkind
 			constructor%sub_E_old(mesh)%cells = 0.0_dkind
 			constructor%sub_bc(mesh)%cells = 0.0_dkind
-			
+            
+            cells_number = constructor%subgrid_cons_inner_loop(mesh,1,2) - constructor%subgrid_cons_inner_loop(mesh,1,1) + 1
+			do dim = 2, dimensions
+				cells_number = min(cells_number, constructor%subgrid_cons_inner_loop(mesh,dim,2) - constructor%subgrid_cons_inner_loop(mesh,dim,1) + 1)
+            end do
+		
+            constructor%sub_cells_number(mesh) = cells_number
 		end do	
 		
 		constructor%sub_bc(0)%cells = constructor%boundary%bc_ptr%bc_markers
@@ -610,7 +619,7 @@ contains
 		logical	:: perturbed_velocity_field, stabilizing_inlet, ignite, stabilized
 		
 		perturbed_velocity_field	= .false.
-		stabilizing_inlet			= .true.
+		stabilizing_inlet			= .false.
 		ignite						= .false.
 		
 		this%time = this%time + this%time_step		
@@ -1148,7 +1157,7 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 		
-		real(dkind)	:: H_center, H_left, H_right, F_a_left, F_a_right, F_b_left, F_b_right
+		real(dkind)	:: H_center, H_left, H_right, F_a_left, F_a_right, F_b_left, F_b_right, sub_F_summ
 		real(dkind)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm, a_norm_prev, a_normfinal, H_summ, sum_ddiv_v_dt, grad_F_a_summ, grad_F_b_summ
 		real(dkind)	:: farfield_density, farfield_pressure, farfield_velocity
 		
@@ -1158,7 +1167,7 @@ contains
 		integer		:: r_i, r_j, r_k
 
 		real(dkind)	,dimension(3)	:: cell_size		
-		real(dkind)	:: time_step_adj, beta, beta_old, spectral_radii_jacobi, edges_number, cells_number
+		real(dkind)	:: time_step_adj, beta, beta_old, spectral_radii_jacobi, edges_number
 		real(dkind), save	:: time = 0.0_dkind
 		
 		integer	:: dimensions, iterations, iterations_number
@@ -1232,15 +1241,14 @@ contains
 			vorticity		= 0.0_dkind	
 			F_a%cells		= 0.0_dkind		
 			F_b%cells		= 0.0_dkind		
-			cells_number	= 0.0_dkind
 
 			grad_F_a_summ	= 0.0_dkind
 
 			
 			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity,sign,bound_number,bound_number1,bound_number2,bound_number3,plus,boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3,bc_coeff) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,grad_F_a, grad_F_a_summ, rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,cells_number,coordinate_system,mesh,time_step)					
-			!$omp do collapse(3) schedule(guided)	reduction(+:sum_ddiv_v_dt) reduction(+:cells_number)
+			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,grad_F_a, grad_F_a_summ, rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,mesh,time_step)					
+			!$omp do collapse(3) schedule(guided)	reduction(+:sum_ddiv_v_dt) 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
@@ -1278,7 +1286,6 @@ contains
 						end do
 					end if
 
-					cells_number  = cells_number + 1.0_dkind
 					sum_ddiv_v_dt = sum_ddiv_v_dt + ddiv_v_dt%cells(i,j,k)
 				end if
 			end do
@@ -1286,19 +1293,19 @@ contains
 			end do	
 			!$omp end do
 
-			if (this%all_Neumann_flag) then
-			!$omp do collapse(3) schedule(guided)
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					ddiv_v_dt%cells(i,j,k)	=	ddiv_v_dt%cells(i,j,k) - sum_ddiv_v_dt/cells_number
-				end if
-			end do
-			end do
-			end do		
-			!$omp end do			
-			end if
+			!if (this%all_Neumann_flag) then
+			!!$omp do collapse(3) schedule(guided)
+			!do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			!do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			!do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+			!	if(bc%bc_markers(i,j,k) == 0) then
+			!		ddiv_v_dt%cells(i,j,k)	=	ddiv_v_dt%cells(i,j,k) - sum_ddiv_v_dt/this%sub_cells_number(0)
+			!	end if
+			!end do
+			!end do
+			!end do		
+			!!$omp end do			
+			!end if
 			
 			!$omp do collapse(3) schedule(guided)	
 			do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
@@ -1607,7 +1614,9 @@ contains
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
-					grad_F_a(dim,i,j,k)  = grad_F_a(dim,i,j,k)  - grad_F_a_summ/cells_number
+					do dim = 1, dimensions
+						grad_F_a(dim,i,j,k)  = grad_F_a(dim,i,j,k)  - grad_F_a_summ/this%sub_cells_number(0)
+					end do
 				end if
 			end do
 			end do
@@ -1632,7 +1641,7 @@ contains
 				
 				!$omp parallel default(none)  private(i,j,k,dim,dim2,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,farfield_velocity) , &
 				!$omp& firstprivate(this) , &
-				!$omp& shared(F_a,F_b,grad_F_b,grad_F_b_summ,v,v_f,v_f_old,p_dyn,H,H_old,R,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init,time_step,cells_number,farfield_velocity_array)
+				!$omp& shared(F_a,F_b,grad_F_b,grad_F_b_summ,v,v_f,v_f_old,p_dyn,H,H_old,R,ddiv_v_dt,rho_old,rho_int,bc,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,mesh,a_norm_init,time_step,farfield_velocity_array)
 				
 				do dim = 1, dimensions
 					loop(3,1) = cons_inner_loop(3,1)
@@ -1651,12 +1660,12 @@ contains
 
 						if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
 							if (predictor) then	
-								F_b%cells(dim,i,j,k)=	- (	p_dyn%cells(i,j,k)	*rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
+								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
 														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_old%cells(i,j,k))		&
 														/	(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_old%cells(i,j,k))	&
 														*	(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	!/ cell_size(1)
 							else
-								F_b%cells(dim,i,j,k)=	- (	p_dyn%cells(i,j,k)	*rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
+								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
 														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_int%cells(i,j,k))		&
 														/	(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_int%cells(i,j,k))	&
 														*	(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	!/ cell_size(1)
@@ -1710,7 +1719,9 @@ contains
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 					if(bc%bc_markers(i,j,k) == 0) then
-						grad_F_b(dim,i,j,k)  = grad_F_b(dim,i,j,k)  - grad_F_b_summ/cells_number
+						do dim = 1, dimensions
+							grad_F_b(dim,i,j,k)  = grad_F_b(dim,i,j,k)  - grad_F_b_summ/this%sub_cells_number(0)
+						end do
 					end if
 				end do
 				end do
@@ -1822,7 +1833,7 @@ contains
 
 				nu_0 = 5
 				nu_1 = 2
-				nu_2 = 4
+				nu_2 = 2
 				V_cycle_depth = this%number_of_meshes - 2
 
 				
@@ -1838,7 +1849,7 @@ contains
 					!$omp& firstprivate(this) , &
 					!$omp& shared(H_summ,H,H_old,R,a_norm,a_norm_init,a_norm_prev,H_max,H_max_old,H_average,F_a,F_b,p_dyn,rho_old,rho_int,beta,ddiv_v_dt,v,				&
 					!$omp& v_f,v_f_old,cons_inner_loop,cons_utter_loop,subgrid_cons_inner_loop,bc,dimensions,cell_size,coordinate_system,mesh,converged,predictor,time_step,time,poisson_iteration,	&
-					!$omp& farfield_velocity_array,tolerance,nu_1,sub_F)
+					!$omp& farfield_velocity_array,tolerance,nu_1,sub_F, sub_F_summ)
 					
 					!$omp master
 					poisson_iteration = 0
@@ -1945,7 +1956,7 @@ contains
 								H%cells(i,j,k)	= H_old%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*R%cells(i,j,k)
   
 								a_norm = a_norm + abs(R%cells(i,j,k))
-     							
+								
 							end if
 						end do
 						end do
@@ -1978,20 +1989,34 @@ contains
 					end do
 
 					!$omp master
-					a_norm	= 0.0_dkind
-					converged = .false.
+					a_norm		= 0.0_dkind
+					converged   = .false.
+                    sub_F_summ	= 0.0_dkind
 					!$omp end master					
 					
-					!$omp do collapse(3) schedule(guided)
+					!$omp do collapse(3) schedule(guided) reduction(+:sub_F_summ)
 					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-						sub_F(0)%cells(i,j,k) = R%cells(i,j,k)
+						sub_F(0)%cells(i,j,k)	= R%cells(i,j,k)
+                        sub_F_summ				= sub_F_summ + sub_F(0)%cells(i,j,k)
 					end do
 					end do
-					end do
+                    end do
 					!$omp end do					
 
+                    if (this%all_Neumann_flag) then	
+					!$omp do collapse(3) schedule(guided) 
+					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+						sub_F(0)%cells(i,j,k) = sub_F(0)%cells(i,j,k) - sub_F_summ / this%sub_cells_number(0)
+					end do
+					end do
+                    end do
+					!$omp end do    
+                    end if
+                    
 					!$omp end parallel
 					
 					call this%V_cycle(0,time_step,nu_1,nu_2,tolerance,predictor,V_cycle_depth)
@@ -2215,7 +2240,7 @@ contains
 								H%cells(i,j,k)	= H_old%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*R%cells(i,j,k)
   
 								a_norm = a_norm + abs(R%cells(i,j,k))
-     
+	 
 								R%cells(i,j,k)	= R%cells(i,j,k) / cell_size(1) / cell_size(1)
 								
 							end if
@@ -2260,7 +2285,7 @@ contains
 					
 					if(abs(a_norm_init) > 1e-10_dkind) then
 						print *,a_norm,a_norm_init,a_norm/a_norm_init
-						if((a_norm/a_norm_init < tolerance).or.(a_norm < 1e-02)) then
+						if((a_norm/a_norm_init < tolerance).or.(a_norm < 100e-0)) then
 							v_cycle_converged = .true.
 							
 						end if	
@@ -2278,7 +2303,7 @@ contains
 				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-    
+	
 					if(bc%bc_markers(i,j,k) == 0) then
 						do dim = 1,dimensions															 
 							do plus = 1,2
@@ -2351,7 +2376,7 @@ contains
 											end if
 												
 										case('inlet')
-     
+	 
 										!	farfield_velocity = farfield_velocity_array(factor * j)
 											farfield_velocity = farfield_velocity_array(1)
 												
@@ -2393,7 +2418,7 @@ contains
 							if (predictor) then
 								if (pressure_converged) then
 								if (abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>10.0_dkind/cell_size(1)/cell_size(1)) then
+										*(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>20.0_dkind/cell_size(1)/cell_size(1)) then
 									pressure_converged = .false.
 									print *, 'Pressure error', abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
 										*(1.0_dkind/rho_old%cells(i,j,k)	- 1.0_dkind/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))
@@ -2402,7 +2427,7 @@ contains
 							else
 								if (pressure_converged) then
 								if (abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>10.0_dkind/cell_size(1)/cell_size(1)) then
+										*(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>20.0_dkind/cell_size(1)/cell_size(1)) then
 									pressure_converged = .false.
 									print *, 'Pressure error',  abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - this%p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
 										*(1.0_dkind/rho_int%cells(i,j,k)	- 1.0_dkind/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))
@@ -2410,7 +2435,7 @@ contains
 								end if						
 							end if
 						end do
-    
+	
 					end if
 				end do
 				end do
@@ -2947,26 +2972,26 @@ contains
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
 					
-			 			!! Grad temp
-			 			!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
-			 			!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-			 			!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 			!	flame_front_index = i
-			 			!end if
+						!! Grad temp
+						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
+						!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
+						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+						!	flame_front_index = i
+						!end if
 					
-			 			! max H
-			 			if (abs(Y%pr(HO2_index)%cells(i,j,k)) > max_val) then
-			 				max_val = Y%pr(HO2_index)%cells(i,j,k)
-			 				flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 				flame_front_index = i
-			 			end if					
+						! max H
+						if (abs(Y%pr(HO2_index)%cells(i,j,k)) > max_val) then
+							max_val = Y%pr(HO2_index)%cells(i,j,k)
+							flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+							flame_front_index = i
+						end if					
 					
-			 			! max CO
-			 			!if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_val) then
-			 			!	max_val = Y%pr(CO_index)%cells(i,j,k)
-			 			!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 			!	flame_front_index = i
-			 			!end if
+						! max CO
+						!if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_val) then
+						!	max_val = Y%pr(CO_index)%cells(i,j,k)
+						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+						!	flame_front_index = i
+						!end if
 				
 					end if
 				end do
@@ -2998,7 +3023,7 @@ contains
 
 		!		farfield_velocity_array = max(farfield_velocity_array - 0.25_dkind*flame_velocity,0.0_dkind)
 				
-				farfield_velocity_array = farfield_velocity_array - 0.25_dkind*flame_velocity
+				farfield_velocity_array = farfield_velocity_array - 0.05_dkind*flame_velocity
 				
 				
 				write (flame_loc_unit,'(4E14.6)') time, current_flame_location, flame_velocity, farfield_velocity_array(1)
@@ -3089,19 +3114,19 @@ contains
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
 					
-			 			!! Grad temp
-			 			!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_grad_temp) then
-			 			!	max_grad_temp = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-			 			!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 			!	flame_front_index = i
-			 			!end if
+						!! Grad temp
+						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_grad_temp) then
+						!	max_grad_temp = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
+						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+						!	flame_front_index = i
+						!end if
 					
-			 			! max CO
-			 			if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_CO) then
-			 				max_CO = Y%pr(CO_index)%cells(i,j,k)
-			 				flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-			 				flame_front_index = i
-			 			end if
+						! max CO
+						if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_CO) then
+							max_CO = Y%pr(CO_index)%cells(i,j,k)
+							flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+							flame_front_index = i
+						end if
 				
 					end if
 				end do
@@ -3747,6 +3772,7 @@ contains
 		real(dkind)	,dimension(3)	:: cell_size
 		integer		,dimension(3,2)	:: cons_utter_loop, cons_inner_loop, subgrid_cons_inner_loop, subgrid_cons_utter_loop, subgrid_cons_inner_loop_higher
 		integer		,dimension(3)	:: offset
+        real(dkind)		:: sub_F_summ
 		real(dkind)		:: beta, farfield_velocity
 		
 		integer	:: poisson_iteration
@@ -3786,7 +3812,7 @@ contains
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-		
+        
 		factor		= 2**mesh_iter
 		
 		beta		= 2.0_dkind/3.0_dkind
@@ -3802,7 +3828,7 @@ contains
 			!$omp parallel default(none)  private(i,j,k,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs) ,			&
 			!$omp& firstprivate(this) , &
 			!$omp& shared(sub_E,sub_E_old,sub_R,sub_F,a_norm,beta,factor,nu_1,mesh_iter,v_f, v_f_old, F_a, F_b, coordinate_system,		&
-			!$omp& cons_inner_loop,cons_utter_loop,subgrid_cons_utter_loop,subgrid_cons_inner_loop,subgrid_cons_inner_loop_higher,bc,dimensions,cell_size,mesh,converged,predictor,time_step,poisson_iteration,farfield_velocity_array)	
+			!$omp& cons_inner_loop,cons_utter_loop,subgrid_cons_utter_loop,subgrid_cons_inner_loop,subgrid_cons_inner_loop_higher,bc,dimensions,cell_size,mesh,converged,predictor,time_step,poisson_iteration,farfield_velocity_array,sub_F_summ)	
 					
 			!$omp master
 			poisson_iteration = 0
@@ -3814,8 +3840,9 @@ contains
 				!$omp barrier
 				
 				!$omp master
-				a_norm	= 0.0_dkind
-				converged = .false.
+				a_norm		= 0.0_dkind
+				converged	= .false.
+                sub_F_summ	= 0.0_dkind
 				!$omp end master
 					
 				!$omp barrier
@@ -4007,7 +4034,7 @@ contains
 			!end do		
 			!!$omp end do
 			
-			!$omp do collapse(3) schedule(guided)
+			!$omp do collapse(3) schedule(guided) reduction(+:sub_F_summ)
 			do k = subgrid_cons_inner_loop_higher(3,1),subgrid_cons_inner_loop_higher(3,2)
 			do j = subgrid_cons_inner_loop_higher(2,1),subgrid_cons_inner_loop_higher(2,2)
 			do i = subgrid_cons_inner_loop_higher(1,1),subgrid_cons_inner_loop_higher(1,2)
@@ -4022,13 +4049,29 @@ contains
 
 				if (dimensions == 2) then
 					sub_F(mesh_iter+1)%cells(i,j,k) = 0.25_dkind * (sub_R(mesh_iter)%cells(offset(1),offset(2),offset(3)) + sub_R(mesh_iter)%cells(offset(1)+1,offset(2),offset(3)) + sub_R(mesh_iter)%cells(offset(1),offset(2)+1,offset(3)) + sub_R(mesh_iter)%cells(offset(1)+1,offset(2)+1,offset(3)))
-				end if
+                end if
 			
+                sub_F_summ = sub_F_summ + sub_F(mesh_iter+1)%cells(i,j,k)
+                
 			end do
 			end do
-			end do
+            end do
 			!$omp end do
 			
+            if (this%all_Neumann_flag) then	
+				!$omp do collapse(3) schedule(guided) 
+				do k = subgrid_cons_inner_loop_higher(3,1),subgrid_cons_inner_loop_higher(3,2)
+				do j = subgrid_cons_inner_loop_higher(2,1),subgrid_cons_inner_loop_higher(2,2)
+				do i = subgrid_cons_inner_loop_higher(1,1),subgrid_cons_inner_loop_higher(1,2)
+					sub_F(mesh_iter+1)%cells(i,j,k) = sub_F(mesh_iter+1)%cells(i,j,k) - sub_F_summ / this%sub_cells_number(mesh_iter+1)
+				end do
+				end do
+				end do
+				!$omp end do    
+            end if
+            
+        !    print *, sum(sub_F(mesh_iter+1)%cells(:,1,1))
+            
 			!$omp end parallel				
 			
 			call this%V_cycle(mesh_iter+1,time_step,nu_1,nu_2,tol,predictor,V_cycle_depth)
@@ -4232,7 +4275,7 @@ contains
 						sub_E(mesh_iter)%cells(i,j,k)	= sub_E_old(mesh_iter)%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*sub_R(mesh_iter)%cells(i,j,k)
   
 						a_norm = a_norm + abs(sub_R(mesh_iter)%cells(i,j,k))
-     
+	 
 					end if
 				end do
 				end do
@@ -4357,7 +4400,7 @@ contains
 											else
 												sub_R(mesh_iter)%cells(i,j,k) = sub_R(mesh_iter)%cells(i,j,k)	+ (sub_E_old(mesh_iter)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - sub_E_old(mesh_iter)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))* lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 											end if
-											sub_E(mesh_iter)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = sub_E(mesh_iter)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3))
+											sub_E(mesh_iter)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = sub_E_old(mesh_iter)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3))
 										case('inlet')
 										!	farfield_velocity = farfield_velocity_array(factor * j)
 											farfield_velocity = farfield_velocity_array(1)
@@ -4380,7 +4423,7 @@ contains
 							end do
 						end do								
 								
-						sub_E(mesh_iter)%cells(i,j,k)	= sub_E_old(mesh_iter)%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*beta*sub_R(mesh_iter)%cells(i,j,k)
+						sub_E(mesh_iter)%cells(i,j,k)	= sub_E_old(mesh_iter)%cells(i,j,k) + 1.0_dkind/(2.0_dkind*dimensions)*sub_R(mesh_iter)%cells(i,j,k)*beta
   
 						a_norm = a_norm + abs(sub_R(mesh_iter)%cells(i,j,k))
 
@@ -4412,7 +4455,10 @@ contains
 				!pause
 				!if(a_norm/a_norm_init < tolerance) converged = .true.
 					
-				if(a_norm < 0.1) converged = .true.
+				if(a_norm < 1.0e-05) then
+                    converged = .true.
+                    print *, poisson_iteration
+                end if
 				poisson_iteration	= poisson_iteration + 1
 				!$omp end master
 				!$omp barrier

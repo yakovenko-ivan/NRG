@@ -34,6 +34,7 @@ module thermophysical_properties_class
 		procedure	:: calculate_mixture_enthalpy
 		procedure	:: calculate_mixture_energy
 		procedure	:: calculate_temperature
+        procedure	:: calculate_temperature_Pconst
 
 		procedure	:: change_field_units_mole_to_dimless
 		procedure	:: change_cell_units_mole_to_dimless
@@ -493,8 +494,38 @@ contains
 			if ( abs(residual) < eps) exit
 		end do
 
+    end function
+    
+	recursive pure function calculate_temperature_Pconst(this,temperature,h_s,concentrations)
+
+		real(dkind)             :: calculate_temperature_Pconst
+
+		class(thermophysical_properties)    ,intent(in) :: this
+		real(dkind)                         ,intent(in) :: temperature, h_s
+		real(dkind) ,dimension(:)           ,intent(in) :: concentrations
+		!!$OMP threadprivate (calculate_temperature)
+
+		real(dkind) :: temp		
+		integer :: species_number
+		integer :: i, specie_number
+		integer	:: iter, max_iter
+		real(dkind)	:: eps, residual
+
+		species_number          = size(concentrations)
+        temp = temperature
+        if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+
+		calculate_temperature_Pconst   = temp
+		
+		max_iter	= 100
+		eps			= 1e-08
+		do iter = 1, max_iter
+			calculate_temperature_Pconst = calculate_temperature_Pconst + (h_s - (this%calculate_mixture_enthalpy(calculate_temperature_Pconst, concentrations) - this%calculate_mixture_enthalpy(298.15_dkind, concentrations))) / (this%calculate_mixture_cp(calculate_temperature_Pconst, concentrations))
+			residual =  h_s - this%calculate_mixture_enthalpy(calculate_temperature_Pconst, concentrations) + this%calculate_mixture_enthalpy(298.15_dkind, concentrations)
+			if ( abs(residual) < eps) exit
+        end do
+        
 	end function	
-	
 	
 	function get_a_coeffs(specie_name,thermo_data_file_unit) result(a_coeffs)
 		character(len=10)   ,intent(in)     :: specie_name
