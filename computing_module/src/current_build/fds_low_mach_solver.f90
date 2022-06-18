@@ -2528,21 +2528,30 @@ contains
 										else
 											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										end if
-									case('outlet')
-										if (sign == 1) then		!# Правая граница
-											if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Выток, берутся значения слева
-												p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.0_dkind 
-											else																					!# Вток, берутся значения справа
-												p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.0_dkind
-											end if
-										else					!# Левая граница
-											if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Выток, берутся значения справа
-												p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	0.0_dkind 
-											else																					!# Вток, берутся значения справа
-												p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	0.0_dkind
-											end if
-										end if
-												
+                                    case('outlet')
+										!if (sign == 1) then		!# Правая граница
+										!	if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dkind) then		!# Выток, берутся значения слева
+										!		p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i,j,k)
+										!	else																					!# Вток, берутся значения справа
+										!		p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i,j,k)
+										!	end if
+										!else					!# Левая граница
+										!	if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dkind) then										!# Выток, берутся значения справа
+										!		p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i,j,k)
+										!	else																					!# Вток, берутся значения справа
+										!		p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i,j,k)
+										!	end if
+										!end if
+											
+										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+
+										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dkind*(	v%pr(dim)%cells(i,j,k) **2)   
+										if (predictor) then	
+											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+										else
+											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+										end if                                        
+                                        
 									case('inlet')
 										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 
@@ -3614,8 +3623,8 @@ contains
 
 		!# CHARM
 		if ( r > 1.0e-010_dkind) then
-			s	= 1/r
-			B_r	= s * (3*s + 1) / (s+1) / (s+1)	
+			s	= 1.0_dkind/r
+			B_r	= s * (3.0_dkind*s + 1.0_dkind) / (s+1.0_dkind) / (s+1.0_dkind)	
 		else
 			B_r = 0.0_dkind
 		end if

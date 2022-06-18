@@ -1,4 +1,4 @@
-module cabaret_solver_class
+п»їmodule cabaret_solver_class
 
 	use kind_parameters
 	use global_data
@@ -606,12 +606,6 @@ contains
 			allocate(Y_inv_half(species_number), Y_inv_old(species_number))
 		end if
 
-		if (this%CFL_condition_flag) then
-			call this%calculate_time_step()
-		end if
-
-		this%time	= this%time + this%time_step		
-
 		!Max_v_s		= 0.0_dkind
 		!Min_v_s		= 10000.0_dkind
 		
@@ -1189,75 +1183,118 @@ contains
 					
 					!**************************** Sound points *****************************
 					!**************************** Lower edge *******************************
-					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
-
-						v_f_approx		= 0.5_dkind*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
-						v_s_f_approx	= 0.5_dkind*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))			+ v_s%cells(i,j,k))
-
-						characteristic_speed(1) = v_f_approx + v_s_f_approx
-						characteristic_speed(2) = v_f_approx - v_s_f_approx
-						characteristic_speed(3) = v_f_approx
-
-						if (((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	<	abs(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))) &
-						.and.(	  v%pr(dim)%cells(i,j,k)	>	v_s%cells(i,j,k))) )then 
-						
-							if (characteristic_speed(3) < 0.0_dkind) then
-								rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1) / (v_s%cells(i,j,k)**2)
-							end if
-						
-						end if
-
-						if (((	 v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	 <	  -v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	&
-						.and.	(abs(v%pr(dim)%cells(i,j,k)) < abs(v_s%cells(i,j,k)))))then 
-					
-							v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dkind*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k)) &
-																	*0.5_dkind*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_s%cells(i,j,k))
-		
-							p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_corrected(1))/G_half
-						
-							if( characteristic_speed(3) >= 0.0_dkind ) then
-								rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) + (p_f_new%cells(dim,i,j,k)) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
-							else
-								rho_f_new%cells(dim,i,j,k) = (p_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1)) / (v_s%cells(i,j,k)**2)
-							end if
-						end if	
-					end if
-					
-					!**************************** Higher edge *******************************
-					
-					if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
-						v_f_approx		= 0.5_dkind*(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
-						v_s_f_approx	= 0.5_dkind*(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			+ v_s%cells(i,j,k))
-				
-						characteristic_speed(1) = v_f_approx + v_s_f_approx
-						characteristic_speed(2) = v_f_approx - v_s_f_approx
-						characteristic_speed(3) = v_f_approx
-
-						if (((abs(v%pr(dim)%cells(i,j,k))	<	abs(v_s%cells(i,j,k))) &
-						.and.(	  v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	>	v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))) )then 
-						
-							v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.5_dkind*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) &
-																									*0.5_dkind*(v_s%cells(i,j,k) + v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
-		
-							p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= (r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
-					
-							if (characteristic_speed(3) >= 0.0_dkind) then
-								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		= (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
-							else
-								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		= rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) / (v_s%cells(i,j,k)**2)
-							end if
-						end if
-
-						if (((	 v%pr(dim)%cells(i,j,k)	 <	  -v_s%cells(i,j,k))	&
-						.and.	(abs(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) < abs(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))))))then 
-		
-							if( characteristic_speed(3) >= 0.0_dkind ) then
-								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) =  rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
-							end if
-							
-						end if	
-				
-					end if
+					!if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
+     !
+					!	v_f_approx		= 0.5_dkind*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
+					!	v_s_f_approx	= 0.5_dkind*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))			+ v_s%cells(i,j,k))
+     !
+					!	characteristic_speed(1) = v_f_approx + v_s_f_approx
+					!	characteristic_speed(2) = v_f_approx - v_s_f_approx
+					!	characteristic_speed(3) = v_f_approx
+     !
+					!	if (((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	<	abs(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))) &
+					!	.and.(	  v%pr(dim)%cells(i,j,k)	>	v_s%cells(i,j,k))) )then 
+					!	
+					!		if (characteristic_speed(3) < 0.0_dkind) then
+					!			rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1) / (v_s%cells(i,j,k)**2)
+					!		end if
+					!	
+					!	end if
+     !
+					!	if (((	 v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	 <	  -v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	&
+					!	.and.	(abs(v%pr(dim)%cells(i,j,k)) < abs(v_s%cells(i,j,k)))))then 
+					!
+					!		v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dkind*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k)) &
+					!												*0.5_dkind*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_s%cells(i,j,k))
+		   !
+					!		p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_corrected(1))/G_half
+					!	
+					!		if( characteristic_speed(3) >= 0.0_dkind ) then
+					!			rho_f_new%cells(dim,i,j,k) = rho_f_new%cells(dim,i,j,k) + (p_f_new%cells(dim,i,j,k)) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
+					!		else
+					!			rho_f_new%cells(dim,i,j,k) = (p_f_new%cells(dim,i,j,k) - v_inv_corrected(dim,1)) / (v_s%cells(i,j,k)**2)
+					!		end if
+					!	end if	
+					!end if
+					!
+					!!**************************** Higher edge *******************************
+					!
+					!if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
+					!	v_f_approx		= 0.5_dkind*(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
+					!	v_s_f_approx	= 0.5_dkind*(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			+ v_s%cells(i,j,k))
+				 !
+					!	characteristic_speed(1) = v_f_approx + v_s_f_approx
+					!	characteristic_speed(2) = v_f_approx - v_s_f_approx
+					!	characteristic_speed(3) = v_f_approx
+     !
+					!	if (((abs(v%pr(dim)%cells(i,j,k))	<	abs(v_s%cells(i,j,k))) &
+					!	.and.(	  v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	>	v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))) )then 
+					!	
+					!		v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.5_dkind*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) &
+					!																				*0.5_dkind*(v_s%cells(i,j,k) + v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+		   !
+					!		p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= (r_corrected(2) - v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))/G_half
+					!
+					!		if (characteristic_speed(3) >= 0.0_dkind) then
+					!			rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		= (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2)) / (v_s%cells(i,j,k)**2)
+					!		else
+					!			rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		= rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) / (v_s%cells(i,j,k)**2)
+					!		end if
+					!	end if
+     !
+					!	if (((	 v%pr(dim)%cells(i,j,k)	 <	  -v_s%cells(i,j,k))	&
+					!	.and.	(abs(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) < abs(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))))))then 
+		   !
+					!		if( characteristic_speed(3) >= 0.0_dkind ) then
+					!			rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) =  rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(dim,2) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
+					!		end if
+					!		
+					!	end if	
+				 !
+     !               end if
+                    
+                    
+     !               v_f_approx		= 0.5_dkind*(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
+					!v_s_f_approx	= 0.5_dkind*(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			+ v_s%cells(i,j,k))
+				 !
+					!characteristic_speed(1) = v_f_approx + v_s_f_approx
+					!characteristic_speed(2) = v_f_approx - v_s_f_approx
+					!characteristic_speed(3) = v_f_approx
+     !               
+                    if	(((abs(v%pr(dim)%cells(i,j,k))	<	abs(v_s%cells(i,j,k))).and.((abs(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))	>	abs(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))))) .or. &
+                        ((abs(v%pr(dim)%cells(i,j,k))	>	abs(v_s%cells(i,j,k))).and.((abs(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))	<	abs(v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))))))) then
+                    
+                        print*, p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+                        
+						!call solve_riemann_problem(&
+						!		p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
+						!		0.5_dkind*(p%cells(i,j,k)+p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))), &
+      !                          0.5_dkind*(v%pr(dim)%cells(i,j,k)+v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))), &
+						!		0.5_dkind*(rho%cells(i,j,k)+rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))),&
+						!		0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))+p%cells(i+2*I_m(dim,1),j+2*I_m(dim,2),k+2*I_m(dim,3))), &
+						!		0.5_dkind*(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))+v%pr(dim)%cells(i+2*I_m(dim,1),j+2*I_m(dim,2),k+2*I_m(dim,3))), &
+						!		0.5_dkind*(rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))+rho%cells(i+2*I_m(dim,1),j+2*I_m(dim,2),k+2*I_m(dim,3))),&
+						!		0.5_dkind*(gamma%cells(i,j,k)+gamma%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))),&
+						!		this%time_step&
+						!)
+                            
+                        call solve_riemann_problem3(&
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),&
+								0.5_dkind*(p%cells(i,j,k)+p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))), &
+                                0.5_dkind*(v%pr(dim)%cells(i,j,k)+v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))), &
+								0.5_dkind*(rho%cells(i,j,k)+rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))),&
+								0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))+p%cells(i+2*I_m(dim,1),j+2*I_m(dim,2),k+2*I_m(dim,3))), &
+								0.5_dkind*(v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))+v%pr(dim)%cells(i+2*I_m(dim,1),j+2*I_m(dim,2),k+2*I_m(dim,3))), &
+								0.5_dkind*(rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))+rho%cells(i+2*I_m(dim,1),j+2*I_m(dim,2),k+2*I_m(dim,3))),&
+								0.5_dkind*(gamma%cells(i,j,k)+gamma%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))),&
+								this%time_step&
+						)
+                            
+      !                 
+!                        print*, p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+                        print*, i,j,k, (gamma%cells(i,j,k) - gamma%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+!						pause
+                    end if
 #ifdef OMP						
 					call omp_unset_lock(lock(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
 					call omp_unset_lock(lock(i,j,k))	
@@ -1396,7 +1433,7 @@ contains
 					call omp_set_lock(lock(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))	
 #endif
 
-					!# Граничные условия на Y ставятся вместе с другими потоковыми переменными, здесь значения на границах обновлять не нужно
+					!# Р“СЂР°РЅРёС‡РЅС‹Рµ СѓСЃР»РѕРІРёСЏ РЅР° Y СЃС‚Р°РІСЏС‚СЃСЏ РІРјРµСЃС‚Рµ СЃ РґСЂСѓРіРёРјРё РїРѕС‚РѕРєРѕРІС‹РјРё РїРµСЂРµРјРµРЅРЅС‹РјРё, Р·РґРµСЃСЊ Р·РЅР°С‡РµРЅРёСЏ РЅР° РіСЂР°РЅРёС†Р°С… РѕР±РЅРѕРІР»СЏС‚СЊ РЅРµ РЅСѓР¶РЅРѕ
 					do spec = 1,species_number
 						if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
 							bound_number	= bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
@@ -1736,6 +1773,12 @@ contains
 		
 	!	call this%state_eq%check_conservation_laws()
 		
+        if (this%CFL_condition_flag) then
+			call this%calculate_time_step()
+		end if
+
+		this%time	= this%time + this%time_step
+        
 		end associate
 
 	end subroutine
@@ -1790,7 +1833,7 @@ contains
 						if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
 							( characteristic_speed(2) < 0.0_dkind )		.and.&
 							( characteristic_speed(3) >= 0.0_dkind )) then	
-							!# Дозвуковой поток слева направо, стенка слева. 
+							!# Р”РѕР·РІСѓРєРѕРІРѕР№ РїРѕС‚РѕРє СЃР»РµРІР° РЅР°РїСЂР°РІРѕ, СЃС‚РµРЅРєР° СЃР»РµРІР°. 
 							if (sign == -1) then
 								v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.0_dkind 
 								do dim1 = 1,dimensions
@@ -1812,7 +1855,7 @@ contains
 									Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
 								end do
 							end if
-							!# Дозвуковой поток слева направо, стенка справа. 
+							!# Р”РѕР·РІСѓРєРѕРІРѕР№ РїРѕС‚РѕРє СЃР»РµРІР° РЅР°РїСЂР°РІРѕ, СЃС‚РµРЅРєР° СЃРїСЂР°РІР°. 
 							if (sign == 1) then
 								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = 0.0_dkind
 								do dim1 = 1, dimensions
@@ -1835,7 +1878,7 @@ contains
 						if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
 							( characteristic_speed(2) < 0.0_dkind )		.and.&
 							( characteristic_speed(3) < 0.0_dkind )) then
-							!# Дозвуковой поток справа налево, стенка слева.
+							!# Р”РѕР·РІСѓРєРѕРІРѕР№ РїРѕС‚РѕРє СЃРїСЂР°РІР° РЅР°Р»РµРІРѕ, СЃС‚РµРЅРєР° СЃР»РµРІР°.
 							if (sign == -1) then
 								p_f_new%cells(dim,i,j,k)			=	-q_corrected(1)/ G_half
 								rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k)	-	v_inv_corrected(dim,1))	/ (v_s%cells(i,j,k)**2)
@@ -1854,7 +1897,7 @@ contains
 									Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
 								end do
 							end if
-							!# Дозвуковой поток справа налево, стенка справа. 
+							!# Р”РѕР·РІСѓРєРѕРІРѕР№ РїРѕС‚РѕРє СЃРїСЂР°РІР° РЅР°Р»РµРІРѕ, СЃС‚РµРЅРєР° СЃРїСЂР°РІР°. 
 							if (sign == 1) then
 								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = 0.0_dkind
 								do dim1 = 1, dimensions
@@ -1890,7 +1933,7 @@ contains
 						if (( characteristic_speed(1) >= 0.0_dkind )		.and.&
 							( characteristic_speed(2) < 0.0_dkind ))then	!.and.&
 					!		( characteristic_speed(3) >= 0.0_dkind )) then		
-							if (sign == -1) then											!# Меньшая грань (левая/нижняя/дальняя), поток от меньшей к большей грани. 
+							if (sign == -1) then											!# РњРµРЅСЊС€Р°СЏ РіСЂР°РЅСЊ (Р»РµРІР°СЏ/РЅРёР¶РЅСЏСЏ/РґР°Р»СЊРЅСЏСЏ), РїРѕС‚РѕРє РѕС‚ РјРµРЅСЊС€РµР№ Рє Р±РѕР»СЊС€РµР№ РіСЂР°РЅРё. 
 								
 								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_corrected(1))/(G_half_inf + G_half)
 								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_corrected(1))/(G_half_inf + G_half)
@@ -1988,7 +2031,7 @@ contains
 						
 						
 						!if (sign == 1) then						
-						!	!# Выток реализован только для правой границы
+						!	!# Р’С‹С‚РѕРє СЂРµР°Р»РёР·РѕРІР°РЅ С‚РѕР»СЊРєРѕ РґР»СЏ РїСЂР°РІРѕР№ РіСЂР°РЅРёС†С‹
 						!	if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
 						!		( characteristic_speed(2) < 0.0_dkind )) then		!.and.&
 						!		!( characteristic_speed(3) >= 0.0_dkind )) then		
@@ -2024,7 +2067,7 @@ contains
 						!	end if
 						!end if
 						!if (sign == -1) then
-						!	!# Выток реализован только для правой границы
+						!	!# Р’С‹С‚РѕРє СЂРµР°Р»РёР·РѕРІР°РЅ С‚РѕР»СЊРєРѕ РґР»СЏ РїСЂР°РІРѕР№ РіСЂР°РЅРёС†С‹
 						!	if (( characteristic_speed(1) >= 0.0_dkind )	.and.&
 						!		( characteristic_speed(2) < 0.0_dkind )) then		!.and.&
 						!		!( characteristic_speed(3) >= 0.0_dkind )) then		
@@ -2093,7 +2136,7 @@ contains
 						if (( characteristic_speed(1) >= 0.0_dkind )		.and.&
 							( characteristic_speed(2) < 0.0_dkind ))then	!.and.&
 					!		( characteristic_speed(3) >= 0.0_dkind )) then		
-							if (sign == -1) then											!# Меньшая грань (левая/нижняя/дальняя), поток от меньшей к большей грани. 
+							if (sign == -1) then											!# РњРµРЅСЊС€Р°СЏ РіСЂР°РЅСЊ (Р»РµРІР°СЏ/РЅРёР¶РЅСЏСЏ/РґР°Р»СЊРЅСЏСЏ), РїРѕС‚РѕРє РѕС‚ РјРµРЅСЊС€РµР№ Рє Р±РѕР»СЊС€РµР№ РіСЂР°РЅРё. 
 								
 								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_corrected(1))/(G_half_inf + G_half)
 								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_corrected(1))/(G_half_inf + G_half)
