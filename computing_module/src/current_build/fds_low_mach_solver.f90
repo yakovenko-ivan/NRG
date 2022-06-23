@@ -475,9 +475,11 @@ contains
         
 		constructor%subgrid_cons_inner_loop = 1
 		constructor%subgrid_cons_utter_loop = 1
-		
+        
 		do mesh = 0,constructor%number_of_meshes-1
 
+            cells_number = 1
+            
 			do dim = 1, dimensions
 				constructor%subgrid_cons_utter_loop(mesh,dim,1) = cons_utter_loop(dim,1)
 				constructor%subgrid_cons_utter_loop(mesh,dim,2) = (cons_utter_loop(dim,2)-1)/2**mesh + 1
@@ -513,9 +515,8 @@ contains
 			constructor%sub_E_old(mesh)%cells = 0.0_dkind
 			constructor%sub_bc(mesh)%cells = 0.0_dkind
             
-            cells_number = constructor%subgrid_cons_inner_loop(mesh,1,2) - constructor%subgrid_cons_inner_loop(mesh,1,1) + 1
-			do dim = 2, dimensions
-				cells_number = min(cells_number, constructor%subgrid_cons_inner_loop(mesh,dim,2) - constructor%subgrid_cons_inner_loop(mesh,dim,1) + 1)
+            do dim = 1, dimensions
+				cells_number = cells_number * (constructor%subgrid_cons_inner_loop(mesh,dim,2) - constructor%subgrid_cons_inner_loop(mesh,dim,1) + 1)
             end do
 		
             constructor%sub_cells_number(mesh) = cells_number
@@ -1843,7 +1844,7 @@ contains
 				do while (((v_cycle_iteration <= 0).or.(.not.v_cycle_converged)).and.(v_cycle_iteration <= nu_0))
 			
 					nu_1 = 2!(v_cycle_iteration+2) * 2
-					nu_2 = 2!(v_cycle_iteration+2) * 2
+					nu_2 = 1!(v_cycle_iteration+2) * 2
 				
 					!$omp parallel default(none)  private(i,j,k,dim,dim2,residual,plus,sign,bound_number,boundary_type_name,lame_coeffs,farfield_velocity,offset) ,			&
 					!$omp& firstprivate(this) , &
