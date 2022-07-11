@@ -205,7 +205,7 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			continue
-			if (		(T%cells(i,j,k) >= 300.5_dkind) 	&
+			if (		(T%cells(i,j,k) >= 305.0_dkind) 	&
 				!.and.	(T%cells(i,j,k) <= 5000.0_dkind)	&
 				.and.	(this%boundary%bc_ptr%bc_markers(i,j,k) == 0)) then
 
@@ -243,7 +243,7 @@ contains
 				NSTATE  =   1
 				NTASK   =   1
 				NROOT   =   0
-				EPS     =   1.0e-8_dkind !D1MACH(4)**(1.0_dkind/3.0_dkind)
+				EPS     =   1.0e-9_dkind !D1MACH(4)**(1.0_dkind/3.0_dkind)
 				EWT(1)  =   1.0e-4_dkind
 				IERROR  =   3
 				MINT    =   2
@@ -257,7 +257,7 @@ contains
 				TOUT2   =   0.0_dkind
 				!=====================================
 				HMAX    =   1.0E-7
-				MXSTEP  =   5000
+				MXSTEP  =   10000
 				LENW    =   N*N+(MXORD+5)*N+2*NROOT+250
 				LENIW   =   N+50
 
