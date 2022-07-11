@@ -555,8 +555,9 @@ contains
 				do while (num < 16)
 					read(thermo_data_file_unit,'(A)',iostat = error) string
 					if (error /= 0) then
-						print *, 'ERROR : Unsuccessful specific heat capacity reading'
-						exit
+						print *, 'ERROR : Unsuccessful specific heat capacity reading', specie_name
+                        pause
+						stop
 					end if
 
 					prev        = -1
@@ -586,8 +587,9 @@ contains
 								end if
 
 								if (error /= 0) then
-									print *, 'ERROR: Unsuccessful CHAR conversion while reading specific heat capacity'
-									exit
+									print *, 'ERROR: Unsuccessful CHAR conversion while reading specific heat capacity for specie :', specie_name
+                                    pause
+									stop
 								end if
 
 								i1 = i1 + 1
@@ -627,10 +629,14 @@ contains
 
 		do
 			read(molar_masses_data_file_unit,*,iostat = error) string, molar_mass_in_file
-			if(error /= 0) exit
+			if(error /= 0) then 
+                print *, 'molar mass is not defined for specie:', specie_name
+                pause
+                stop
+            end if
 			if(string == specie_name) then
 				molar_mass = molar_mass_in_file
-				if (molar_mass == 0.0) print *, 'molar mass for ',specie_name,' is not defined.'
+                exit
 			end if
 		end do
 
@@ -658,6 +664,7 @@ contains
 			read(transport_data_file_unit,*,iostat=error) string, dummy, potential_well_depth_in_file, collision_diameter_in_file
 			if(error /= 0) then
 				print *, 'Error: unsuccessufull transport properties reading for specie:', specie_name
+                pause
 				stop
 			end if
 			
