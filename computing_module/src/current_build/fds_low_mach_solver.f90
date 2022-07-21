@@ -259,9 +259,19 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'adiabatic_index')
 		constructor%gamma%s_ptr			=> scal_ptr%s_ptr			
 		
-		if(constructor%viscosity_flag) then
+		!if(constructor%viscosity_flag) then
+		!	constructor%visc_solver			= viscosity_solver_c(manager)
+		!	call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_viscosity')
+		!	constructor%E_f_prod_visc%s_ptr			=> scal_ptr%s_ptr
+		!	call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_viscosity')
+		!	constructor%v_prod_visc%v_ptr			=> vect_ptr%v_ptr
+		!	call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'viscosity')
+		!	constructor%nu%s_ptr					=> scal_ptr%s_ptr			
+		!end if
+        
+ 		if(constructor%viscosity_flag) then
 			constructor%visc_solver			= viscosity_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_viscosity')
+			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_viscosity_FDS')
 			constructor%E_f_prod_visc%s_ptr			=> scal_ptr%s_ptr
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_viscosity')
 			constructor%v_prod_visc%v_ptr			=> vect_ptr%v_ptr
