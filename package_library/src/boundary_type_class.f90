@@ -29,8 +29,9 @@ module boundary_type_class
 		procedure	:: get_farfield_pressure
 		procedure	:: get_farfield_temperature
 		procedure	:: get_farfield_density
+        procedure	:: get_farfield_energy
 		procedure	:: get_farfield_velocity
-		procedure	:: get_farfield_species_names
+        procedure	:: get_farfield_species_names
 		procedure	:: get_farfield_concentrations
 		
 		procedure	:: get_condition_priority
@@ -41,6 +42,7 @@ module boundary_type_class
 		procedure	:: set_farfield_pressure
 		procedure	:: set_farfield_temperature
 		procedure	:: set_farfield_density
+        procedure	:: set_farfield_energy
 		procedure	:: set_farfield_concentrations
 
 		! Logger		
@@ -279,6 +281,13 @@ contains
 		real(dkind)								:: get_farfield_density
 
 		get_farfield_density = this%farfield_density
+    end function
+
+	pure function	get_farfield_energy(this)
+		class(boundary_type)	,intent(in)		:: this
+		real(dkind)								:: get_farfield_energy
+
+		get_farfield_energy = this%farfield_energy
 	end function
 
 	pure function	get_farfield_velocity(this)
@@ -346,8 +355,15 @@ contains
 		real(dkind)				,intent(in)			:: farfield_pressure
 
 		this%farfield_density = farfield_pressure
-	end subroutine
+    end subroutine
 
+ 	pure subroutine	set_farfield_energy(this,farfield_energy)
+		class(boundary_type)	,intent(inout)		:: this
+		real(dkind)				,intent(in)			:: farfield_energy
+
+		this%farfield_energy = farfield_energy
+	end subroutine   
+    
 	pure subroutine	set_farfield_velocity(this,farfield_velocity)
 		class(boundary_type)	,intent(inout)		:: this
 		real(dkind)				,intent(in)			:: farfield_velocity
