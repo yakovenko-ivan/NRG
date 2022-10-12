@@ -620,9 +620,10 @@ contains
 		
 	end function
 
-	subroutine solve_problem(this,iteration)
+	subroutine solve_problem(this,iteration,stop_flag)
 		class(fds_solver)	,intent(inout)	:: this
 		integer				,intent(in)		:: iteration
+        logical				,intent(inout)	:: stop_flag
 		
 		integer	:: droplets_phase_counter, particles_phase_counter
 		integer	:: specie
@@ -695,13 +696,13 @@ contains
 		if (stabilizing_inlet) then
 			call this%stabilizing_inlet_1D(this%time, stabilized)
 			if (stabilized) then
+!               stop_flag = .true.
 !				call this%chem_kin_solver%write_chemical_kinetics_table('29.5_pcnt_H2-Air_table(T).dat')
 !				call this%write_data_table('29.5_pcnt_H2-Air_initials.dat')
-				stop
+!				stop
 			end if
 		end if
-		
-		
+         
 		!call this%state_eq%check_conservation_laws()
 
 	end subroutine
