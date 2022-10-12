@@ -426,6 +426,8 @@ contains
 		processor_rank = this%domain%get_processor_rank()
 
 		make_flag = .false.
+        if(stop_flag) make_flag = .true.
+        
 		if(present(make_save)) make_flag = make_save
 
 		if((time*this%save_time_coefficient >= this%save_time*(this%output_counter+1)).or.(make_flag)) then

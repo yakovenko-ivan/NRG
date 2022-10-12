@@ -483,7 +483,7 @@ contains
 
 		processor_rank = this%domain%get_processor_rank()
 
-		stop_flag = .false.
+!		stop_flag = .false.
 		make_flag = .false.
 		if(present(make_output)) make_flag = make_output
 
