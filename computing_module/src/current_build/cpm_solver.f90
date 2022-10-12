@@ -668,15 +668,17 @@ contains
 									case ('inlet')
 
 										!**** Relaxing inlet ****
-										!farfield_pressure	= 101325.0_dkind + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
-										!farfield_density	= 1.137416_dkind + (bc%boundary_types(bound_number)%get_farfield_density() - 1.137416_dkind) * min(this%time/10000e-06_dkind,1.0_dkind)
-										
-										farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-										farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()	
-										farfield_velocity	= bc%boundary_types(bound_number)%get_farfield_velocity()	
-										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= farfield_pressure
-										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_density
-										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= farfield_velocity !-sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
+								!		farfield_pressure	= 101325.0_dkind + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dkind) * min(this%time/10e-06_dkind,1.0_dkind)
+								!		farfield_density	= 1.17195723916649_dkind + (bc%boundary_types(bound_number)%get_farfield_density() - 1.17195723916649_dkind) * min(this%time/10e-06_dkind,1.0_dkind)
+                                       
+								!		farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
+								!		farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()	
+								!		farfield_velocity	= bc%boundary_types(bound_number)%get_farfield_velocity()	
+								!		p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= farfield_pressure
+								!		rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_density
+                                !        E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_energy
+                                        
+								!		v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
 										continue
 								end select
 								
