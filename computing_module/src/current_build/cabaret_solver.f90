@@ -17,6 +17,8 @@ module cabaret_solver_class
 	use fourier_heat_transfer_solver_class
 	use chemical_kinetics_solver_class
 
+	use lagrangian_droplets_solver_class    
+    
 	use mpi_communications_class
 
 	use solver_options_class	
@@ -42,12 +44,16 @@ module cabaret_solver_class
 		real(dkind)		:: courant_fraction
 		real(dkind)		:: time, time_step, initial_time_step
 		
+		integer			:: additional_particles_phases_number, additional_droplets_phases_number
+        
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(diffusion_solver)				:: diff_solver
 		type(heat_transfer_solver)			:: heat_trans_solver
 		type(viscosity_solver)				:: viscosity_solver	
 		type(table_approximated_real_gas)	:: state_eq
 
+		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver			!# Lagrangian droplets solver
+      
 		type(computational_domain)				:: domain
 		type(mpi_communications)				:: mpi_support
 		type(chemical_properties_pointer)		:: chem
@@ -65,6 +71,12 @@ module cabaret_solver_class
 		
 		type(field_vector_cons_pointer)	:: Y_prod_chem, Y_prod_diff
 
+		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: rho_prod_droplets, E_f_prod_droplets
+		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: E_f_prod_particles 
+		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: Y_prod_droplets
+		
+		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Lagrangian droplets solver        
+        
 		! Conservative variables
 		real(dkind) ,dimension(:,:,:)	,allocatable    :: rho_old, p_old, E_f_old, e_i_old, E_f_prod, rho_prod, v_s_old, gamma_old
 		real(dkind)	,dimension(:,:,:,:)	,allocatable	:: v_old, Y_old, v_prod, Y_prod
@@ -106,7 +118,11 @@ contains
 		type(field_scalar_flow_pointer)	:: scal_f_ptr		
 		type(field_vector_flow_pointer)	:: vect_f_ptr
 		
-		
+        type(liquid_droplets_phase)     :: droplets_params
+		integer							:: droplets_phase_counter		
+        
+        character(len=40)       :: var_name
+        
 		real(dkind)				:: spec_summ
 		integer	,dimension(3,2)	:: cons_allocation_bounds, flow_allocation_bounds
 		integer	,dimension(3,2)	:: flow_inner_loop, loop
@@ -132,13 +148,15 @@ contains
 		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
 		constructor%sources_flag		= .false.
 
+        constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()        
+        
 		constructor%domain				= manager%domain
 		constructor%mpi_support			= manager%mpi_communications
 		constructor%chem%chem_ptr		=> manager%chemistry%chem_ptr
 		constructor%boundary%bc_ptr		=> manager%boundary_conditions_pointer%bc_ptr
 		constructor%mesh%mesh_ptr		=> manager%computational_mesh_pointer%mesh_ptr
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
-
+        
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr				=> scal_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
@@ -203,10 +221,39 @@ contains
 			constructor%E_f_prod_visc%s_ptr			=> scal_ptr%s_ptr
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_viscosity')
 			constructor%v_prod_visc%v_ptr			=> vect_ptr%v_ptr
-		end if			
+        end if			
 		
-		constructor%state_eq	=	table_approximated_real_gas_c(manager)
-		
+        
+		constructor%state_eq	=	table_approximated_real_gas_c(manager)        
+        
+		if(constructor%additional_droplets_phases_number /= 0) then
+			allocate(constructor%droplets_solver(constructor%additional_droplets_phases_number))
+			call constructor%droplets_solver(1)%pre_constructor(constructor%additional_droplets_phases_number)
+			allocate(constructor%rho_prod_droplets(constructor%additional_droplets_phases_number))
+			allocate(constructor%E_f_prod_droplets(constructor%additional_droplets_phases_number))
+			allocate(constructor%v_prod_droplets(constructor%additional_droplets_phases_number))
+			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
+			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
+				droplets_params = problem_solver_options%get_droplets_params(droplets_phase_counter)
+				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
+!				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
+				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
+				constructor%E_f_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr
+				write(var_name,'(A,I2.2)') 'density_production_droplets', droplets_phase_counter
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
+				constructor%rho_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
+				write(var_name,'(A,I2.2)') 'velocity_production_droplets', droplets_phase_counter						
+				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian droplets solver
+				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian droplets solver
+!				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum droplets solver								
+!				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum droplets solver
+				write(var_name,'(A,I2.2)') 'concentration_production_droplets', droplets_phase_counter
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
+				constructor%Y_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
+			end do		
+		end if
+	
 		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'adiabatic_index_flow')
 		constructor%gamma_f_new%s_ptr	=> scal_f_ptr%s_ptr				
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'adiabatic_index')
@@ -236,6 +283,12 @@ contains
 			call problem_data_io%add_io_scalar_flow_field(constructor%E_f_f_new)
 			call problem_data_io%add_io_vector_flow_field(constructor%Y_f_new)
 			call problem_data_io%add_io_vector_flow_field(constructor%v_f_new)
+            
+            if(constructor%additional_droplets_phases_number /= 0) then
+				do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
+					call constructor%droplets_solver(droplets_phase_counter)%set_initial_distributions()
+				end do
+			end if  
 		end if		
 					
 		if(problem_data_io%get_load_counter() == 1) then
@@ -582,6 +635,7 @@ contains
 		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_utter_loop, flow_inner_loop
 		integer	,dimension(3,2)	:: loop
 		real(dkind)	,dimension(3)	:: cell_size
+        integer     	:: droplets_phase_counter
 
 		integer			:: i,j,k,plus,dim,dim1,dim2,spec,iter		
 
@@ -655,6 +709,11 @@ contains
 					v_prod			=> this%v_prod				, &
 					Y_prod			=> this%Y_prod				, &
 					rho_prod		=> this%rho_prod			, &
+            
+					v_prod_droplets	=> this%v_prod_droplets			, &
+					rho_prod_droplets   => this%rho_prod_droplets	, &
+					E_f_prod_droplets => this%E_f_prod_droplets		, &
+					Y_prod_droplets	=> this%Y_prod_droplets			, &
 
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
@@ -784,10 +843,10 @@ contains
 			end if
 		end do
 		end do
-		end do
+        end do
 		!$omp end do nowait		
 		!$omp end parallel				
-		
+        
 !        call this%check_symmetry()
 		
 		! ********** Conservative variables state eq *******************	
@@ -887,8 +946,8 @@ contains
 
 					! ******************* Linear interpolation *********************
 
-					diss_l = 0.0_dkind
-					diss_r = 0.0_dkind
+					diss_l = 0.00_dkind
+					diss_r = 0.00_dkind
 
 					r_new(1) = (2.0_dkind*R_half - (1.0_dkind-diss_l)*r(2))/(1.0_dkind+diss_l)
 					q_new(1) = (2.0_dkind*Q_half - (1.0_dkind-diss_l)*q(2))/(1.0_dkind+diss_l)
@@ -1284,15 +1343,15 @@ contains
 						max_inv = max_inv + (-alpha_loc)*maxmin_inv
 						min_inv = min_inv - (-alpha_loc)*maxmin_inv
 					
-						if((max_inv > 1.0_dkind).and.(abs(max_inv - 1.0_dkind) > 1.0e-03)) then
-							print *, max_inv, spec, i,j
-							pause
-						end if
+						!if((max_inv > 1.0_dkind).and.(abs(max_inv - 1.0_dkind) > 1.0e-03)) then
+						!	print *, max_inv, spec, i,j
+						!	pause
+						!end if
 
-						if((min_inv < 0.0_dkind).and.(abs(min_inv) > 1.0e-03)) then
-							print *, min_inv, spec, i,j
-							pause
-						end if
+						!if((min_inv < 0.0_dkind).and.(abs(min_inv) > 1.0e-03)) then
+						!	print *, min_inv, spec, i,j
+						!	pause
+						!end if
 				
 						max_inv	= min(max_inv,1.0_dkind) !1.0_dkind !min(max_inv,1.0_dkind)
 						min_inv	= max(min_inv,0.0_dkind) !0.0_dkind !max(min_inv,0.0_dkind)
@@ -1366,12 +1425,25 @@ contains
 			end do
 			!$omp end do nowait	
 
-		end do
+        end do
 	
 		!$omp end parallel
 
 !        call this%check_symmetry()        
 
+        rho_old		= rho%cells
+		E_f_old		= E_f%cells
+		v_s_old		= v_s%cells
+		p_old		= p%cells
+
+		do spec = 1,species_number
+			Y_old(spec,:,:,:)		=	Y%pr(spec)%cells
+		end do
+
+		do dim = 1,dimensions
+			v_old(dim,:,:,:)		=	v%pr(dim)%cells
+		end do	        
+        
 		! ******************* Eqn of state ***************
 		call this%state_eq%apply_state_equation_flow_variables() 
 		
@@ -1467,12 +1539,28 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(v)	
 
 		call this%apply_boundary_conditions_main()
-
+        
+		if(this%additional_droplets_phases_number /= 0) then
+			do droplets_phase_counter = 1, this%additional_droplets_phases_number
+    			call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main()
+			end do	            
+        end if
+                
 		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)
 		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
 		if (this%viscosity_flag)	call this%viscosity_solver%solve_viscosity(this%time_step)
 		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
 
+		if(this%additional_droplets_phases_number /= 0) then
+			do droplets_phase_counter = 1, this%additional_droplets_phases_number
+				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
+!				call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
+!				call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
+!				call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
+!				call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)			!# Continuum droplets solver		
+			end do		
+		end if 	        
+        
 		E_f_prod	= 0.0_dkind
 		rho_prod	= 0.0_dkind
 		Y_prod		= 0.0_dkind
@@ -1493,13 +1581,13 @@ contains
 					do spec = 1,species_number
 						Y_prod(spec,i,j,k)	= Y_prod(spec,i,j,k)	+ Y_prod_chem%pr(spec)%cells(i,j,k) * this%time_step
 					end do		
-				end if
-
+                end if
+                
 				if (this%heat_trans_flag)	then
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_heat%cells(i,j,k) * this%time_step
-				end if
-
-				if (this%diffusion_flag)	then
+                end if
+                
+ 				if (this%diffusion_flag)	then
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_diff%cells(i,j,k) * this%time_step
 					do spec = 1, species_number
 						Y_prod(spec,i,j,k)	= Y_prod(spec,i,j,k)	+ Y_prod_diff%pr(spec)%cells(i,j,k) * this%time_step
@@ -1512,8 +1600,8 @@ contains
 						v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) * this%time_step
 				!		v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * this%time_step
 					end do
-				end if		
-				
+                end if		
+                
 				! ************************* Energy release ******************
 				if (energy_output_flag == 1) then 
 					if(this%time <= energy_output_time) then
@@ -1540,17 +1628,30 @@ contains
 				
 				spec_summ = 0.0_dkind
 				do spec = 1, species_number
-					Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod(spec,i,j,k)/rho%cells(i,j,k)
+					Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod(spec,i,j,k)/rho%cells(i,j,k)                   
 					spec_summ = spec_summ + Y%pr(spec)%cells(i,j,k)
-				end do		
-				do spec = 1,species_number
-					Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dkind) / spec_summ 
-				end do				
+                end do		
 				
 				do dim = 1, dimensions
 					v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) + v_prod(dim,i,j,k) /rho%cells(i,j,k)
-				end do	
-				
+                end do					
+                
+                if (this%additional_droplets_phases_number /= 0) then
+                    spec_summ = 0.0_dkind
+					do droplets_phase_counter = 1, this%additional_droplets_phases_number
+						E_f%cells(i,j,k)	= E_f%cells(i,j,k) + E_f_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)
+                        rho%cells(i,j,k)    = rho%cells(i,j,k) + rho_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)
+                        do spec = 1, species_number
+							Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod_droplets(droplets_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
+                            spec_summ = spec_summ + Y%pr(spec)%cells(i,j,k)
+						end do	
+					end do		
+                end if                 
+                                
+				do spec = 1,species_number
+					Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dkind) / spec_summ 
+				end do
+                
 			end if	
 		end do	
 		end do
@@ -2269,10 +2370,10 @@ contains
 
 		this%time_step = this%courant_fraction * time_step(1)
 
-!		if(time_step(1) < 1.6e-08_dkind) then
-!			this%time_step = 0.0025 * time_step(1)
-!			print *, 'Time step was reduced. Co = 1: ',time_step(1), '. Reduced: ', this%time_step
-!		end if
+		if(time_step(1) < 5.7e-09_dkind) then
+			this%time_step = 0.25 * time_step(1)
+			print *, 'Time step was reduced. Co = 1: ',time_step(1), '. Reduced: ', this%time_step
+		end if
 
 		end associate
 			
