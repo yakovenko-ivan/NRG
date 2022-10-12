@@ -156,7 +156,7 @@ program computing_module
 				calculation_time	= problem_cpm_low_mach_solver%get_time()		
 				time_step			= problem_cpm_low_mach_solver%get_time_step()		
 			case('fds_low_mach')											
-				call problem_fds_solver%solve_problem(iter)		
+				call problem_fds_solver%solve_problem(iter,stop_flag)		
 				calculation_time	= problem_fds_solver%get_time()		
 				time_step			= problem_fds_solver%get_time_step()					
 		end select
@@ -172,7 +172,7 @@ program computing_module
 			m=c(6)
 			s=c(7)
 			print *, ' Current time = ', day,'  ',h,':',m,':',s
-		end if
+        end if
 		
 !		if ((precision_flag).and.(calculation_time > 165.0e-09_dkind)) then
 !		if (time_step < 3.66e-08_dkind * problem_cpm_solver%get_CFL_coefficient()) then
@@ -182,7 +182,12 @@ program computing_module
 !			call problem_cpm_solver%set_CFL_coefficient(0.75_dkind)
 !		end if
 	
-		call problem_data_io%output_all_data(calculation_time			,stop_flag)	
+!		if (calculation_time > 160.0e-04_dkind) then
+!        if (calculation_time > 1.60e-04_dkind) then
+!			call problem_data_save%set_save_time(1.0_dkind)
+!        end if    
+            
+        call problem_data_io%output_all_data(calculation_time			,stop_flag)	
 		call problem_post_proc_manager%process_data(calculation_time	,stop_flag)
 		call problem_data_save%save_all_data(calculation_time			,stop_flag)
 
