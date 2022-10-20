@@ -631,7 +631,7 @@ contains
 		logical	:: perturbed_velocity_field, stabilizing_inlet, ignite, stabilized
 		
 		perturbed_velocity_field	= .false.
-		stabilizing_inlet			= .false.
+		stabilizing_inlet			= .true.
 		ignite						= .false.
 		
 		this%time = this%time + this%time_step		
@@ -698,7 +698,7 @@ contains
 			if (stabilized) then
 !               stop_flag = .true.
 !				call this%chem_kin_solver%write_chemical_kinetics_table('29.5_pcnt_H2-Air_table(T).dat')
-!				call this%write_data_table('29.5_pcnt_H2-Air_initials.dat')
+!				call this%write_data_table('H2-Air_initials.dat')
 !				stop
 			end if
 		end if
