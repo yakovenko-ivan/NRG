@@ -207,11 +207,14 @@ contains
 		!	drop_number(dim) =  (lengths(dim,2)-lengths(dim,1)-cell_size(1)) /delta
 		!end do
 		
-		drop_number(1)  = 6
-		drop_number(2)  = 6
+		drop_number(1)  = 900
+		drop_number(2)  = 15
+        
+        
 		
-		delta = (lengths(1,2)-lengths(1,1) - 3 * cell_size(1)) / (drop_number(1) - 1) 
-		
+!		delta = (lengths(1,2)-lengths(1,1) - 3 * cell_size(1)) / (drop_number(1) - 1) 
+		delta = (lengths(2,2)-lengths(2,1) - 3 * cell_size(1)) / (drop_number(2) - 1) 
+        
 		this%droplets_number = drop_number(1)*drop_number(2)*drop_number(3)
 		
 		allocate(this%droplets(this%droplets_number))	
@@ -265,7 +268,7 @@ contains
 		integer		,dimension(3,2)	:: cons_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size
 		real(dkind)					:: cell_volume
-		real(dkind)	,dimension(3)	:: gas_velocity, relative_velocity, old_velocity, droplet_acceleration
+		real(dkind)	,dimension(3)	:: gas_velocity, relative_velocity, old_velocity, F_a
 		real(dkind)					:: abs_relative_velocity
 		real(dkind)					:: lower_face, higher_face, a, b
 		real(dkind)					:: Re_p, Nu_p, Sc_p, Sh_p, Pr_p, C_drag, A_p, alpha_p, beta_p, D_air_water
@@ -363,7 +366,7 @@ contains
 				droplet_iterations	= ceiling(time_step/ droplet_time_step)
 				droplet_time_step	= time_step / real(droplet_iterations,dkind)
 
-				droplet_acceleration =	0.0_dkind			
+				F_a =	0.0_dkind			
 			
 				initial_cell = this%get_droplet_cell(this%droplets(drop)%coords,out_flag)
 				i = initial_cell(1)
@@ -453,15 +456,16 @@ contains
 						alpha_p	= M_gas_old / m_liq
 						beta_p	= 0.5_dkind * rhog_old * C_drag * A_p * ( 1/m_liq + 1/M_gas_old) * abs_relative_velocity
 					
-						!do dim = 1, dimensions
-						!	this%droplets(drop)%coords(dim) =	this%droplets(drop)%coords(dim) + (this%droplets(drop)%velocity(dim) + alpha_p * gas_velocity(dim)) * droplet_time_step / (1.0_dkind + alpha_p) + &
-						!										alpha_p * log(1.0_dkind + beta_p*droplet_time_step) / beta_p / (1.0_dkind + alpha_p) * relative_velocity(dim)
-						!								
-						!	this%droplets(drop)%velocity(dim)	= (this%droplets(drop)%velocity(dim) + (this%droplets(drop)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * droplet_time_step / (1.0_dkind + alpha_p)) / (1.0_dkind + beta_p*droplet_time_step)	
-					 !
-						!	droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
-      !
-						!end do 
+						do dim = 1, dimensions
+							this%droplets(drop)%coords(dim) =	this%droplets(drop)%coords(dim) + (this%droplets(drop)%velocity(dim) + alpha_p * gas_velocity(dim)) * droplet_time_step / (1.0_dkind + alpha_p) + &
+																alpha_p * log(1.0_dkind + beta_p*droplet_time_step) / beta_p / (1.0_dkind + alpha_p) * relative_velocity(dim)
+														
+							this%droplets(drop)%velocity(dim)	= (this%droplets(drop)%velocity(dim) + (this%droplets(drop)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * droplet_time_step / (1.0_dkind + alpha_p)) / (1.0_dkind + beta_p*droplet_time_step)	
+					 
+!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
+                            F_a(dim) = F_a(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step) ! 1/rho_g*f_b (4.43 FDS guide)
+
+						end do 
 					end if
 					
 					cell = this%get_droplet_cell(this%droplets(drop)%coords,out_flag)
@@ -471,8 +475,20 @@ contains
 					end if
 			
 					do dim = 1, dimensions
-						v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dkind - this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
-						v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
+                        
+						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dkind*cell_size(dim)
+						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dkind*cell_size(dim)
+						
+						a = this%droplets(drop)%coords(dim) - lower_face
+						
+						b = higher_face - this%droplets(drop)%coords(dim) 
+					
+						v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dkind - a/cell_size(dim)) * F_a(dim) 
+						v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (1.0_dkind - b/cell_size(dim)) * F_a(dim) 
+						
+                        
+					!	v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dkind - this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
+					!	v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
 					end do
 			
 			
@@ -585,11 +601,11 @@ contains
 			end if
 		end do
 
-		if ((time*1e06 >= 10.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
+		if ((time*1e06 >= 1.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
 			write (average_io_unit,'(3E14.6)')	time, average_temperature/droplets_inside, average_diameter/droplets_inside
 		end if		
 		
-		if ((time*1e06 >= 50.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
+		if ((time*1e06 >= 1.0_dkind*(output_counter+1)).or.(time==0.0_dkind)) then
 			write(file_path,'(I6.6,A)')  int(time*1e06),'us'
 			file_name = 'data_save_droplets' // trim(fold_sep) // 'droplets_' // trim(file_path) // '.plt'
 			open(newunit = lagrangian_droplets_io_unit, file = file_name, status = 'replace', form = 'formatted')
