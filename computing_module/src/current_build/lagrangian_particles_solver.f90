@@ -191,8 +191,8 @@ contains
 !			part_number(dim) =  (lengths(dim,2)-lengths(dim,1)) /delta
 !		end do
 		
-		part_number(1) = 10
-		part_number(2) = 10
+		part_number(1) = 100
+		part_number(2) = 100
 		
 		delta = (lengths(1,2)-lengths(1,1)) / part_number(1)
 		
@@ -556,7 +556,7 @@ contains
 			do part = 1, this%particles_number
 				if(.not.this%particles(part)%outside_domain) then
 			!		print *, 'writing data for part ', part
-					write(file_path,'(A,I3.3)')  'particle', this%particles(part)%particle_number
+					write(file_path,'(A,I4.4)')  'particle', this%particles(part)%particle_number
 					file_name = 'data_save_particles' // trim(fold_sep) // 'particles_' // trim(file_path) // '.plt'
 					open(newunit = lagrangian_particles_io_unit, file = file_name, status = 'unknown', position = 'append', form = 'formatted')	
 					write (lagrangian_particles_io_unit,'(7E14.6)')	time, this%particles(part)%coords(1:dimensions), this%particles(part)%velocity(1:dimensions), this%particles(part)%temperature, this%particles(part)%mass !, v_prod_p1, E_prod_p1	
@@ -568,7 +568,7 @@ contains
 			output_counter = output_counter + 1
 		end if		
 
-		if ((time*1e06 >= 25.0_dkind*(particle_release_counter+1))) then
+		if ((time*1e06 >= 1.0_dkind*(particle_release_counter+1))) then
 			particle_release_counter = particle_release_counter + 1
 			call this%release_particle()
 		end if			
@@ -836,31 +836,54 @@ contains
 					bc			=> this%boundary%bc_ptr)
 		
 		part_number = part_number + 1
-		
+		if (part_number <= 999) then
 			do part = 1, this%particles_number
 				if (this%particles(part)%outside_domain) then
 				
-					this%particles(part)%coords(1)		= 0.002_dkind
-					this%particles(part)%coords(2)		= 0.001_dkind
+			!		this%particles(part)%coords(1)		= 0.0005_dkind
+			!		this%particles(part)%coords(2)		= 0.015_dkind
+                    
+            !# alpha = 4
+            !        this%particles(part)%coords(1)		= 0.00295_dkind
+            !        this%particles(part)%coords(2)		= 0.04_dkind
+            !# alpha = 5
+            !        this%particles(part)%coords(1)		= 0.00325_dkind
+            !        this%particles(part)%coords(2)		= 0.04_dkind     
+            !# alpha = 6
+                    this%particles(part)%coords(1)		= 0.00345_dkind
+                    this%particles(part)%coords(2)		= 0.04_dkind           
 					
 					this%particles(part)%outside_domain = .false.
 				
-					this%particles(part)%temperature	= 500.0_dkind
+					this%particles(part)%temperature	= 300.0_dkind
 					this%particles(part)%mass			= Pi*this%particles_params%diameter**3 / 6.0_dkind * this%particles_params%material_density
 					
 					initial_cell = this%get_particle_cell(this%particles(part)%coords,out_flag)
 					this%particles(part)%cell = initial_cell
 					
-					this%particles(part)%velocity(1)	= 0
-					this%particles(part)%velocity(2)	= v_f%pr(2)%cells(2,initial_cell(1),initial_cell(2),initial_cell(3))
-					
+                    this%particles(part)%velocity(1)	= 0.0_dkind
+                    this%particles(part)%velocity(2)	= 50.0_dkind
+                    
+            !# Normal        
+			!		this%particles(part)%velocity(1)	= -50.0_dkind * 10.0_dkind / 101**0.5!0.0_dkind
+			!		this%particles(part)%velocity(2)	=  50.0_dkind * 1.0_dkind / 101**0.5!0.0_dkind! 0.99_dkind * v_f%pr(2)%cells(2,initial_cell(1),initial_cell(2),initial_cell(3))
+				
+            !# 45 deg
+            !		this%particles(part)%velocity(1)	= -50.0_dkind * 19.0_dkind / (19.0**2 + 21.0**2)**0.5!0.0_dkind
+			!		this%particles(part)%velocity(2)	=  50.0_dkind * 21.0_dkind / (19.0**2 + 21.0**2)**0.5!0.0_dkind!
+            		
+            !# 15 deg
+            		this%particles(part)%velocity(1)	= -50.0_dkind * sin(pi*15/180)!0.0_dkind
+					this%particles(part)%velocity(2)	=  50.0_dkind * cos(pi*15/180)!0.0_dkind!
+                    
 					this%particles(part)%outside_domain = out_flag	
 					
 					this%particles(part)%particle_number = part_number
 					exit
 				end if
 			end do	
-	
+        end if
+        
 		end associate		
 		
 	end subroutine	
