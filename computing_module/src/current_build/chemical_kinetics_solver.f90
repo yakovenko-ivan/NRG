@@ -36,7 +36,7 @@ module chemical_kinetics_solver_class
 
 	
 	type(field_scalar_cons)	,target	:: E_f_prod_chem
-	type(field_vector_cons)	,target	:: Y_prod_chem
+	type(field_vector_cons)	,target	:: Y_prod_chem, Y_prod_chem2
 
 	interface
 		function d1mach(I)
@@ -79,7 +79,7 @@ module chemical_kinetics_solver_class
 
 	type 	:: chemical_kinetics_solver
 		type(field_scalar_cons_pointer)	:: T, p, rho, E_f_prod
-		type(field_vector_cons_pointer)	:: Y, Y_prod
+		type(field_vector_cons_pointer)	:: Y, Y_prod, Y_prod2
 
 		type(computational_domain)					:: domain
 
@@ -88,9 +88,15 @@ module chemical_kinetics_solver_class
 		type(boundary_conditions_pointer)			:: boundary
 		type(computational_mesh_pointer)			:: mesh
 		character(len=20)							:: ODE_solver = 'slatec'
+		
+		real(dkind)	,dimension(:,:)	,allocatable	:: Y_t
+		real(dkind)	,dimension(:)	,allocatable	:: T_t 
 	contains
 		procedure				:: solve_chemical_kinetics
 		procedure	,private	:: calculate_rate_constants
+		procedure	,private	:: interpolate_chemical_kinetics
+		procedure	,private	:: read_chemical_kinetics_table
+		procedure				:: write_chemical_kinetics_table
 	end type
 
 	interface   chemical_kinetics_solver_c
@@ -124,6 +130,9 @@ contains
 
 		call manager%create_vector_field(Y_prod_chem	,'specie_production_chemistry'	,'Y_prod_chem', 'chemical')
 		constructor%Y_prod%v_ptr				=> Y_prod_chem
+		
+		call manager%create_vector_field(Y_prod_chem2	,'specie_production_chemistry2'	,'Y_prod_chem2', 'chemical')
+		constructor%Y_prod2%v_ptr				=> Y_prod_chem2	
 
 		constructor%boundary%bc_ptr 			=> manager%boundary_conditions_pointer%bc_ptr
 
@@ -153,6 +162,11 @@ contains
 		IWORK			= 0
 		!$omp end parallel
 
+		if(constructor%ODE_solver == 'table_approximated') then
+			call constructor%read_chemical_kinetics_table('15.0_pcnt_H2-Air_table(T).dat')
+		end if
+		
+		continue
 	end function
 
 	subroutine solve_chemical_kinetics(this,time_step)
@@ -189,6 +203,7 @@ contains
 					E_f_prod 		=> this%E_f_prod%s_ptr						, &
 					Y				=> this%Y%v_ptr								, &
 					Y_prod 			=> this%Y_prod%v_ptr						, &
+					Y_prod2			=> this%Y_prod2%v_ptr						, &
 					molar_masses    => this%thermo%thermo_ptr%molar_masses		, &
 					enhanced_efficiencies    => this%chem%chem_ptr%enhanced_efficiencies	, &
 					mesh			=> this%mesh%mesh_ptr						, &
@@ -198,7 +213,7 @@ contains
 	!$omp parallel default(none) private(i,j,k,i_react,i_specie,specie_enthalpy,N,NSTATE,NTASK,NROOT,IERROR,MINT,MITER,IMPL,MU,ML,MXORD,MXSTEP,LENW,LENIW,NDE,MATDIM,IERFLG,EPS,HMAX,TIN,TOUT,EWT) , &
 	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	, &			
 	!$omp& firstprivate(this)	, &
-	!$omp& shared(T,p,rho,Y,E_f_prod,Y_prod,molar_masses,enhanced_efficiencies,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag,mesh)
+	!$omp& shared(T,p,rho,Y,E_f_prod,Y_prod,Y_prod2,molar_masses,enhanced_efficiencies,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag,mesh)
 	!$omp do collapse(3) schedule(dynamic)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -224,12 +239,18 @@ contains
 					continue
 				end do
 
-				call this%calculate_rate_constants(T%cells(i,j,k))
+				if(this%ODE_solver /= 'table_approximated') then
+					call this%calculate_rate_constants(T%cells(i,j,k))
+				end if
 
 				conc_in = 0.0_dkind
 				do i_specie	= 1,species_number
 					if (molar_masses(i_specie) /= 0.0_dkind) then
-						conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)*rho%cells(i,j,k)/molar_masses(i_specie)
+					!	conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)	! For table approximated kinetics
+						conc_in(i_specie) = Y%pr(i_specie)%cells(i,j,k)*rho%cells(i,j,k)/molar_masses(i_specie)
+						if(this%ODE_solver == 'table_approximated') then
+							conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)	! For table approximated kinetics
+						end if
 					else
 						conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)
 					end if
@@ -278,17 +299,24 @@ contains
 				temperature	= T%cells(i,j,k)
 				pressure	= p%cells(i,j,k)
 
-				if (this%ODE_solver == 'slatec') then
-					call ddriv3(N,TIN,conc_out,fun,NSTATE,TOUT,NTASK,NROOT,EPS,EWT,IERROR,MINT	,&
-								MITER,IMPL,ML,MU,MXORD,HMAX,WORK,LENW,IWORK,LENIW				,&
-								fun,fun,NDE,MXSTEP,DUMMY,fun,IERFLG)		
-				end if
+				select case(this%ODE_solver)
+					case('slatec')
+						call ddriv3(N,TIN,conc_out,fun,NSTATE,TOUT,NTASK,NROOT,EPS,EWT,IERROR,MINT	,&
+								MITER,IMPL,ML,MU,MXORD,HMAX,WORK,LENW,IWORK,LENIW					,&
+								fun,fun,NDE,MXSTEP,DUMMY,fun,IERFLG)	
+					case('table_approximated')
+						call this%interpolate_chemical_kinetics(conc_out,temperature)
+				end select
 
-								
 				do i_specie	= 1,species_number
 					if (molar_masses(i_specie) /= 0.0_dkind) then
 			!		Y_prod%pr(i_specie)%cells(i,j,k) = (conc_out(i_specie) - conc_in(i_specie))/rho%cells(i,j,k)*molar_masses(i_specie)
 						Y_prod%pr(i_specie)%cells(i,j,k) = (conc_out(i_specie) - conc_in(i_specie))*molar_masses(i_specie) / time_step
+						Y_prod2%pr(i_specie)%cells(i,j,k)	= (conc_out(i_specie) - conc_in(i_specie))
+						
+						if (this%ODE_solver == 'table_approximated') then
+							Y_prod%pr(i_specie)%cells(i,j,k) = conc_out(i_specie)*molar_masses(i_specie) / time_step
+						end if
 					else
 						Y_prod%pr(i_specie)%cells(i,j,k) = (conc_out(i_specie) - conc_in(i_specie))
 					end if
@@ -297,7 +325,13 @@ contains
 				do i_specie = 1,species_number
 					specie_enthalpy = this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i,j,k),i_specie)
 			!		E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie) - conc_in(i_specie))/rho%cells(i,j,k)
-					E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie) - conc_in(i_specie)) / time_step
+!					E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie) - conc_in(i_specie)) / time_step
+
+					if (this%ODE_solver == 'table_approximated') then
+						E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie)) / time_step
+					else
+						E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie) - conc_in(i_specie)) / time_step
+					end if
 					continue
 				end do
 			else
@@ -497,9 +531,149 @@ contains
 		end do
 
 !		counter = counter + 1
+
+	end subroutine
+
+	subroutine write_chemical_kinetics_table(this,table_file)
+		class(chemical_kinetics_solver) ,intent(inout)  :: this	
+		character(len=*)				,intent(in)		:: table_file
 		
-	!	print *, counter
+		real(dkind)			:: max_T
+		integer				:: min_index, max_index
 		
+		character(len=100)							:: name_string
+		character(len=10)							:: fmt
+		real(dkind)	,dimension(species_number+1)	:: temp
+
+		integer	,dimension(3,2)	:: cons_inner_loop
+		
+		integer	:: io_unit
+		integer :: table_size
+		integer	:: i, spec
+		integer	:: ierr
+		
+		open(newunit = io_unit	, file = trim(task_setup_folder) // trim(fold_sep) // trim(chemical_mechanisms_folder) // trim(fold_sep)  // trim(table_file), status = 'replace'	, form = 'formatted') 	
+		
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
+		
+		associate (	T				=> this%T%s_ptr								, &
+					p				=> this%p%s_ptr								, &
+					rho				=> this%rho%s_ptr							, &
+					E_f_prod 		=> this%E_f_prod%s_ptr						, &
+					Y				=> this%Y%v_ptr								, &
+					Y_prod 			=> this%Y_prod%v_ptr						, &
+					Y_prod2			=> this%Y_prod2%v_ptr						, &
+					chem			=> this%chem%chem_ptr)
+
+		max_T = 0.0_dkind
+		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+			if((T%cells(i,1,1) > 300.0_dkind).and.(T%cells(i,1,1) < 310.0_dkind))	min_index = i
+			if(T%cells(i,1,1) > max_T) then
+				max_index = i
+				max_T = T%cells(i,1,1)
+			end if
+		end do
+
+		name_string = ''
+		name_string = trim(name_string) // trim(T%name_short)
+		do spec = 1,species_number
+			name_string = trim(name_string) // '  r' // trim(Y_prod2%pr(spec)%name_short(13:))
+		end do		
+		
+		write(fmt,'(A,I2,A)') '(', species_number+1, 'E14.7)'
+		
+		write(io_unit,'(A)',iostat = ierr)	name_string
+		
+		do i = min_index, max_index
+			temp(1) = T%cells(i,1,1)
+			do spec = 1,species_number
+				temp(spec+1) = Y_prod2%pr(spec)%cells(i,1,1)
+			end do
+			write(io_unit,fmt,iostat = ierr) temp
+		end do	
+			
+		print *, min_index, max_index 	
+		
+		end associate
+		
+	end subroutine	
+
+	subroutine read_chemical_kinetics_table(this,table_file)
+		class(chemical_kinetics_solver) ,intent(inout)  :: this	
+		character(len=*)				,intent(in)		:: table_file
+		
+		character(len=10)								:: name_string
+		character(len=10)								:: fmt
+			
+		real(dkind)	,dimension(species_number+1)		:: temp
+		
+		integer	:: io_unit
+		integer :: table_size
+		integer	:: i, spec
+		integer	:: ierr
+		
+		open(newunit = io_unit	, file = trim(task_setup_folder)// trim(fold_sep) // trim(chemical_mechanisms_folder) // trim(fold_sep) // trim(table_file), status = 'old'	, form = 'formatted') 	
+		
+		table_size = 0
+		do 
+			read(io_unit,*,iostat = ierr)	name_string
+			if(ierr /= 0) exit
+			table_size = table_size + 1
+		end do
+		table_size = table_size - 1
+		
+		allocate(this%Y_t(species_number,table_size), this%T_t(table_size))
+		
+		rewind(io_unit)
+		read(io_unit,*)	name_string
+		
+		write(fmt,'(A,I2,A)') '(', species_number+1, 'E14.7)'		
+		
+		do i = 1,table_size
+			read(io_unit,fmt,iostat = ierr) temp
+			this%T_t(i)	= temp(1)
+			do spec = 1,species_number
+				this%Y_t(spec,i) = temp(spec+1)
+			end do
+		end do		
+		
+		continue
+		
+	end subroutine	
+	
+	subroutine	interpolate_chemical_kinetics(this,concentrations,temperature)
+		class(chemical_kinetics_solver)			,intent(inout)  :: this	
+		real(dkind) ,dimension(species_number)  ,intent(inout)	:: concentrations
+		real(dkind)								,intent(in)		:: temperature
+		
+		real(dkind)	:: Y_O
+		integer		:: table_size
+		integer		:: i, spec
+		
+		table_size = size(this%T_t)
+			
+		Y_O	= concentrations(6)
+		
+		do i = 1, table_size-1
+			if((temperature >= this%T_t(i)).and.(temperature <= this%T_t(i+1))) then
+				do spec = 1, species_number
+					concentrations(spec)	= this%Y_t(spec,i+1)	*(temperature-this%T_t(i))/(this%T_t(i+1)-this%T_t(i))	+ this%Y_t(spec,i)	*(temperature-this%T_t(i+1))/(this%T_t(i)-this%T_t(i+1))	
+				end do
+			end if
+		end do
+
+		if((temperature < this%T_t(1))) then
+			do spec = 1, species_number
+				concentrations(spec)	= 0.0_dkind !this%Y_t(spec,1)	
+			end do
+		end if		
+			
+		if((temperature > this%T_t(table_size))) then
+			do spec = 1, species_number
+				concentrations(spec)	= this%Y_t(spec,table_size)	
+			end do
+		end if		
+
 		continue
 	end subroutine
 	
