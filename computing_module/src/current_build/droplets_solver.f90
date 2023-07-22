@@ -323,6 +323,8 @@ contains
                     evaporation_rate = 2.0_dkind * local_diameter * Pi * kappa%cells(i,j,k)/droplet%material_heat_capacity  &
                                      * log(1.0_dkind+droplet%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/droplet%material_latent_heat)/mass_d%cells(i,j,k)	! [1/s]
                     
+                    if (j > cons_inner_loop(2,2) - 2)  evaporation_rate = 0.0_dkind
+                    
 					if (mass_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step) >= 0.0_dkind) then
 						mass_d%cells(i,j,k) =	mass_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step)
                         
@@ -375,13 +377,15 @@ contains
  
 		real(dkind)	:: av_velocity, dif_velocity
 		
-		integer		,dimension(3,2)	:: flow_inner_loop
+		integer		,dimension(3,2)	:: flow_inner_loop, cons_inner_loop
 		
 		character(len=20)	:: coordinate_system
  
+        character(len=20)	:: boundary_type_name
+        
 		real(dkind)	,dimension(3)	:: cell_size	, cell_surface_area	
 		integer	:: dimensions
-		integer	:: sign
+		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim
  
 		dimensions		= this%domain%get_domain_dimensions()
@@ -390,7 +394,7 @@ contains
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		flow_inner_loop	= this%domain%get_local_inner_faces_bounds()
-
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 		
 		associate(  m_flux_d	=> this%m_flux_d%s_ptr	, &
 					numdens_flux_d	=> this%numdens_flux_d%s_ptr	, &
@@ -401,9 +405,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 					
-		!$omp parallel default(none)  private(i,j,k,dim,av_velocity,dif_velocity,cell_surface_area) , &
+		!$omp parallel default(none)  private(i,j,k,dim,plus,sign,bound_number,boundary_type_name,av_velocity,dif_velocity,cell_surface_area) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,mesh,m_flux_d,numdens_flux_d,mass_d,rho_d,v_d_int,dimensions,cell_size,time_step,flow_inner_loop,coordinate_system)
+		!$omp& shared(bc,mesh,m_flux_d,numdens_flux_d,mass_d,rho_d,v_d_int,dimensions,cell_size,time_step,flow_inner_loop,cons_inner_loop,coordinate_system)
 		!$omp do collapse(3) schedule(guided)
 					
 		do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
@@ -419,13 +423,13 @@ contains
 						case ('cartesian')	
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
-							! x -> z, y -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(2,i,j,k)									
-							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(1))		
+							! x -> r, y -> z
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))									
+							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		
 						case ('spherical')
 							! x -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
-					end select			
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2	
+					end select				
 		
                     av_velocity     = 0.5_dkind *(v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_d_int%pr(dim)%cells(i,j,k))
                     dif_velocity    = time_step *(v_d_int%pr(dim)%cells(i,j,k) - v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(dim)
@@ -444,6 +448,22 @@ contains
                             numdens_flux_d%cells(dim,i,j,k) = 0.0_dkind
                         end if
                     end if
+                    if((bc%bc_markers(i,j,k) == 0).and.(i <= cons_inner_loop(1,2)).and.(j <= cons_inner_loop(2,2)-2).and.(k <= cons_inner_loop(3,2))) then
+						do plus = 1,2
+							sign			= (-1)**plus
+							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+							if( bound_number /= 0 ) then
+								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+								select case(boundary_type_name)
+									case ('wall')		! Particles stay near top wall
+										if ((dim == 2).and.(sign == 1)) then
+											m_flux_d%cells(dim,i,j,k) = max(0.0_dkind,m_flux_d%cells(dim,i,j,k))							
+										end if
+								end select
+							end if					
+						end do
+					end if
+                    
 					continue
                 end do
 	!		end if
@@ -510,8 +530,8 @@ contains
 					case ('cartesian')
 						cell_volume			= cell_volume
 					case ('cylindrical')
-						cell_volume			= cell_volume * mesh%mesh(2,i,j,k)
-					case ('spherical')
+						cell_volume			= cell_volume * mesh%mesh(1,i,j,k)
+                    case ('spherical')
 						cell_volume			= cell_volume * mesh%mesh(1,i,j,k)**2
 				end select			
  
