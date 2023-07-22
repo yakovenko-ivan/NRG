@@ -741,8 +741,8 @@ contains
 		
 !		call this%chem_kin_solver%write_chemical_kinetics_table('15_pcnt_H2-Air_table(T).dat')
 
-        call this%if_stabilized(this%time, stabilized)
-        if (stabilized) stop
+!        call this%if_stabilized(this%time, stabilized)
+!        if (stabilized) stop
         
 		if (stabilizing_inlet) then
 			call this%stabilizing_inlet_1D(this%time, stabilized)

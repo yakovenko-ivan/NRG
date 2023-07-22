@@ -266,7 +266,7 @@ contains
 		
 		character(len=20)	:: coordinate_system
  
-		character(len=20)		:: boundary_type_name		
+		character(len=20)	:: boundary_type_name		
 		
 		real(dkind)	,dimension(3)	:: cell_size	, cell_surface_area	
 		integer	:: dimensions
@@ -308,8 +308,8 @@ contains
 						case ('cartesian')	
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
-							! x -> z, y -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(1,i,j,k)									
+							! x -> r, y -> z
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))									
 							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		! - 0.5_dkind*cell_size(1)
 						case ('spherical')
 							! x -> r

@@ -191,15 +191,15 @@ contains
 						lame_coeffs			= 1.0_dkind
 					case ('cylindrical')
 						! x -> z, y -> r
-						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
 						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + cell_size(1)	
 					
 					case ('spherical')
 						! x -> r
-						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
 						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + cell_size(1))**2
 				end select							
 				
 				
