@@ -323,12 +323,12 @@ contains
 						case ('cartesian')	
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
-							! x -> z, y -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * mesh%mesh(1,i,j,k)									
-							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		! - 0.5_dkind*cell_size(1)
+							! x -> r, y -> z
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))									
+							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		
 						case ('spherical')
 							! x -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))**2	! - 0.5_dkind*cell_size(1)
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2	
 					end select		
 	
                     av_velocity     = 0.5_dkind *(v_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_int%pr(dim)%cells(i,j,k))
@@ -348,7 +348,7 @@ contains
 		end do
 		end do
 		end do
-		
+
 	!$omp end do nowait
 	!$omp end parallel
 
