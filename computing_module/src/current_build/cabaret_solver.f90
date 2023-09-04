@@ -1337,15 +1337,20 @@ contains
 				if(bc%bc_markers(i,j,k) == 0) then
 	
 					do spec = 1,species_number
-						y_inv(spec,1)		= Y_f(spec,dim,i,j,k)
-						y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-
-						Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)
-						Y_inv_old(spec)		= Y_old(spec,i,j,k)
+					!	y_inv(spec,1)		= Y_f(spec,dim,i,j,k)
+					!	y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+					!	Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)
+					!	Y_inv_old(spec)		= Y_old(spec,i,j,k)
+                        
+						y_inv(spec,1)		= Y_f(spec,dim,i,j,k)									* rho_f(dim,i,j,k)										- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i,j,k)							
+						y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+						Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)								* rho%cells(i,j,k)										- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p%cells(i,j,k)		
+						Y_inv_old(spec)		= Y_old(spec,i,j,k)										* rho_old(i,j,k)										- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
+                        
 					end do
 					
-					diss_l = 0.00_dkind
-					diss_r = 0.00_dkind
+					diss_l = 0.05_dkind
+					diss_r = 0.05_dkind
 
 					do spec = 1,species_number
 						y_inv_new(spec,1)	= (2.0_dkind*Y_inv_half(spec) - (1.0_dkind-diss_l)*y_inv(spec,2))/(1.0_dkind+diss_l)
@@ -1394,7 +1399,8 @@ contains
 							if(bound_number == 0) then	
 								v_f_approx_lower		= v_f_new%pr(dim)%cells(dim,i,j,k) 
 								if (v_f_approx_lower < 0.0_dkind) then
-									Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1)) 
+                                	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i,j,k)  / v_s%cells(i,j,k)**2 )  / rho_f(dim,i,j,k)
+								!	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1)) 
 								end if	
 							end if
 						end if
@@ -1404,7 +1410,8 @@ contains
 							if(bound_number == 0) then
 								v_f_approx_higher		= v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 								if (v_f_approx_higher >= 0.0_dkind) then
-									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 
+                                	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  / v_s%cells(i,j,k)**2 )
+								!	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 
 								end if
 							end if
 						end if
