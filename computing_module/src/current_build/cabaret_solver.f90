@@ -1410,7 +1410,7 @@ contains
 							if(bound_number == 0) then
 								v_f_approx_higher		= v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 								if (v_f_approx_higher >= 0.0_dkind) then
-                                	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  / v_s%cells(i,j,k)**2 )
+                                	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  / v_s%cells(i,j,k)**2 )  / rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 								!	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 
 								end if
 							end if
