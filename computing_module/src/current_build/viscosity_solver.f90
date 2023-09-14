@@ -213,16 +213,16 @@ contains
                         
                         sigma_dv	= sigma_dv + sigma%pr(dim1,dim2)%cells(i,j,k) * (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dkind*cell_size(dim2))
                     end do
-					
-                    v_div_sigma	= v_div_sigma + div_sigma * v%pr(dim1)%cells(i,j,k)
                     
 					select case(coordinate_system)
-						case ('cylindrical')
-							if(dim1==1) div_sigma = div_sigma + (sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
-							if(dim1==2) div_sigma = div_sigma + (sigma%pr(1,2)%cells(i,j,k))/mesh%mesh(1,i,j,k)
-						case ('spherical')
-							if(dim1==1) div_sigma = div_sigma + 2.0_dkind*(sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
-					end select							
+					case ('cylindrical')
+						if(dim1==1) div_sigma = div_sigma + (sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
+						if(dim1==2) div_sigma = div_sigma + (sigma%pr(1,2)%cells(i,j,k))/mesh%mesh(1,i,j,k)
+					case ('spherical')
+						if(dim1==1) div_sigma = div_sigma + 2.0_dkind*(sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
+                    end select			
+				
+                    v_div_sigma	= v_div_sigma + div_sigma * v%pr(dim1)%cells(i,j,k)    
 					
 					v_prod%pr(dim1)%cells(i,j,k)	=  div_sigma !* time_step
 
