@@ -88,7 +88,7 @@ module cabaret_solver_class
 		real(dkind) ,dimension(:,:,:,:,:)	,allocatable    :: v_f, Y_f
 		real(dkind) ,dimension(:,:,:,:)		,allocatable    :: rho_f, p_f, e_i_f, E_f_f, v_s_f
 		! Quasi invariants
-		real(dkind) ,dimension(:,:,:,:,:)		,allocatable    :: r_corr, q_corr, s_corr
+		real(dkind) ,dimension(:,:,:,:,:)		,allocatable    :: r_inv_corr, q_inv_corr, s_corr
         real(dkind) ,dimension(:,:,:,:,:,:)		,allocatable    :: v_inv_corr, y_inv_corr
         
         
@@ -409,13 +409,13 @@ contains
 										flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 										flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))		
 
-		allocate(constructor%r_corr(			2						, &
+		allocate(constructor%r_inv_corr(			2						, &
 										dimensions						, &
 										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2))) 
         
-		allocate(constructor%q_corr(			2						, &
+		allocate(constructor%q_inv_corr(			2						, &
 										dimensions						, &
 										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
@@ -625,13 +625,13 @@ contains
 	subroutine solve_problem(this)
 		class(cabaret_solver)	,intent(inout)	:: this
     
-		real(dkind)	,dimension(2)						:: r, q, r_corrected, q_corrected, r_new, q_new
+		real(dkind)	,dimension(2)							:: r_inv, q_inv, r_inv_corrected, q_inv_corrected, r_inv_new, q_inv_new
 		real(dkind)	,dimension(:,:)	,allocatable	,save	:: v_inv, v_inv_corrected, v_inv_new
 		real(dkind)	,dimension(:)	,allocatable	,save	:: v_inv_half, v_inv_old
 		real(dkind)	,dimension(:,:)	,allocatable	,save	:: Y_inv, Y_inv_corrected, y_inv_new
 		real(dkind)	,dimension(:)	,allocatable	,save	:: Y_inv_half, Y_inv_old
 
-		real(dkind)					:: r_half, q_half, R_old, Q_old
+		real(dkind)					:: r_inv_half, q_inv_half, R_inv_old, Q_inv_old
 		real(dkind)					:: G_half, G_half_old	, G_half_lower, G_half_higher
 		
 		real(dkind)	,dimension(3)	:: characteristic_speed
@@ -639,6 +639,7 @@ contains
 		real(dkind)	:: v_f_approx, v_s_f_approx
 		real(dkind)	:: v_f_approx_lower, v_f_approx_higher
 
+        real(dkind)	:: r
 		real(dkind)	:: g_inv, alpha = 0.0_dkind, alpha_loc
 		real(dkind)	:: f, corr, diss_l, diss_r, diss = 0.5_dkind
 		integer		,save :: dissipator_active = 0
@@ -674,7 +675,7 @@ contains
 		
 		integer				:: nu
 		
-		integer					:: sign, bound_number
+		integer             :: sign, bound_number
 
 		integer	:: dimensions, species_number
 		character(len=20)	:: coordinate_system
@@ -737,8 +738,8 @@ contains
 					v_s_old		=> this%v_s_old	,&
 					gamma_old	=> this%gamma_old	, &
 					
-					r_corr			=> this%r_corr	, &
-					q_corr			=> this%q_corr	, &
+					r_inv_corr			=> this%r_inv_corr	, &
+					q_inv_corr			=> this%q_inv_corr	, &
 					v_inv_corr		=> this%v_inv_corr	,&            
             
 					p_f_new		=> this%p_f_new%s_ptr		, &	
@@ -773,7 +774,8 @@ contains
 		call this%apply_boundary_conditions_main()						
 
 		select case(coordinate_system)
-			case ('cartesian')	
+        case ('cartesian')	
+				nu = 1
 			case ('cylindrical')
 				! x -> z, y -> r
 				nu = 2
@@ -803,7 +805,7 @@ contains
 			v_old(dim,:,:,:)		=	v%pr(dim)%cells
 		end do	
 
-		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ) , &
+		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r) , &
 		!$omp& firstprivate(this) , &
 		!$omp& shared(cons_inner_loop,bc,dimensions,species_number,p,p_old,p_f,rho,rho_f,rho_prod,rho_old,v,v_f,v_prod,v_old,v_s,v_s_old,Max_v_s,Min_v_s,Y,Y_f,Y_prod,Y_old,E_f,E_f_f,E_f_prod,E_F_old,mesh,cell_size,nu,coordinate_system)
 		!$omp do collapse(3) schedule(guided) reduction(max:Max_v_s) reduction(min:Min_v_s)	 		
@@ -812,6 +814,8 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				
+                r = mesh%mesh(1,i,j,k)
+                
 				rho%cells(i,j,k)	= 0.0_dkind
 				E_f%cells(i,j,k)	= 0.0_dkind
 				
@@ -821,38 +825,47 @@ contains
 		  
 				do dim = 1,dimensions
 					v%pr(dim)%cells(i,j,k)	=	0.0_dkind 		
-				end do				
-			 
+                end do				
+
 				do dim = 1,dimensions
-					rho%cells(i,j,k)	=	rho%cells(i,j,k)	- (	rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) -	rho_f(dim,i,j,k)*v_f(dim,dim,i,j,k))/cell_size(1)
-					if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
-						rho%cells(i,j,k)	=	rho%cells(i,j,k) - 2.0_dkind * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
-																			 * 0.5_dkind * (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	rho_f(dim,i,j,k)*v_f(dim,dim,i,j,k))	&
-																			 * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
-					end if		
+                    
+                    mean_higher	= rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) 
+					mean_lower	= rho_f(dim,i,j,k) * v_f(dim,dim,i,j,k)                   
+
+					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) /cell_size(1)
+                    
+                    if(dim == 1) then
+						rho%cells(i,j,k)	=	rho%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																	*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																	*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																	/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 	
+                    end if
 				end do
 				
-				rho%cells(i,j,k)		=	rho_old(i,j,k)	+  0.5_dkind*this%time_step * rho%cells(i,j,k)
-	
+				rho%cells(i,j,k)		=	rho_old(i,j,k)	+  0.5_dkind * this%time_step * rho%cells(i,j,k)
+
 				spec_summ = 0.0_dkind
 				do spec = 1,species_number
+					Y%pr(spec)%cells(i,j,k)		= 0.0_dkind
 					do	dim = 1,dimensions
-						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(		rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	&
-																					-	rho_f(dim,i,j,k)*Y_f(spec,dim,i,j,k)*v_f(dim,dim,i,j,k))/cell_size(1)
-																					
-						if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
-							Y%pr(spec)%cells(i,j,k)	=	Y%pr(spec)%cells(i,j,k) - 2.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
-																							 * 0.5_dkind * (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	rho_f(dim,i,j,k)*Y_f(spec,dim,i,j,k)*v_f(dim,dim,i,j,k))	&
-																							 * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
-						end if																	
-					end do	
-
-					
-					Y%pr(spec)%cells(i,j,k)		=   rho_old(i,j,k)  *	Y_old(spec,i,j,k) + 0.5_dkind*this%time_step * Y%pr(spec)%cells(i,j,k)
-					Y%pr(spec)%cells(i,j,k)		=  Y%pr(spec)%cells(i,j,k)/rho%cells(i,j,k)
+						mean_higher	=  rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * y_f(spec,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
+						mean_lower	=  rho_f(dim,i,j,k) * y_f(spec,dim,i,j,k) * v_f(dim,dim,i,j,k)
+						
+						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
+                        
+                        if(dim == 1) then
+							Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																				*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																				*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																				/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 	
+                        end if
+					end do
+                    
+					Y%pr(spec)%cells(i,j,k)		=	rho_old(i,j,k) * Y_old(spec,i,j,k) + 0.5_dkind * this%time_step * Y%pr(spec)%cells(i,j,k)
+					Y%pr(spec)%cells(i,j,k)		=	Y%pr(spec)%cells(i,j,k)	/ rho%cells(i,j,k)
 					
 					spec_summ = spec_summ + max(Y%pr(spec)%cells(i,j,k), 0.0_dkind)
-				end do
+				end do                
 				
 				do spec = 1,species_number
 					Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dkind) / spec_summ 
@@ -860,14 +873,18 @@ contains
 
 				do dim = 1,dimensions
 					do dim1 = 1,dimensions
-						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(		rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))	&
-																					-	rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k)) /cell_size(1)
+                        
+						mean_higher	=  rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))
+						mean_lower	=  rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k)
+                        
+						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
 
-						if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
-							v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k) - 2.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
-																							* 0.5_dkind * (rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) +	rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k))	&
-																							* ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
-						end if		
+       !                 if(dim == 1) then                        
+							!v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+							!													*	0.5_dkind * (mean_higher +	mean_lower)																		&
+							!													*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+							!													/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+       !                 end if                        
 
 					end do
 
@@ -879,14 +896,18 @@ contains
 				end do	
     
 				do dim = 1,dimensions
-					E_f%cells(i,j,k)		= 	E_f%cells(i,j,k)		-	((rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	&
-																		-	(rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)																		+	p_f(dim,i,j,k))									*v_f(dim,dim,i,j,k))/cell_size(1)
-								
-					if (((coordinate_system == 'cylindrical').and.(dim == 1)).or.((coordinate_system == 'spherical').and.(dim == 1))) then
-						E_f%cells(i,j,k)	=	E_f%cells(i,j,k) - 2.0_dkind  * (nu - 1.0_dkind)/( (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) + (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind))		&
-																			  * 0.5_dkind * ((rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) +	(rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)	+	p_f(dim,i,j,k))*v_f(dim,dim,i,j,k))	&
-																			  * ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**(nu - 1.0_dkind) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**(nu - 1.0_dkind)) / ((mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)) - (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))) 	
-					end if
+                    
+ 					mean_higher	=  (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+					mean_lower	=  (rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)																	+	p_f(dim,i,j,k))									*v_f(dim,dim,i,j,k)                   
+                    
+					E_f%cells(i,j,k)	= 	E_f%cells(i,j,k) -	(mean_higher - mean_lower ) /cell_size(1)
+                    
+                    if(dim == 1) then
+						E_f%cells(i,j,k)	=	E_f%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																	*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																	*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																	/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+                    end if
 				end do	
 				
 				E_f%cells(i,j,k)		=	rho_old(i,j,k) * E_f_old(i,j,k)  + 0.5_dkind*this%time_step* E_f%cells(i,j,k)
@@ -941,7 +962,7 @@ contains
 		end do
 		!$omp end parallel		
 		
-		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half,G_half_old,G_half_lower,G_half_higher,r,R_half,R_old,q,Q_half,Q_old,v_inv,v_inv_half,v_inv_old,r_new,q_new,v_inv_new,g_inv,max_inv,min_inv,maxmin_inv,r_corr,q_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,alpha_loc,sign,bound_number) , &
+		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half,G_half_old,G_half_lower,G_half_higher,r_inv,R_inv_half,R_inv_old,q_inv,Q_inv_half,Q_inv_old,v_inv,v_inv_half,v_inv_old,r_inv_new,q_inv_new,v_inv_new,g_inv,max_inv,min_inv,maxmin_inv,r_inv_corr,q_inv_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,alpha_loc,sign,bound_number) , &
 		!$omp& firstprivate(this) , &
 		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,bc,v_s,v_s_old,rho,rho_old,p,p_old,v,v_old,E_f,gamma,p_f,v_f,rho_f,rho_prod,v_prod,E_f_prod,p_f_new,rho_f_new,v_f_new,Max_v_s,Min_v_s,diss,alpha,dissipator_active,mesh,cell_size,lock,coordinate_system)
 		do dim = 1,dimensions
@@ -971,15 +992,15 @@ contains
 
 					! ********* Lower invariants ***********
 					
-					r(1) 	= v_f(dim,dim,i,j,k)									+ G_half*p_f(dim,i,j,k)
-					r(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-					R_half	= v%pr(dim)%cells(i,j,k)								+ G_half*(p%cells(i,j,k))
-					R_old	= v_old(dim,i,j,k)										+ G_half_old*(p_old(i,j,k))
+					r_inv(1) 	= v_f(dim,dim,i,j,k)									+ G_half*p_f(dim,i,j,k)
+					r_inv(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+					R_inv_half	= v%pr(dim)%cells(i,j,k)								+ G_half*(p%cells(i,j,k))
+					R_inv_old	= v_old(dim,i,j,k)										+ G_half_old*(p_old(i,j,k))
 					
-					q(1) 	= v_f(dim,dim,i,j,k)									- G_half*p_f(dim,i,j,k)
-					q(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-					Q_half	= v%pr(dim)%cells(i,j,k)								- G_half*(p%cells(i,j,k))
-					Q_old	= v_old(dim,i,j,k)										- G_half_old*(p_old(i,j,k))
+					q_inv(1) 	= v_f(dim,dim,i,j,k)									- G_half*p_f(dim,i,j,k)
+					q_inv(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+					Q_inv_half	= v%pr(dim)%cells(i,j,k)								- G_half*(p%cells(i,j,k))
+					Q_inv_old	= v_old(dim,i,j,k)										- G_half_old*(p_old(i,j,k))
 
 					do dim1 = 1,dimensions
 						if (dim1 == dim) then
@@ -1000,11 +1021,11 @@ contains
 					diss_l = 0.00_dkind
 					diss_r = 0.00_dkind
 
-					r_new(1) = (2.0_dkind*R_half - (1.0_dkind-diss_l)*r(2))/(1.0_dkind+diss_l)
-					q_new(1) = (2.0_dkind*Q_half - (1.0_dkind-diss_l)*q(2))/(1.0_dkind+diss_l)
+					r_inv_new(1) = (2.0_dkind*R_inv_half - (1.0_dkind-diss_l)*r_inv(2))/(1.0_dkind+diss_l)
+					q_inv_new(1) = (2.0_dkind*Q_inv_half - (1.0_dkind-diss_l)*q_inv(2))/(1.0_dkind+diss_l)
 	
-					r_new(2) = (2.0_dkind*R_half - (1.0_dkind-diss_r)*r(1))/(1.0_dkind+diss_r)
-					q_new(2) = (2.0_dkind*Q_half - (1.0_dkind-diss_r)*q(1))/(1.0_dkind+diss_r)				
+					r_inv_new(2) = (2.0_dkind*R_inv_half - (1.0_dkind-diss_r)*r_inv(1))/(1.0_dkind+diss_r)
+					q_inv_new(2) = (2.0_dkind*Q_inv_half - (1.0_dkind-diss_r)*q_inv(1))/(1.0_dkind+diss_r)				
 
 					do dim1 = 1,dimensions
 						v_inv_new(dim1,1)	= (2.0_dkind*v_inv_half(dim1) - (1.0_dkind-diss_l)*v_inv(dim1,2))/(1.0_dkind+diss_l)
@@ -1016,42 +1037,42 @@ contains
 					alpha_loc = 0.0_dkind
 
 					g_inv = 0.0_dkind
-					g_inv = ((R_half - R_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) + v_s%cells(i,j,k))*(r(2) - r(1))/cell_size(1))
+					g_inv = ((R_inv_half - R_inv_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) + v_s%cells(i,j,k))*(r_inv(2) - r_inv(1))/cell_size(1))
 				!	g_inv = ((R_half - R_old)/(this%time_step) + (v%pr(dim)%cells(i,j,k) + v_s%cells(i,j,k))*(r(2) - r(1))/cell_size(1))
 
-					max_inv = max(r(1),R_half,r(2)) + g_inv*this%time_step
-					min_inv = min(r(1),R_half,r(2)) + g_inv*this%time_step
+					max_inv = max(r_inv(1),R_inv_half,r_inv(2)) + g_inv*this%time_step
+					min_inv = min(r_inv(1),R_inv_half,r_inv(2)) + g_inv*this%time_step
 					maxmin_inv = abs(max_inv - min_inv)
 
 					max_inv = max_inv + (-alpha_loc)*maxmin_inv
 					min_inv = min_inv - (-alpha_loc)*maxmin_inv
 
-					if ((min_inv <= r_new(1)).and.(r_new(1) <= max_inv))    r_corr(1,dim,i,j,k) = r_new(1)
-					if (r_new(1) < min_inv)                                 r_corr(1,dim,i,j,k) = min_inv
-					if (max_inv < r_new(1))                                 r_corr(1,dim,i,j,k) = max_inv
+					if ((min_inv <= r_inv_new(1)).and.(r_inv_new(1) <= max_inv))    r_inv_corr(1,dim,i,j,k) = r_inv_new(1)
+					if (r_inv_new(1) < min_inv)										r_inv_corr(1,dim,i,j,k) = min_inv
+					if (max_inv < r_inv_new(1))										r_inv_corr(1,dim,i,j,k) = max_inv
 					
-					if ((min_inv <= r_new(2)).and.(r_new(2) <= max_inv))    r_corr(2,dim,i,j,k) = r_new(2)
-					if (r_new(2) < min_inv)                                 r_corr(2,dim,i,j,k) = min_inv
-					if (max_inv < r_new(2))                                 r_corr(2,dim,i,j,k) = max_inv               
+					if ((min_inv <= r_inv_new(2)).and.(r_inv_new(2) <= max_inv))    r_inv_corr(2,dim,i,j,k) = r_inv_new(2)
+					if (r_inv_new(2) < min_inv)										r_inv_corr(2,dim,i,j,k) = min_inv
+					if (max_inv < r_inv_new(2))										r_inv_corr(2,dim,i,j,k) = max_inv               
 					
 					g_inv = 0.0_dkind
-					g_inv = ((Q_half - Q_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) - v_s%cells(i,j,k))*(q(2) - q(1))/cell_size(1))
+					g_inv = ((Q_inv_half - Q_inv_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) - v_s%cells(i,j,k))*(q_inv(2) - q_inv(1))/cell_size(1))
                 !   g_inv = ((Q_half - Q_old)/(this%time_step) + (v%pr(dim)%cells(i,j,k) - v_s%cells(i,j,k))*(q(2) - q(1))/cell_size(1))
 
-					max_inv = max(q(1),Q_half,q(2)) + g_inv*this%time_step
-					min_inv = min(q(1),Q_half,q(2)) + g_inv*this%time_step
+					max_inv = max(q_inv(1),Q_inv_half,q_inv(2)) + g_inv*this%time_step
+					min_inv = min(q_inv(1),Q_inv_half,q_inv(2)) + g_inv*this%time_step
 					maxmin_inv = abs(max_inv - min_inv)
 				
 					max_inv = max_inv + (-alpha_loc)*maxmin_inv
 					min_inv = min_inv - (-alpha_loc)*maxmin_inv
 	
-					if ((min_inv <= q_new(1)).and.(q_new(1) <= max_inv))    q_corr(1,dim,i,j,k) = q_new(1)
-					if (q_new(1) < min_inv)                                 q_corr(1,dim,i,j,k) = min_inv
-					if (max_inv < q_new(1))                                 q_corr(1,dim,i,j,k) = max_inv
+					if ((min_inv <= q_inv_new(1)).and.(q_inv_new(1) <= max_inv))    q_inv_corr(1,dim,i,j,k) = q_inv_new(1)
+					if (q_inv_new(1) < min_inv)										q_inv_corr(1,dim,i,j,k) = min_inv
+					if (max_inv < q_inv_new(1))										q_inv_corr(1,dim,i,j,k) = max_inv
 						
-					if ((min_inv <= q_new(2)).and.(q_new(2) <= max_inv))	q_corr(2,dim,i,j,k) = q_new(2)
-					if (q_new(2) < min_inv)									q_corr(2,dim,i,j,k) = min_inv
-					if (max_inv < q_new(2))									q_corr(2,dim,i,j,k) = max_inv
+					if ((min_inv <= q_inv_new(2)).and.(q_inv_new(2) <= max_inv))	q_inv_corr(2,dim,i,j,k) = q_inv_new(2)
+					if (q_inv_new(2) < min_inv)										q_inv_corr(2,dim,i,j,k) = min_inv
+					if (max_inv < q_inv_new(2))										q_inv_corr(2,dim,i,j,k) = max_inv
 
 					do dim2 = 1,dimensions
 						g_inv = 0.0_dkind
@@ -1093,7 +1114,7 @@ contains
 								characteristic_speed(2) = v_f_approx - v_s_f_approx
 								characteristic_speed(3) = v_f_approx		
 									
-								call this%apply_boundary_conditions_flow(dim, i,j,k, characteristic_speed, q_corr(:,dim,i,j,k), r_corr(:,dim,i,j,k), v_inv_corr(:,:,dim,i,j,k), G_half)
+								call this%apply_boundary_conditions_flow(dim, i,j,k, characteristic_speed, q_inv_corr(:,dim,i,j,k), r_inv_corr(:,dim,i,j,k), v_inv_corr(:,:,dim,i,j,k), G_half)
 								
 							end if
 						end do
@@ -1109,7 +1130,7 @@ contains
                     
 
         
-		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half_lower,G_half_higher,r_corr,q_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,sign,bound_number) , &
+		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half_lower,G_half_higher,r_inv_corr,q_inv_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,sign,bound_number) , &
 		!$omp& firstprivate(this) , &
 		!$omp& shared(cons_utter_loop,flow_inner_loop,dimensions,bc,v_s,rho,p,p_old,v,p_f_new,rho_f_new,v_f_new,mesh,cell_size,lock,coordinate_system)
         
@@ -1145,12 +1166,12 @@ contains
 							( characteristic_speed(2) < 0.0_dkind )		.and.&
 							( characteristic_speed(3) >= 0.0_dkind )) then				
 
-							p_f_new%cells(dim,i,j,k)			=	(r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_corr(1,dim,i,j,k)) / (G_half_lower + G_half_higher)
+							p_f_new%cells(dim,i,j,k)			=	(r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_inv_corr(1,dim,i,j,k)) / (G_half_lower + G_half_higher)
 							rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k) - v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 								
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + G_half_lower * q_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + G_half_lower * q_inv_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(2,dim1,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
   								end if
@@ -1165,12 +1186,12 @@ contains
 							( characteristic_speed(2) < 0.0_dkind ).and.&
 							( characteristic_speed(3) < 0.0_dkind )) then
 						
-							p_f_new%cells(dim,i,j,k)			=	(r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_corr(1,dim,i,j,k)) / (G_half_lower + G_half_higher)
+							p_f_new%cells(dim,i,j,k)			=	(r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_inv_corr(1,dim,i,j,k)) / (G_half_lower + G_half_higher)
 							rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k) - v_inv_corr(1,dim,dim,i,j,k)) / (v_s%cells(i,j,k)**2)
 							
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + G_half_lower * q_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + G_half_lower * q_inv_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(1,dim1,dim,i,j,k)
 								end if
@@ -1182,12 +1203,12 @@ contains
 							( characteristic_speed(2) >= 0.0_dkind ).and.&
 							( characteristic_speed(3) >= 0.0_dkind )) then
 						
-							p_f_new%cells(dim,i,j,k)	= 0.5_dkind * (r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - q_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / G_half_lower
+							p_f_new%cells(dim,i,j,k)	= 0.5_dkind * (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - q_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / G_half_lower
 							rho_f_new%cells(dim,i,j,k)	= (p_f_new%cells(dim,i,j,k) - v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 						
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	0.5_dkind * (r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + q_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	0.5_dkind * (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + q_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(2,dim1,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 									!if ( characteristic_speed(3) == 0 ) then
@@ -1201,12 +1222,12 @@ contains
 							( characteristic_speed(2) < 0.0_dkind ).and.&
 							( characteristic_speed(3) < 0.0_dkind )) then
 						
-							p_f_new%cells(dim,i,j,k)			= 0.5_dkind * (r_corr(1,dim,i,j,k) - q_corr(1,dim,i,j,k)) / G_half_higher
+							p_f_new%cells(dim,i,j,k)			= 0.5_dkind * (r_inv_corr(1,dim,i,j,k) - q_inv_corr(1,dim,i,j,k)) / G_half_higher
 							rho_f_new%cells(dim,i,j,k)			= (p_f_new%cells(dim,i,j,k) - v_inv_corr(1,dim,dim,i,j,k)) / v_s%cells(i,j,k)**2
 						
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	0.5_dkind * (r_corr(1,dim,i,j,k) + q_corr(1,dim,i,j,k))
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	0.5_dkind * (r_inv_corr(1,dim,i,j,k) + q_inv_corr(1,dim,i,j,k))
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(1,dim1,dim,i,j,k)
 								end if
@@ -1244,7 +1265,7 @@ contains
 						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dkind*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
 																*0.5_dkind*(v_s%cells(i,j,k) + v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 		   
-						p_f_new%cells(dim,i,j,k)			= (r_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - v_f_new%pr(dim)%cells(dim,i,j,k))/G_half_lower
+						p_f_new%cells(dim,i,j,k)			= (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - v_f_new%pr(dim)%cells(dim,i,j,k))/G_half_lower
      
                             
 						if (characteristic_speed(3) >= 0.0_dkind) then
@@ -1275,7 +1296,7 @@ contains
 						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dkind*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
 																*0.5_dkind*(v_s%cells(i,j,k) + v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 		   
-						p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_corr(1,dim,i,j,k))/G_half_higher
+						p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_inv_corr(1,dim,i,j,k))/G_half_higher
 						
 						if (characteristic_speed(3) >= 0.0_dkind) then
 							rho_f_new%cells(dim,i,j,k)		= (p_f_new%cells(dim,i,j,k) - v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2)
@@ -1337,17 +1358,18 @@ contains
 				if(bc%bc_markers(i,j,k) == 0) then
 	
 					do spec = 1,species_number
-					!	y_inv(spec,1)		= Y_f(spec,dim,i,j,k)
-					!	y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-					!	Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)
-					!	Y_inv_old(spec)		= Y_old(spec,i,j,k)
+						y_inv(spec,1)		= y_f(spec,dim,i,j,k)
+						y_inv(spec,2)		= y_f(spec,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
+						y_inv_half(spec)	= y%pr(spec)%cells(i,j,k)
+						y_inv_old(spec)		= y_old(spec,i,j,k)
                         
-						y_inv(spec,1)		= Y_f(spec,dim,i,j,k)									* rho_f(dim,i,j,k)										- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i,j,k)							
-						y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-						Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)								* rho%cells(i,j,k)										- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p%cells(i,j,k)		
-						Y_inv_old(spec)		= Y_old(spec,i,j,k)										* rho_old(i,j,k)										- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
-                        
-					end do
+                      
+						!y_inv(spec,1)		= Y_f(spec,dim,i,j,k)									* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i,j,k)							
+						!y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+						!Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)								* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p%cells(i,j,k)		
+						!Y_inv_old(spec)	= Y_old(spec,i,j,k)										* rho_old(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
+
+                    end do
 					
 					diss_l = 0.05_dkind
 					diss_r = 0.05_dkind
@@ -1374,7 +1396,8 @@ contains
 						max_inv = max_inv + (-alpha_loc)*maxmin_inv
 						min_inv = min_inv - (-alpha_loc)*maxmin_inv
 
-                        			max_inv	= min(max_inv,1.0_dkind)
+                        
+						max_inv	= min(max_inv,1.0_dkind)
 						min_inv	= max(min_inv,0.0_dkind)
 
 						if ((min_inv <= y_inv_new(spec,1)).and.(y_inv_new(spec,1) <= max_inv))		y_inv_corrected(spec,1) = y_inv_new(spec,1)
@@ -1397,10 +1420,11 @@ contains
 						if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
 							bound_number	= bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 							if(bound_number == 0) then	
-								v_f_approx_lower		= v_f_new%pr(dim)%cells(dim,i,j,k) 
+							!	v_f_approx_lower		= v_f_new%pr(dim)%cells(dim,i,j,k) 
+                                v_f_approx_lower		= 0.5_dkind * (v%pr(dim)%cells(i,j,k)	+ v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 								if (v_f_approx_lower < 0.0_dkind) then
-                                	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i,j,k)  / v_s%cells(i,j,k)**2 )  / rho_f(dim,i,j,k)
-								!	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1)) 
+                                !	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i,j,k)  / v_s%cells(i,j,k)**2 )  / rho%cells(i,j,k)
+                                	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1))
 								end if	
 							end if
 						end if
@@ -1408,13 +1432,14 @@ contains
 						if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,2) ) then
 							bound_number	= bc%bc_markers(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 							if(bound_number == 0) then
-								v_f_approx_higher		= v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+								!v_f_approx_higher		= v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+                                v_f_approx_higher		= 0.5_dkind * (v%pr(dim)%cells(i,j,k)	+ v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
 								if (v_f_approx_higher >= 0.0_dkind) then
-                                	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  / v_s%cells(i,j,k)**2 )  / rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-								!	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 
-								end if
-							end if
-						end if
+                                !	Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))  / v_s%cells(i,j,k)**2 )  / rho%cells(i,j,k)
+									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 	
+   								end if
+                            end if
+                        end if
 					end do
 					
 #ifdef OMP						
@@ -1480,7 +1505,7 @@ contains
 
         ! *********** Conservative variables calculation ***************
 		
-		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower) , &
+		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r) , &
 		!$omp& firstprivate(this) , &
 		!$omp& shared(cons_inner_loop,bc,dimensions,species_number,p,p_f,p_f_new,rho,rho_f,rho_f_new,rho_prod,rho_old,v,v_f,v_f_new,v_prod,v_old,Y,Y_f,Y_f_new,Y_prod,Y_old,E_f,E_f_f,E_f_f_new,E_f_prod,E_F_old,mesh,cell_size,nu,coordinate_system)
 		!$omp do collapse(3) schedule(guided)			
@@ -1489,26 +1514,51 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
   			
 			if (bc%bc_markers(i,j,k) == 0) then	
-			
-				rho%cells(i,j,k)		= 0.0_dkind
-
+                
+                r = mesh%mesh(1,i,j,k)
+                
+				rho%cells(i,j,k)	= 0.0_dkind
+				E_f%cells(i,j,k)	= 0.0_dkind
+				
+				do spec = 1,species_number
+					Y%pr(spec)%cells(i,j,k)	=	0.0_dkind 
+				end do
+		  
 				do dim = 1,dimensions
+					v%pr(dim)%cells(i,j,k)	=	0.0_dkind 		
+                end do	
+                
+				do dim = 1,dimensions
+                    
                     mean_higher	= rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) 
-					mean_lower	= rho_f_new%cells(dim,i,j,k)    *v_f_new%pr(dim)%cells(dim,i,j,k)
+					mean_lower	= rho_f_new%cells(dim,i,j,k)    *v_f_new%pr(dim)%cells(dim,i,j,k)                    
 
-                    rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower)	/cell_size(1)
-                end do
+					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) /cell_size(1)
+                    
+                    if(dim == 1) then
+						rho%cells(i,j,k)	=	rho%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																	*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																	*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																	/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1)))
+                    end if
+				end do                
 
 				rho%cells(i,j,k)	=	rho_old(i,j,k) + 0.5_dkind*this%time_step*rho%cells(i,j,k)
 	   
 				spec_summ = 0.0_dkind
 				do spec = 1,species_number
-					Y%pr(spec)%cells(i,j,k)		= 0.0_dkind
 					do	dim = 1,dimensions
 						mean_higher	=  rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  * y_f_new%pr(spec)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 						mean_lower	=  rho_f_new%cells(dim,i,j,k)    * y_f_new%pr(spec)%cells(dim,i,j,k)   *v_f_new%pr(dim)%cells(dim,i,j,k)
 						
 						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
+                        
+                        if(dim == 1) then
+							Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																				*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																				*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																				/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+                        end if
 					end do
 					
 					Y%pr(spec)%cells(i,j,k)		=	rho_old(i,j,k) * Y_old(spec,i,j,k) + 0.5_dkind * this%time_step * Y%pr(spec)%cells(i,j,k)
@@ -1522,12 +1572,19 @@ contains
 				end do
 
 				do dim = 1,dimensions
-					v%pr(dim)%cells(i,j,k)		=	0.0_dkind 
 					do dim1 = 1,dimensions
 						mean_higher	= rho_f_new%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))  *v_f_new%pr(dim)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3)) *v_f_new%pr(dim1)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))
 						mean_lower	= rho_f_new%cells(dim1,i,j,k)  *v_f_new%pr(dim)%cells(dim1,i,j,k) *v_f_new%pr(dim1)%cells(dim1,i,j,k)
 													
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/cell_size(1)
+                        
+                        
+       !                 if(dim == 1) then                        
+							!v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+							!													*	0.5_dkind * (mean_higher +	mean_lower)																		&
+							!													*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+							!													/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+       !                 end if                        
 					end do
 	   
 					mean_higher	= p_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
@@ -1545,6 +1602,13 @@ contains
 					mean_lower	= (rho_f_new%cells(dim,i,j,k)*E_f_f_new%cells(dim,i,j,k)	+	p_f_new%cells(dim,i,j,k))*v_f_new%pr(dim)%cells(dim,i,j,k)	
 				
 					E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	(mean_higher - mean_lower)	/cell_size(1)
+                    
+                    if(dim == 1) then
+						E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																				*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																				*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																				/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+                    end if
 				end do	
 				E_f%cells(i,j,k) = rho_old(i,j,k) * E_f_old(i,j,k) + 0.5_dkind * this%time_step * E_f%cells(i,j,k)
 				E_f%cells(i,j,k) = E_f%cells(i,j,k) /rho%cells(i,j,k)
@@ -1730,12 +1794,12 @@ contains
 
 	end subroutine
 
-	subroutine apply_boundary_conditions_flow(this, dim,i,j,k, characteristic_speed, q_corrected, r_corrected, v_inv_corrected, G_half)
+	subroutine apply_boundary_conditions_flow(this, dim,i,j,k, characteristic_speed, q_inv_corrected, r_inv_corrected, v_inv_corrected, G_half)
 
 		class(cabaret_solver)		,intent(inout)		:: this
 		integer						,intent(in)			:: i, j, k, dim
 		real(dkind)	,dimension(3)	,intent(in)			:: characteristic_speed
-		real(dkind)	,dimension(2)	,intent(in)			:: q_corrected, r_corrected
+		real(dkind)	,dimension(2)	,intent(in)			:: q_inv_corrected, r_inv_corrected
 		real(dkind)	,dimension(:,:)	,intent(in)			:: v_inv_corrected
 		real(dkind)					,intent(in)			:: G_half
 		
@@ -1788,7 +1852,7 @@ contains
 										v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v%pr(dim1)%cells(i,j,k)
 									end if
 								end do		
-								p_f_new%cells(dim,i,j,k)			=	-q_corrected(1)	/ G_half
+								p_f_new%cells(dim,i,j,k)			=	-q_inv_corrected(1)	/ G_half
 								rho_f_new%cells(dim,i,j,k)			=	rho%cells(i,j,k)  !/ mesh%mesh(1,i,j,k) / mesh%mesh(1,i,j,k)  * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))
 								
 								spec_summ = 0.0_dkind
@@ -1808,7 +1872,7 @@ contains
 										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_inv_corrected(2,dim1)
 									end if
 								end do
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= r_corrected(2)/G_half
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= r_inv_corrected(2)/G_half
 								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(2,dim)) / (v_s%cells(i,j,k)**2)
 								spec_summ = 0.0_dkind
 								do spec = 1,species_number
@@ -1825,7 +1889,7 @@ contains
 							( characteristic_speed(3) < 0.0_dkind )) then
 							!# Subsonic flow from right to left, wall on the left.
 							if (sign == -1) then
-								p_f_new%cells(dim,i,j,k)			=	-q_corrected(1)/ G_half
+								p_f_new%cells(dim,i,j,k)			=	-q_inv_corrected(1)/ G_half
 								rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k)	-	v_inv_corrected(1,dim))	/ (v_s%cells(i,j,k)**2)
 								v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.0_dkind
 								do dim1 = 1,dimensions
@@ -1851,7 +1915,7 @@ contains
 									end if
 								end do
 								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= rho%cells(i,j,k)
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= r_corrected(2)/G_half
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			= r_inv_corrected(2)/G_half
 								spec_summ = 0.0_dkind
 								do spec = 1,species_number
 									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) 	= Y%pr(spec)%cells(i,j,k)  	
@@ -1879,8 +1943,8 @@ contains
 							( characteristic_speed(2) < 0.0_dkind ))then	!.and.&
 							if (sign == -1) then											!# Lower edge (left,bottom,far), flow from lower to higher edge  
 								
-								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_corrected(1))/(G_half_inf + G_half)
-								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_corrected(1))/(G_half_inf + G_half)
+								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_inv_corrected(1))/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_inv_corrected(1))/(G_half_inf + G_half)
 								rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k) - s_inf)/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2		
 								
 								do dim1 = 1, dimensions
@@ -1903,8 +1967,8 @@ contains
 							end if
 							if (sign == 1) then
 							
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_corrected(2) - q_inf)/(G_half_inf + G_half)
-								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_inv_corrected(2) - q_inf)/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_inv_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
 								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(2,dim))/v_s%cells(i,j,k)**2								
 							
 								do dim1 = 1, dimensions
@@ -1928,8 +1992,8 @@ contains
 							( characteristic_speed(3) < 0.0_dkind )) then
 
 							if (sign == 1) then
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_corrected(2) - q_inf)/(G_half_inf + G_half)
-								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_inv_corrected(2) - q_inf)/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_inv_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
 								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - s_inf)/v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))**2								
 							
 								do dim1 = 1, dimensions
@@ -1958,13 +2022,13 @@ contains
 							( characteristic_speed(2) >= 0.0_dkind ).and.&
 							( characteristic_speed(3) >= 0.0_dkind )) then
 											
-							p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= 0.5_dkind * (r_corrected(2) - q_corrected(2)) / G_half
+							p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= 0.5_dkind * (r_inv_corrected(2) - q_inv_corrected(2)) / G_half
 											
 							rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(2,dim)) / (v_s%cells(i,j,k)**2)
 											
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.5_dkind * (r_corrected(2) + q_corrected(2))
+									v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.5_dkind * (r_inv_corrected(2) + q_inv_corrected(2))
 								else
 									v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v_inv_corrected(2,dim1)
 									if ( characteristic_speed(3) == 0 ) then
@@ -1986,8 +2050,8 @@ contains
 							( characteristic_speed(2) < 0.0_dkind ))then	!.and.&
 							if (sign == -1) then											!# Lower edge (left,bottom,far), flow from lower to higher edge  
 								
-								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_corrected(1))/(G_half_inf + G_half)
-								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_corrected(1))/(G_half_inf + G_half)
+								p_f_new%cells(dim,i,j,k)			=	(r_inf - q_inv_corrected(1))/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i,j,k)	=	(G_half*r_inf + G_half_inf*q_inv_corrected(1))/(G_half_inf + G_half)
 								rho_f_new%cells(dim,i,j,k)			=	(p_f_new%cells(dim,i,j,k) - s_inf)/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2		
 								
 								do dim1 = 1, dimensions
@@ -2010,8 +2074,8 @@ contains
 							end if
 							if (sign == 1) then
 							
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_corrected(2) - q_inf)/(G_half_inf + G_half)
-								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_inv_corrected(2) - q_inf)/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_inv_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
 								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(2,dim))/v_s%cells(i,j,k)**2								
 							
 								do dim1 = 1, dimensions
@@ -2034,8 +2098,8 @@ contains
 							( characteristic_speed(2) < 0.0_dkind )		.and.&
 							( characteristic_speed(3) < 0.0_dkind )) then
 							if (sign == 1) then
-								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_corrected(2) - q_inf)/(G_half_inf + G_half)
-								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
+								p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(r_inv_corrected(2) - q_inf)/(G_half_inf + G_half)
+								v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	(G_half_inf*r_inv_corrected(2) + G_half*q_inf)/(G_half_inf + G_half)
 								rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))			=	(p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - s_inf)/v_s%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))**2								
 							
 								do dim1 = 1, dimensions
@@ -2063,13 +2127,13 @@ contains
 							( characteristic_speed(2) >= 0.0_dkind ).and.&
 							( characteristic_speed(3) >= 0.0_dkind )) then
 											
-							p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= 0.5_dkind * (r_corrected(2) - q_corrected(2)) / G_half
+							p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= 0.5_dkind * (r_inv_corrected(2) - q_inv_corrected(2)) / G_half
 											
 							rho_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (p_f_new%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_inv_corrected(2,dim)) / (v_s%cells(i,j,k)**2)
 											
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.5_dkind * (r_corrected(2) + q_corrected(2))
+									v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	0.5_dkind * (r_inv_corrected(2) + q_inv_corrected(2))
 								else
 									v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	v_inv_corrected(2,dim1)
 									if ( characteristic_speed(3) == 0 ) then
