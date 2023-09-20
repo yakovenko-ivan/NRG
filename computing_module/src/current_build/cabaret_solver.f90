@@ -879,12 +879,12 @@ contains
                         
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
 
-       !                 if(dim == 1) then                        
-							!v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
-							!													*	0.5_dkind * (mean_higher +	mean_lower)																		&
-							!													*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
-							!													/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
-       !                 end if                        
+                        if(dim1 == 1) then                        
+							v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																				*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																				*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																				/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+                        end if                        
 
 					end do
 
@@ -1367,12 +1367,12 @@ contains
 						!y_inv(spec,1)		= Y_f(spec,dim,i,j,k)									* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i,j,k)							
 						!y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 						!Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)								* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p%cells(i,j,k)		
-						!Y_inv_old(spec)	= Y_old(spec,i,j,k)										* rho_old(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
+						!Y_inv_old(spec)		= Y_old(spec,i,j,k)										* rho_old(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
 
                     end do
 					
-					diss_l = 0.05_dkind
-					diss_r = 0.05_dkind
+					diss_l = 0.0_dkind
+					diss_r = 0.0_dkind
 
 					do spec = 1,species_number
 						y_inv_new(spec,1)	= (2.0_dkind*Y_inv_half(spec) - (1.0_dkind-diss_l)*y_inv(spec,2))/(1.0_dkind+diss_l)
@@ -1464,7 +1464,7 @@ contains
 						end do
 
 						do spec = 1,species_number
-							Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
+						!	Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
 						end do
 					end if
 				end if
@@ -1579,12 +1579,12 @@ contains
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/cell_size(1)
                         
                         
-       !                 if(dim == 1) then                        
-							!v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
-							!													*	0.5_dkind * (mean_higher +	mean_lower)																		&
-							!													*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
-							!													/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
-       !                 end if                        
+                        if(dim1 == 1) then                        
+							v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
+																				*	0.5_dkind * (mean_higher +	mean_lower)																		&
+																				*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
+																				/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
+                        end if                        
 					end do
 	   
 					mean_higher	= p_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
