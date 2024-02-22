@@ -18,6 +18,7 @@ module riemann_solver_class
         
 		real(dkind)					:: rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, u_l, u_r
         real(dkind)					:: rho, p, gamma, u
+        integer                     :: contact_direction
         
         real(dkind)                 :: mu_l, mu_r, h_l, h_r, s_l, s_r, G_l, G_r
         
@@ -37,6 +38,7 @@ module riemann_solver_class
         procedure               :: get_pressure
         procedure               :: get_gamma
         procedure               :: get_velocity
+        procedure               :: rightward_contact
         procedure               :: get_activation_count
 	end type
 
@@ -72,6 +74,7 @@ contains
         constructor%p = 0.0_dkind
         constructor%gamma = 0.0_dkind
         constructor%u = 0.0_dkind
+        constructor%contact_direction = 0
         
         constructor%counter = 0
 
@@ -171,6 +174,7 @@ contains
         
         if (u_c > 0.0_dkind) then                           ! КР вправо
             this%gamma = this%gamma_l
+            this%contact_direction = 1
             if (p_c > this%p_l) then                       ! УВ влево  (2 области)
                 relative_shock_speed = this%u_l + (p_c - this%p_l) / (u_c - this%u_l) / this%rho_l      ! Скорость УВ
                 if (relative_shock_speed > 0.0_dkind) then  ! Левая невозмущенная область
@@ -205,6 +209,7 @@ contains
             end if
         else                                                ! КР влево
             this%gamma = this%gamma_r
+            this%contact_direction = -1
             if (p_c > this%p_r) then                       ! УВ вправо  (2 области)
                 beta = (this%u_r - u_c) * (this%u_r - u_c) / (p_c - this%p_r)
                 rho_s = this%rho_r / (1.0_dkind - beta * this%rho_r)            ! Плотность за УВ
@@ -321,6 +326,17 @@ contains
         real(dkind)                 :: get_velocity
         
         get_velocity = this%u
+    end function
+    
+    function rightward_contact(this)
+        class(riemann_solver) ,intent(in) :: this
+        logical                 :: rightward_contact
+        
+        if (this%contact_direction == 1) then
+            rightward_contact = .true.
+        else
+            rightward_contact = .false.
+        end if
     end function
     
     function get_activation_count(this)
