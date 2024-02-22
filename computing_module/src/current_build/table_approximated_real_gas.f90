@@ -771,8 +771,8 @@ contains
                         
                         print *, 'Riemann activation count: ', riemann%get_activation_count()
                         print *, '********************************'
-                        
-					end if                   
+						
+                    end if
                     
 
 					T_old	= T_f%cells(dim,i,j,k)
@@ -882,7 +882,7 @@ contains
 		real(dkind)                     :: cp, cv
 
 		real(dkind) ,dimension(this%chem%chem_ptr%species_number)    :: concs
-		real(dkind)	:: average_molar_mass, mol_mix_conc
+		real(dkind)	:: average_molar_mass
 
 		integer	:: bound_number
 		integer	:: species_number, specie_index
@@ -909,6 +909,7 @@ contains
 						E_f             => this%E_f%s_ptr			, &
 						h_s				=> this%h_s%s_ptr			, &
 						v_s             => this%v_s%s_ptr			, &
+						mol_mix_conc    => this%mol_mix_conc%s_ptr	, &
 						Y               => this%Y%v_ptr				, &
 						v               => this%v%v_ptr)
 
@@ -945,7 +946,8 @@ contains
 
 										do specie_number = 1, species_number
 											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(specie_number)%cells(i,j,k)
-										end do
+                                        end do
+                                        mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))   =  mol_mix_conc%cells(i,j,k)
 										
 									case('outlet','inlet')
 								
@@ -979,15 +981,15 @@ contains
 											average_molar_mass = average_molar_mass + concs(specie_index) / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 				
-										average_molar_mass	=  1.0_dkind / average_molar_mass
-										mol_mix_conc		=  average_molar_mass
+										average_molar_mass      =  1.0_dkind / average_molar_mass
+										mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))   =  average_molar_mass
 				
-										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * mol_mix_conc
+										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * average_molar_mass
 										call this%boundary%bc_ptr%boundary_types(bound_number)%set_farfield_density(farfield_density)
 
 										do specie_number = 1,size(farfield_species_names)
 											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
-											concs(specie_index)		= concs(specie_index) * mol_mix_conc / this%thermo%thermo_ptr%molar_masses(specie_index)
+											concs(specie_index)		= concs(specie_index) * average_molar_mass / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 									
 										cp = this%thermo%thermo_ptr%calculate_mixture_cp(farfield_temperature, concs)
@@ -996,7 +998,7 @@ contains
 										farfield_gamma	= cp / cv	
 								
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs)/ mol_mix_conc
-										farfield_e_i	= (this%thermo%thermo_ptr%calculate_mixture_energy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc
+										farfield_e_i	= (this%thermo%thermo_ptr%calculate_mixture_energy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / average_molar_mass
 										
                                         farfield_velocity	=  sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
                                         
@@ -1013,7 +1015,7 @@ contains
 										E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	farfield_E_f 
 										call this%boundary%bc_ptr%boundary_types(bound_number)%set_farfield_energy(farfield_E_f)
                                         
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc
+										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / average_molar_mass
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
 										
 								end select
