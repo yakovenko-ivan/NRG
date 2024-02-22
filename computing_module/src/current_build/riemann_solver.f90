@@ -22,6 +22,8 @@ module riemann_solver_class
         
         real(dkind)                 :: mu_l, mu_r, h_l, h_r, s_l, s_r, G_l, G_r
         
+        real(dkind)                 :: conv_rate
+        
         integer                     :: counter
      
 	contains
@@ -33,6 +35,11 @@ module riemann_solver_class
         procedure, private		:: F_r
         procedure, private		:: a_l
         procedure, private		:: a_r
+        procedure, private		:: F_lr_prime
+        procedure, private		:: F_l_prime
+        procedure, private		:: F_r_prime
+        procedure, private		:: a_l_prime
+        procedure, private		:: a_r_prime
         
         procedure               :: get_density
         procedure               :: get_pressure
@@ -75,6 +82,8 @@ contains
         constructor%gamma = 0.0_dkind
         constructor%u = 0.0_dkind
         constructor%contact_direction = 0
+        
+        constructor%conv_rate = 0.1_dkind
         
         constructor%counter = 0
 
@@ -142,7 +151,7 @@ contains
 		class(riemann_solver) ,intent(inout) :: this
         
         real(dkind)     :: delta_p = 1.0e-2_dkind
-        real(dkind)     :: p_0 = 100.0_dkind
+        real(dkind)     :: p_0
         
         real(dkind)     :: p_c, u_c
         real(dkind)     :: func_value, func_deriv_value
@@ -157,15 +166,28 @@ contains
         this%counter = this%counter + 1
         
         ! Контактный разрыв
-        do iter = 1,20
-            func_value = F_lr(this, p_0)
-            func_deriv_value = (this%F_lr(p_0 + delta_p) - this%F_lr(p_0 - delta_p)) / (2.0 * delta_p)
-            
-            p_c = p_0 - func_value/func_deriv_value
-            p_0 = p_c
-        end do
+        p_0 = (this%p_l + this%p_r) / 2.0_dkind * min1(this%p_l, this%p_r) / max1(this%p_l, this%p_r)
         
-        u_c = this%F_l(p_c)
+        iter = 1
+        do while (iter < 1000)
+            func_value = F_lr(this, p_0)
+            func_deriv_value = F_lr_prime(this, p_0)
+            
+            p_c = p_0 - this%conv_rate * func_value/func_deriv_value
+            if ((p_c < 0.0_dkind) .or. p_c /= abs(p_c)) p_c = 0.0_dkind
+                
+            if ((abs(p_0 - p_c) < 1.0_dkind)) exit
+                
+            p_0 = p_c
+            iter = iter + 1
+        end do
+        if (isnan(p_c)) then
+            print *, "Riemann Solver: p_c is nan"
+            p_c = (this%p_l + this%p_r) / 2.0_dkind * min1(this%p_l, this%p_r) / max1(this%p_l, this%p_r)
+            pause
+        end if  
+        
+        u_c = (this%F_l(p_c) + this%F_r(p_c)) * 0.5_dkind
         
         ! Определение параметров на выходе
         max_l = 0.0_dkind
@@ -264,7 +286,9 @@ contains
         real(dkind)                 :: F_l
         real(dkind) ,intent(in)     :: p
 
-        if (p < this%p_l) then
+        if (abs(p - this%p_l) < 1.0_dkind) then
+            F_l = this%u_l
+        elseif (p < this%p_l) then
             F_l = this%u_l - this%G_l * (p**this%mu_l - this%p_l**this%mu_l)
         else
             F_l = this%u_l - sqrt((p - this%p_l) * (1.0_dkind - this%a_l(p)) / this%rho_l)
@@ -276,7 +300,9 @@ contains
         real(dkind)                 :: F_r
         real(dkind) ,intent(in)     :: p
         
-        if (p < this%p_r) then
+        if (abs(p - this%p_r) < 1.0_dkind) then
+            F_r = this%u_r
+        elseif (p < this%p_r) then
             F_r = this%u_r + this%G_r * (p**this%mu_r - this%p_r**this%mu_r)
         else
             F_r = this%u_r + sqrt((p - this%p_r) * (1.0_dkind - this%a_r(p)) / this%rho_r)
@@ -297,6 +323,58 @@ contains
         real(dkind) ,intent(in)     :: p
         
         a_r = (this%p_r + this%h_r * p) / (p + this%h_r * this%p_r)
+    end function
+    
+    function F_lr_prime(this, p)
+        class(riemann_solver) ,intent(in) :: this
+        real(dkind)                 :: F_lr_prime
+        real(dkind) ,intent(in)     :: p
+        
+        F_lr_prime = this%F_l_prime(p) - this%F_r_prime(p)
+    end function
+    
+    function F_l_prime(this, p)
+        class(riemann_solver) ,intent(in) :: this
+        real(dkind)                 :: F_l_prime
+        real(dkind) ,intent(in)     :: p
+        
+        if (abs(p - this%p_r) < 1.0_dkind) then
+            F_l_prime = - this%G_l * this%mu_l * p**(this%mu_l - 1.0_dkind)
+        elseif (p < this%p_l) then
+            F_l_prime = - this%G_l * this%mu_l * p**(this%mu_l - 1.0_dkind)
+        else
+            F_l_prime = - 0.5_dkind * (1.0_dkind - this%a_l(p) - (p - this%p_l) * this%a_l_prime(p)) / sqrt((p - this%p_l) * (1.0_dkind - this%a_l(p)) / this%rho_l) / this%rho_l
+        end if
+    end function
+    
+    function F_r_prime(this, p)
+        class(riemann_solver) ,intent(in) :: this
+        real(dkind)                 :: F_r_prime
+        real(dkind) ,intent(in)     :: p
+
+        if (abs(p - this%p_r) < 1.0) then
+            F_r_prime = this%G_r * this%mu_r * p**(this%mu_r - 1.0_dkind)
+        elseif (p < this%p_r) then
+            F_r_prime = this%G_r * this%mu_r * p**(this%mu_r - 1.0_dkind)
+        else
+            F_r_prime = 0.5_dkind * (1.0_dkind - this%a_r(p) - (p - this%p_r) * this%a_r_prime(p)) / sqrt((p - this%p_r) * (1.0_dkind - this%a_r(p)) / this%rho_r) / this%rho_r
+        end if
+    end function
+    
+    function a_l_prime(this, p)
+        class(riemann_solver) ,intent(in) :: this
+        real(dkind)                 :: a_l_prime
+        real(dkind) ,intent(in)     :: p
+        
+        a_l_prime = this%p_l * (this%h_l**2 - 1.0_dkind) / (p + this%h_l * this%p_l)**2
+    end function
+    
+    function a_r_prime(this, p)
+        class(riemann_solver) ,intent(in) :: this
+        real(dkind)                 :: a_r_prime
+        real(dkind) ,intent(in)     :: p
+        
+        a_r_prime = this%p_r * (this%h_r**2 - 1.0_dkind) / (p + this%h_r * this%p_r)**2
     end function
     
     
