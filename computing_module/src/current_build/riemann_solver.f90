@@ -165,7 +165,7 @@ contains
         
         this%counter = this%counter + 1
         
-        ! Контактный разрыв
+        ! Contact discontinuity
         p_0 = (this%p_l + this%p_r) / 2.0_dkind * min1(this%p_l, this%p_r) / max1(this%p_l, this%p_r)
         
         iter = 1
@@ -189,39 +189,39 @@ contains
         
         u_c = (this%F_l(p_c) + this%F_r(p_c)) * 0.5_dkind
         
-        ! Определение параметров на выходе
+
         max_l = 0.0_dkind
         max_r = 0.0_dkind
         max = 0.0_dkind
         
-        if (u_c > 0.0_dkind) then                           ! КР вправо
+        if (u_c > 0.0_dkind) then                                                           ! CD to the right
             this%gamma = this%gamma_l
             this%contact_direction = 1
-            if (p_c > this%p_l) then                       ! УВ влево  (2 области)
-                relative_shock_speed = this%u_l + (p_c - this%p_l) / (u_c - this%u_l) / this%rho_l      ! Скорость УВ
-                if (relative_shock_speed > 0.0_dkind) then  ! Левая невозмущенная область
+            if (p_c > this%p_l) then                                                        ! Shock wave to the left  (2 domains)
+                relative_shock_speed = this%u_l + (p_c - this%p_l) / (u_c - this%u_l) / this%rho_l
+                if (relative_shock_speed > 0.0_dkind) then                                  ! At x = 0.0 - left unpertrubed domain
                     this%rho = this%rho_l
                     this%u = this%u_l
                     this%p = this%p_l
                 else
-                    this%rho = this%rho_l/this%a_l(p_c)     ! Область между КР и УВ
+                    this%rho = this%rho_l/this%a_l(p_c)                                     ! At x = 0.0 - domain between SW and CD
                     this%u = u_c
                     this%p = p_c
                 end if
                 max_l = abs(relative_shock_speed)
-            else                                            ! Волна разрежения влево  (3 области)
-                c_l = sqrt(this%gamma_l * this%p_l / this%rho_l)        ! Скорость звука слева
-                rho_m = (p_c / this%s_l)**(1.0_dkind / this%gamma_l)    ! Установившаяся плотность
-                c_m = sqrt(this%gamma_l * p_c / rho_m)                  ! Скорость звука в установившейся области
-                if (this%u_l - c_l > 0.0_dkind) then        ! Левая невозмущенная область
+            else                                                                            ! Rarefication wave to the left (3 domains)
+                c_l = sqrt(this%gamma_l * this%p_l / this%rho_l)
+                rho_m = (p_c / this%s_l)**(1.0_dkind / this%gamma_l)
+                c_m = sqrt(this%gamma_l * p_c / rho_m)
+                if (this%u_l - c_l > 0.0_dkind) then                                        ! At x = 0.0 - left unpertrubed domain
                     this%rho = this%rho_l
                     this%u = this%u_l
                     this%p = this%p_l
-                elseif (this%u_l - c_l <= 0.0_dkind .and. u_c - c_m > 0.0_dkind) then   ! Область волны разрежения
+                elseif (this%u_l - c_l <= 0.0_dkind .and. u_c - c_m > 0.0_dkind) then       ! At x = 0.0 - rarefication fan
                     this%u = ((this%gamma_l - 1.0_dkind) * this%u_l + 2.0_dkind * c_l) / (this%gamma_l + 1.0_dkind)
                     this%p = ((2.0_dkind * c_l / (this%gamma_l - 1.0_dkind) + this%u_l - this%u) / this%G_l)**(1.0_dkind/this%mu_l)
                     this%rho = (this%p / this%s_l)**(1.0_dkind / this%gamma_l)
-                else                                        ! Область установившегося течения
+                else                                                                        ! At x = 0.0 - steady flow domain
                     this%rho = rho_m
                     this%u = u_c
                     this%p = p_c
@@ -229,37 +229,34 @@ contains
                 max_l = max1(abs(this%u_l - c_l), abs(u_c - c_m))
                 max_l = max1(abs(u_c), max_l)
             end if
-        else                                                ! КР влево
+        else                                                                                ! CD to the left
             this%gamma = this%gamma_r
             this%contact_direction = -1
-            if (p_c > this%p_r) then                       ! УВ вправо  (2 области)
-                beta = (this%u_r - u_c) * (this%u_r - u_c) / (p_c - this%p_r)
-                rho_s = this%rho_r / (1.0_dkind - beta * this%rho_r)            ! Плотность за УВ
-                relative_shock_speed = (u_c * rho_s - this%u_r * this%rho_r) / (rho_s - this%rho_r)      ! Скорость УВ
-                !relative_shock_speed = this%u_r + (p_c - this%p_r) / (u_c - this%u_r) / this%rho_r
-                if (relative_shock_speed < 0.0_dkind) then  ! Правая невозмущенная область
+            if (p_c > this%p_r) then                                                        ! Shock wave to the right  (2 domains)
+                relative_shock_speed = this%u_r + (p_c - this%p_r) / (u_c - this%u_r) / this%rho_r
+                if (relative_shock_speed < 0.0_dkind) then                                  ! At x = 0.0 - right unpertrubed domain
                     this%rho = this%rho_r
                     this%u = this%u_r
                     this%p = this%p_r
                 else
-                    this%rho = this%rho_r/this%a_r(p_c)     ! Область между КР и УВ
+                    this%rho = this%rho_r/this%a_r(p_c)                                     ! At x = 0.0 - domain between SW and CD
                     this%u = u_c
                     this%p = p_c
                 end if
                 max_r = abs(relative_shock_speed)
-            else                                            ! Волна разрежения вправо  (3 области)
-                c_r = sqrt(this%gamma_r * this%p_r / this%rho_r)        ! Скорость звука слева
-                rho_m = (p_c / this%s_r)**(1.0_dkind / this%gamma_r)     ! Установившаяся плотность
-                c_m = sqrt(this%gamma_r * p_c / rho_m)                  ! Скорость звука в установившейся области
-                if (this%u_r + c_r < 0.0_dkind) then        ! Правая невозмущенная область
+            else                                                                            ! Rarefication wave to the right (3 domains)
+                c_r = sqrt(this%gamma_r * this%p_r / this%rho_r)
+                rho_m = (p_c / this%s_r)**(1.0_dkind / this%gamma_r)
+                c_m = sqrt(this%gamma_r * p_c / rho_m)
+                if (this%u_r + c_r < 0.0_dkind) then                                        ! At x = 0.0 - right unpertrubed domain
                     this%rho = this%rho_r
                     this%u = this%u_r
                     this%p = this%p_r
-                elseif (this%u_r + c_r >= 0.0_dkind .and. u_c + c_m < 0.0_dkind) then   ! Область волны разрежения
+                elseif (this%u_r + c_r >= 0.0_dkind .and. u_c + c_m < 0.0_dkind) then       ! At x = 0.0 - rarefication fan
                     this%u = ((this%gamma_r - 1.0_dkind) * this%u_r - 2.0_dkind * c_r) / (this%gamma_r + 1.0_dkind)
                     this%p = ((2.0_dkind * c_r / (this%gamma_r - 1.0_dkind) - this%u_r + this%u) / this%G_r)**(1.0_dkind/this%mu_r)
                     this%rho = (this%p / this%s_r)**(1.0_dkind / this%gamma_r)
-                else                                        ! Область установившегося течения
+                else                                                                        ! At x = 0.0 - steady flow domain
                     this%rho = rho_m
                     this%u = u_c
                     this%p = p_c
