@@ -12,7 +12,7 @@ module table_approximated_real_gas_class
 	use boundary_conditions_class
 	use thermophysical_properties_class
 	use computational_mesh_class
-    	use riemann_solver_class
+    use riemann_solver_class
 
 	implicit none
 
@@ -670,6 +670,8 @@ contains
 
 		integer	:: specie_number, dim, dim1, dim2
 		integer	:: i,j,k
+        
+        logical	:: smooth_contact	= .false.
 
 		species_number = this%chem%chem_ptr%species_number
 		
@@ -688,13 +690,15 @@ contains
 					p       => this%p%s_ptr         , &
 					rho     => this%rho%s_ptr       , &
 					gamma   => this%gamma%s_ptr     , &
+					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
 					v       => this%v%v_ptr         , &
+					Y       => this%Y%v_ptr         , &
 					mesh	=> this%mesh%mesh_ptr	, &
 					bc		=> this%boundary%bc_ptr)
 
 	!$omp parallel default(none) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,t_final,e_internal,cp,cv,h_s,T_old,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(T_f,p_f,rho_f,e_i_f,e_i_f_old,v_s_f,E_f_f,v_f,Y_f,c_v_f_old,gamma_f,p,rho,gamma,v,flow_inner_loop,dimensions,species_number,bc)
+	!$omp& shared(T_f,p_f,rho_f,e_i_f,e_i_f_old,v_s_f,E_f_f,v_f,Y_f,c_v_f_old,gamma_f,p,rho,gamma,mol_mix_conc,v,Y,flow_inner_loop,dimensions,species_number,bc,smooth_contact)
 	
 		do dim = 1, dimensions
 
@@ -723,21 +727,10 @@ contains
                     end do						
 					
                     
-					if((p_f%cells(dim,i,j,k) < 0.0).or.(rho_f%cells(dim,i,j,k) < 0.0)) then
-                    !if ((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
-						!print *, 'Flow EOS exception: ', dim, i,j,k
-						!do dim2 = 1, dimensions
-						!	print *, 'Coordinates', dim2, mesh%mesh(dim2,i,j,k)
-						!end do						
-						!print *, gamma_f%cells(dim,i,j,k)
-						!print *, p_f%cells(dim,i,j,k)
-						!print *, rho_f%cells(dim,i,j,k)
-						!print *, v_s_f%cells(dim,i,j,k)
-                        !gamma_f%cells(dim,i,j,k) = abs(gamma_f%cells(dim,i,j,k))
-						!p_f%cells(dim,i,j,k) = abs(p_f%cells(dim,i,j,k))
-						!rho_f%cells(dim,i,j,k) = abs(rho_f%cells(dim,i,j,k))
-                        
-						!stop
+					if((p_f%cells(dim,i,j,k) <= 0.0_dkind).or.(rho_f%cells(dim,i,j,k) <= 0.0_dkind).or.(gamma_f%cells(dim,i,j,k) <= 1.0_dkind).or.isnan(p_f%cells(dim,i,j,k)).or.isnan(rho_f%cells(dim,i,j,k)).or.isnan(gamma_f%cells(dim,i,j,k))) then
+                    
+                        print *, '***** Riemann solver block (Flow EOS) *****'
+                        print *, 'Location:', dim, i, j, k
                         
                         rho_l	= rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
                         rho_r	= rho%cells(i,j,k)
@@ -748,7 +741,10 @@ contains
                         v_l		= v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
                         v_r		= v%pr(dim)%cells(i,j,k)
                         
-                        print *, p_f%cells(dim,i,j,k), rho_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k)
+                        print *, 'Left (rho, p, v, gamma)', rho_l, p_l, v_l, gamma_l
+                        print *, 'Right (rho, p, v, gamma)', rho_r, p_r, v_r, gamma_r
+                        
+                        print *, 'rho, p, v, gamma before:', rho_f%cells(dim,i,j,k), p_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k), gamma_f%cells(dim,i,j,k)
                         
                         call riemann%set_parameters(	rho_l	, rho_r		,	&
 														p_l		, p_r		,   &
@@ -760,14 +756,78 @@ contains
                         rho_f%cells(dim,i,j,k)			= riemann%get_density()
                         p_f%cells(dim,i,j,k)			= riemann%get_pressure()
                         v_f%pr(dim)%cells(dim,i,j,k)	= riemann%get_velocity()
+                        gamma_f%cells(dim,i,j,k)        = riemann%get_gamma()
+                        
+                        if (riemann%rightward_contact()) then
+							do specie_number = 1,species_number
+								Y_f%pr(specie_number)%cells(dim,i,j,k) = Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							end do
+                        else
+                            do specie_number = 1,species_number
+								Y_f%pr(specie_number)%cells(dim,i,j,k) = Y%pr(specie_number)%cells(i,j,k)
+							end do
+                        end if
                         
                         call riemann%clear()
                         
-                        print *, p_f%cells(dim,i,j,k), rho_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k)
+                        print *, 'rho, p, v, gamma after:', rho_f%cells(dim,i,j,k), p_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k), gamma_f%cells(dim,i,j,k)
                         
                         print *, 'Riemann activation count: ', riemann%get_activation_count()
-!                        pause
-					end if                   
+                        print *, '********************************'
+						
+                    end if
+                    
+                    
+                    if (smooth_contact) then
+                        if ((mol_mix_conc%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / mol_mix_conc%cells(i,j,k) > 1.10_dkind).or.&
+                           (mol_mix_conc%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / mol_mix_conc%cells(i,j,k) < 0.91_dkind)) then
+                        
+							print *, '***** Riemann solver block (Contact discontinuity) *****'
+							print *, 'Location:', dim, i, j, k
+                        
+							rho_l	= rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							rho_r	= rho%cells(i,j,k)
+							p_l		= p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							p_r		= p%cells(i,j,k)
+							gamma_l = gamma%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							gamma_r	= gamma%cells(i,j,k)
+							v_l		= v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							v_r		= v%pr(dim)%cells(i,j,k)
+                        
+							print *, 'Left (rho, p, v, gamma)', rho_l, p_l, v_l, gamma_l
+							print *, 'Right (rho, p, v, gamma)', rho_r, p_r, v_r, gamma_r
+                        
+							call riemann%set_parameters(	rho_l	, rho_r		,	&
+															p_l		, p_r		,   &
+															gamma_l	, gamma_r	,	&
+															v_l		, v_r)
+                       
+							call riemann%solve()
+                        
+							rho_f%cells(dim,i,j,k)			= riemann%get_density()
+							p_f%cells(dim,i,j,k)			= riemann%get_pressure()
+							v_f%pr(dim)%cells(dim,i,j,k)	= riemann%get_velocity()
+							gamma_f%cells(dim,i,j,k)        = riemann%get_gamma()
+                        
+							if (riemann%rightward_contact()) then
+								do specie_number = 1,species_number
+									Y_f%pr(specie_number)%cells(dim,i,j,k) = Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+								end do
+							else
+								do specie_number = 1,species_number
+									Y_f%pr(specie_number)%cells(dim,i,j,k) = Y%pr(specie_number)%cells(i,j,k)
+								end do
+							end if
+                        
+							call riemann%clear()
+                        
+							print *, 'rho, p, v, gamma:', rho_f%cells(dim,i,j,k), p_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k), gamma_f%cells(dim,i,j,k)
+                        
+							print *, 'Riemann activation count: ', riemann%get_activation_count()
+							print *, '********************************'
+                        
+                        end if
+                    end if
                     
 
 					T_old	= T_f%cells(dim,i,j,k)
@@ -877,7 +937,7 @@ contains
 		real(dkind)                     :: cp, cv
 
 		real(dkind) ,dimension(this%chem%chem_ptr%species_number)    :: concs
-		real(dkind)	:: average_molar_mass, mol_mix_conc
+		real(dkind)	:: average_molar_mass
 
 		integer	:: bound_number
 		integer	:: species_number, specie_index
@@ -904,6 +964,7 @@ contains
 						E_f             => this%E_f%s_ptr			, &
 						h_s				=> this%h_s%s_ptr			, &
 						v_s             => this%v_s%s_ptr			, &
+						mol_mix_conc    => this%mol_mix_conc%s_ptr	, &
 						Y               => this%Y%v_ptr				, &
 						v               => this%v%v_ptr)
 
@@ -940,7 +1001,8 @@ contains
 
 										do specie_number = 1, species_number
 											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(specie_number)%cells(i,j,k)
-										end do
+                                        end do
+                                        mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))   =  mol_mix_conc%cells(i,j,k)
 										
 									case('outlet','inlet')
 								
@@ -974,15 +1036,15 @@ contains
 											average_molar_mass = average_molar_mass + concs(specie_index) / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 				
-										average_molar_mass	=  1.0_dkind / average_molar_mass
-										mol_mix_conc		=  average_molar_mass
+										average_molar_mass      =  1.0_dkind / average_molar_mass
+										mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))   =  average_molar_mass
 				
-										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * mol_mix_conc
+										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * average_molar_mass
 										call this%boundary%bc_ptr%boundary_types(bound_number)%set_farfield_density(farfield_density)
 
 										do specie_number = 1,size(farfield_species_names)
 											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
-											concs(specie_index)		= concs(specie_index) * mol_mix_conc / this%thermo%thermo_ptr%molar_masses(specie_index)
+											concs(specie_index)		= concs(specie_index) * average_molar_mass / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 									
 										cp = this%thermo%thermo_ptr%calculate_mixture_cp(farfield_temperature, concs)
@@ -991,7 +1053,7 @@ contains
 										farfield_gamma	= cp / cv	
 								
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs)/ mol_mix_conc
-										farfield_e_i	= (this%thermo%thermo_ptr%calculate_mixture_energy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc
+										farfield_e_i	= (this%thermo%thermo_ptr%calculate_mixture_energy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / average_molar_mass
 										
                                         farfield_velocity	=  sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
                                         
@@ -1008,7 +1070,7 @@ contains
 										E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	farfield_E_f 
 										call this%boundary%bc_ptr%boundary_types(bound_number)%set_farfield_energy(farfield_E_f)
                                         
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / mol_mix_conc
+										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(298.15_dkind, concs)) / average_molar_mass
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
 										
 								end select
