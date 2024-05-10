@@ -159,13 +159,16 @@ contains
         real(dkind)     :: max_l, max_r, max
         real(dkind)     :: relative_shock_speed, rho_s, beta
         
-        real(dkind)     :: c_l, c_r, c_m, rho_m
+        real(dkind)     :: c_l, c_r, c_m, rho_m, s_vac_l, s_vac_r
         
         integer         :: iter
         
         this%counter = this%counter + 1
         
+        if (this%p_l > 0.0_dkind .and. this%p_r > 0.0_dkind) then           ! Standart case
+            
         ! Contact discontinuity
+            
         p_0 = (this%p_l + this%p_r) / 2.0_dkind * min1(this%p_l, this%p_r) / max1(this%p_l, this%p_r)
         
         iter = 1
@@ -184,12 +187,11 @@ contains
         if (isnan(p_c)) then
             print *, "Riemann Solver: p_c is nan"
             p_c = (this%p_l + this%p_r) / 2.0_dkind * min1(this%p_l, this%p_r) / max1(this%p_l, this%p_r)
-            pause
+            !pause
         end if  
         
         u_c = (this%F_l(p_c) + this%F_r(p_c)) * 0.5_dkind
-        
-
+            
         max_l = 0.0_dkind
         max_r = 0.0_dkind
         max = 0.0_dkind
@@ -266,6 +268,52 @@ contains
             end if
         end if
         max = max1(max_l, max_r)
+            
+        elseif (this%p_l <= 0.0_dkind .and. this%p_r > 0.0_dkind) then      ! Vacuum on the left side
+            
+            this%contact_direction = 1
+            c_r         = sqrt(this%gamma_r * this%p_r / this%rho_r)
+            s_vac_r     = this%u_r - this%G_r * this%p_r**this%mu_r
+            
+            if (this%u_r + c_r <= 0.0_dkind) then                           ! At x = 0.0 - right unpertrubed domain
+                this%rho = this%rho_r
+                this%u = this%u_r
+                this%p = this%p_r
+            elseif (s_vac_r < 0.0_dkind) then                               ! At x = 0.0 - rarefication fan
+                this%u = ((this%gamma_r - 1.0_dkind) * this%u_r - 2.0_dkind * c_r) / (this%gamma_r + 1.0_dkind)
+                this%p = ((2.0_dkind * c_r / (this%gamma_r - 1.0_dkind) - this%u_r + this%u) / this%G_r)**(1.0_dkind/this%mu_r)
+                this%rho = (this%p / this%s_r)**(1.0_dkind / this%gamma_r)
+            else                                                            ! At x = 0.0 - vacuum
+                this%rho = 0.0_dkind
+                this%u = s_vac_r
+                this%p = 0.0_dkind
+            end if
+            
+        elseif (this%p_l > 0.0_dkind .and. this%p_r <= 0.0_dkind) then      ! Vacuum on the right side
+            
+            this%contact_direction = -1
+            c_l         = sqrt(this%gamma_l * this%p_l / this%rho_l)
+            s_vac_l     = this%u_l + this%G_l * this%p_l**this%mu_l
+            
+            if (this%u_l - c_l >= 0.0_dkind) then                           ! At x = 0.0 - left unpertrubed domain
+                this%rho = this%rho_l
+                this%u = this%u_l
+                this%p = this%p_l
+            elseif (s_vac_l > 0.0_dkind) then                               ! At x = 0.0 - rarefication fan
+                this%u = ((this%gamma_l - 1.0_dkind) * this%u_l + 2.0_dkind * c_l) / (this%gamma_l + 1.0_dkind)
+                this%p = ((2.0_dkind * c_l / (this%gamma_l - 1.0_dkind) + this%u_l - this%u) / this%G_l)**(1.0_dkind/this%mu_l)
+                this%rho = (this%p / this%s_l)**(1.0_dkind / this%gamma_l)
+            else                                                            ! At x = 0.0 - vacuum
+                this%rho = 0.0_dkind
+                this%u = s_vac_l
+                this%p = 0.0_dkind
+            end if
+            
+        else                                                                ! Vacuum on the both sides
+            this%rho = 0.0_dkind
+            this%u = 0.0_dkind
+            this%p = 0.0_dkind
+        end if
         
     end subroutine
     
