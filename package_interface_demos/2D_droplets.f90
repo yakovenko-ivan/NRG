@@ -31,8 +31,8 @@ program package_interface
 	
 	type(computational_mesh)		,target		:: problem_mesh
 	type(boundary_conditions)		,target		:: problem_boundaries
-	type(field_scalar_cons)			,target		:: p, T, rho, rho_d01, rho_d02
-	type(field_vector_cons)			,target		:: v, Y
+	type(field_scalar_cons)			,target		:: p, T, rho, rho_d01
+    type(field_vector_cons)			,target		:: v, Y
 	
 	type(liquid_droplets_phase)					:: liquid_droplets
 	
@@ -51,13 +51,14 @@ program package_interface
 	
 	character(len=500)			:: initial_work_dir
 	character(len=100)			:: work_dir
-	character(len=10)			:: solver_name
+	character(len=20)			:: solver_name
 	
 	real(dkind)	:: domain_length, ignition_region
 	real(dkind)	:: CFL_coeff
 	real(dkind)	:: delta_x, offset
 	real(dkind)	:: nu
 	real(dkind)	:: high_pressure
+    real(dkind)	:: droplets_diameter
 	
 	logical	:: stop_flag, chemical_flag
 
@@ -88,6 +89,8 @@ program package_interface
 		
 		domain_length	= 0.01_dkind
 		ignition_region	= 20.0e-05_dkind
+        
+        droplets_diameter = 1e-06_dkind
 		
 		
 		problem_domain			= computational_domain_c(	dimensions 			=	1,						&
@@ -119,7 +122,6 @@ program package_interface
 			call problem_data_manager%create_scalar_field(T		,'temperature'			, 'T')
 			call problem_data_manager%create_scalar_field(rho	,'density'				, 'rho')
 			call problem_data_manager%create_scalar_field(rho_d01	,'density_droplets01'	, 'rho_d01')	
-			call problem_data_manager%create_scalar_field(rho_d02	,'density_droplets02'	, 'rho_d02')	
 			
 			call problem_data_manager%create_vector_field(v		,'velocity'						,'v'	,'spatial')
 			call problem_data_manager%create_vector_field(Y		,'specie_molar_concentration'	,'Y'	,'chemical')	
@@ -159,15 +161,9 @@ program package_interface
 																		'velocity'						,&
 																		'specie_molar_concentration'	,&
 																		'velocity_of_sound'				,&
-																		'temperature_particles01'		,&
-																		'density_particles01'			,&
-																		'volume_fraction_particles01'	,&
-																		'velocity_particles01'	,&
-																		'temperature_particles02'		,&
-																		'density_particles02'			,&
-																		'volume_fraction_particles02'	,&
-																		'velocity_particles02'	,&																		
-																		'full_energy'/) ,	&
+																		'velocity_production_droplets01'	,&
+																		'energy_production_droplets01'		,&
+																		'concentration_production_droplets01'/), &
 											save_time				= 2.0_dkind		,	&
 											save_time_units			= 'microseconds'		,	&
 											save_format				= 'tecplot'			,	&
@@ -188,8 +184,8 @@ program package_interface
 
 		T%cells(500:520,:,:)	= 1500.0_dkind
 		
-		Y%pr(1)%cells(501:,:,:)			= 1.0_dkind					!# Hydrogen
-		Y%pr(2)%cells(501:,:,:)			= 0.5_dkind					!# Oxygen
+		Y%pr(1)%cells(501:,:,:)		= 1.0_dkind				!# Hydrogen
+		Y%pr(2)%cells(501:,:,:)		= 0.5_dkind				!# Oxygen
 	!	Y%pr(3)%cells(1:400,1:100,:)	= 0.5_dkind* 3.762_dkind	!# Nitrogen
 
 		
@@ -197,7 +193,7 @@ program package_interface
 		Y%pr(3)%cells(1:500,:,:)	= 3.762_dkind			!# Nitrogen
 		
 		rho_d01%cells(:,:,:)		= 1e-08_dkind
-		rho_d01%cells(530:,:,:)		= 100.0_dkind
+		rho_d01%cells(550:,:,:)		= 100.0_dkind
 
 		!***********************************************************************************************
 	
@@ -248,34 +244,23 @@ program package_interface
 													molecular_diffusion_flag	= .true.			, &
 													viscosity_flag				= .true.			, &
 													chemical_reaction_flag		= .true.			, &
-													additional_droplets_phases	= 2					, &
+													additional_droplets_phases	= 1				, &
 													CFL_flag					= .true.			, &
 													CFL_coefficient				= 0.75_dkind		, &
 													initial_time_step			= 1.0e-06_dkind)
 		
-		liquid_droplets%diameter				= 0.1e-03_dkind
-		liquid_droplets%material_density		= 1000.0_dkind
-		liquid_droplets%material_heat_capacity	= 900.0_dkind
-		liquid_droplets%material_latent_heat	= 2.0e+06_dkind
-		liquid_droplets%combustible				= .false.										
+		!# Water droplets
+		liquid_droplets%diameter						= droplets_diameter
+		liquid_droplets%material						= "H2O"
+		liquid_droplets%material_density				= 1000.0_dkind			
+		liquid_droplets%material_heat_capacity			= 4181.73215473605_dkind			
+		liquid_droplets%material_latent_heat			= 2454208.88831280_dkind		
+		liquid_droplets%material_boiling_temperature	= 373.15_dkind		
+		liquid_droplets%combustible         			= .false.	
 		
-	!	solid_particles%radii					= 5.0e-06_dkind
-	!	solid_particles%material_conductivity	= 1000.0_dkind
-	!	solid_particles%material_density		= 1000.0_dkind
-		
-		call problem_solver_options%create_additional_phase("liquid droplets",liquid_droplets_parameters=liquid_droplets)
-													
-		liquid_droplets%diameter				= 0.2e-03_dkind
-		liquid_droplets%material_density		= 2000.0_dkind
-		liquid_droplets%material_heat_capacity	= 100.0_dkind
-		liquid_droplets%material_latent_heat	= 5.0e+06_dkind
-		liquid_droplets%combustible				= .true.
-													
-	!	solid_particles%radii					= 5.0e-06_dkind
-	!	solid_particles%material_conductivity	= 1000.0_dkind
-	!	solid_particles%material_density		= 1000.0_dkind
-		
-		call problem_solver_options%create_additional_phase("liquid droplets",liquid_droplets_parameters=liquid_droplets)		
+      
+		call problem_solver_options%create_additional_phase("liquid droplets",liquid_droplets_parameters=liquid_droplets) 
+														
 		
 		!****************************** Writing problem short description ******************************
 	
