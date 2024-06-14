@@ -446,6 +446,7 @@ contains
 					print *, gamma%cells(i,j,k)
 					print *, p%cells(i,j,k)
 					print *, rho%cells(i,j,k)
+                    			print *, T%cells(i,j,k)
 					stop
 				end if	
 					
