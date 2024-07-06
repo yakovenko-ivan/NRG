@@ -149,9 +149,7 @@ contains
 
 		dimensions		= this%domain%get_domain_dimensions()
 		
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()		
-
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 
 		associate(  p			=> this%p%s_ptr			, &
 					v_prod		=> this%v_prod%v_ptr	, &
@@ -162,15 +160,18 @@ contains
 
 		call this%mpi_support%exchange_conservative_scalar_field(p)
 
-	!$omp parallel default(none)  private(i,j,k,dim) , &
+	!$omp parallel default(none)  private(i,j,k,dim,cell_size) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,p,v_prod,rho,dimensions,cell_size,time_step,cons_inner_loop)
+	!$omp& shared(bc,p,v_prod,rho,dimensions,time_step,cons_inner_loop)
 	!$omp do collapse(3) schedule(guided)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
+                
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+                
 				do dim = 1,dimensions
 					v_prod%pr(dim)%cells(i,j,k)  = - 0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
 					v_prod%pr(dim)%cells(i,j,k) = v_prod%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
@@ -205,8 +206,6 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
 				
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
@@ -219,15 +218,18 @@ contains
 						
 		call this%mpi_support%exchange_conservative_vector_field(v_int)
 			
-	!$omp parallel default(none)  private(i,j,k,dim,div_p_v,av_pressure1,av_velocity1,av_pressure2,av_velocity2,lame_coeffs) , &
+	!$omp parallel default(none)  private(i,j,k,dim,div_p_v,av_pressure1,av_velocity1,av_pressure2,av_velocity2,lame_coeffs,cell_size) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,p,v_int,rho,E_f_prod,dimensions,cell_size,time_step,cons_inner_loop,coordinate_system)
+	!$omp& shared(bc,mesh,p,v_int,rho,E_f_prod,dimensions,time_step,cons_inner_loop,coordinate_system)
 	!$omp do collapse(3) schedule(guided)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
+                
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+                
 				div_p_v = 0.0_dkind
 
 				lame_coeffs		= 1.0_dkind				
@@ -289,8 +291,6 @@ contains
 		integer :: i,j,k,plus,dim
 
 		dimensions		= this%domain%get_domain_dimensions()
-		
-		cell_size			= this%mesh%mesh_ptr%get_cell_edges_length()
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		flow_inner_loop	= this%domain%get_local_inner_faces_bounds()
@@ -305,17 +305,18 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(v_int)
 		call this%mpi_support%exchange_conservative_scalar_field(rho)
 
-	!$omp parallel default(none)  private(i,j,k,dim,av_velocity,dif_velocity,cell_surface_area) , &
+	!$omp parallel default(none)  private(i,j,k,dim,av_velocity,dif_velocity,cell_surface_area,cell_size) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,m_flux,rho,v_int,dimensions,cell_size,time_step,flow_inner_loop,coordinate_system)
+	!$omp& shared(bc,mesh,m_flux,rho,v_int,dimensions,time_step,flow_inner_loop,coordinate_system)
 	!$omp do collapse(3) schedule(guided)
 
 		do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
 		do j = flow_inner_loop(2,1),flow_inner_loop(2,2)
 		do i = flow_inner_loop(1,1),flow_inner_loop(1,2)
 	!		if(bc%bc_markers(i,j,k) == 0) then
-
-				cell_surface_area	= this%mesh%mesh_ptr%get_cell_surface_area()
+                
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+				cell_surface_area	= this%mesh%mesh_ptr%get_cell_surface_area_loc(i,j,k)
 
 				do dim = 1,dimensions		
 			
@@ -376,8 +377,6 @@ contains
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-	
-		cell_size			= this%mesh%mesh_ptr%get_cell_edges_length()
 		
 		associate(  m_flux		=> this%m_flux%s_ptr	, &
 					rho			=> this%rho%s_ptr		, &
@@ -406,7 +405,7 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 			
-				cell_volume	= this%mesh%mesh_ptr%get_cell_volume()
+				cell_volume	= this%mesh%mesh_ptr%get_cell_volume_loc(i,j,k)
 				select case(coordinate_system)
 					case ('cartesian')
 						cell_volume			= cell_volume
@@ -537,8 +536,6 @@ contains
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 		cons_utter_loop = this%domain%get_local_utter_cells_bounds()
-			
-        cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		time_step_adj	=  0.125_dkind*cell_size(1)**2	
 		
@@ -610,9 +607,9 @@ contains
 		iteration = 0
 		converged = .false.
 		
-		!$omp parallel default(none)  private(i,j,k,dim,pres_flux1,pres_flux2,div_pres_flux,lame_coeffs,iterations) , &
+		!$omp parallel default(none)  private(i,j,k,dim,pres_flux1,pres_flux2,div_pres_flux,lame_coeffs,iterations,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(time_step,time_step_adj,coordinate_system,p_dyn,p_int,div_v,div_v_old,rho_min,bc,cell_size,dimensions,cons_inner_loop,mesh,converged,iteration)
+		!$omp& shared(time_step,time_step_adj,coordinate_system,p_dyn,p_int,div_v,div_v_old,rho_min,bc,dimensions,cons_inner_loop,mesh,converged,iteration)
 		do while (.not.converged)!do iterations = 1, 100
 		!do iterations = 1, 10
 		!	call this%mpi_support%exchange_conservative_scalar_field(p_int)	
@@ -627,6 +624,8 @@ contains
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
+                
+					cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 								
 					lame_coeffs		= 1.0_dkind		
 				 

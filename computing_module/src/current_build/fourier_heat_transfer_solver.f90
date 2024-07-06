@@ -98,7 +98,7 @@ contains
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dkind)	,dimension(3)	:: cell_size, cell_size_lower, cell_size_upper	
 		character(len=20)	:: coordinate_system
 		
 		character(len=20)		:: boundary_type_name
@@ -111,8 +111,6 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
@@ -128,9 +126,9 @@ contains
 		call this%mpi_support%exchange_conservative_scalar_field(kappa)
 		call this%mpi_support%exchange_conservative_scalar_field(T)					
 				
-	!$omp parallel default(none)  private(i,j,k,dim,div_thermo_flux,thermo_flux1,thermo_flux2,lame_coeffs,sign,bound_number,boundary_type_name) , &
+	!$omp parallel default(none)  private(i,j,k,dim,div_thermo_flux,thermo_flux1,thermo_flux2,lame_coeffs,sign,bound_number,boundary_type_name,cell_size,cell_size_lower,cell_size_upper) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(E_f_prod,rho,kappa,T,time_step,cons_inner_loop,dimensions,cell_size,mesh,bc,coordinate_system)
+	!$omp& shared(E_f_prod,rho,kappa,T,time_step,cons_inner_loop,dimensions,mesh,bc,coordinate_system)
 	!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -139,6 +137,8 @@ contains
 			E_f_prod%cells(i,j,k) = 0.0_dkind
 		
 			if(bc%bc_markers(i,j,k) == 0) then
+                
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 				
 				div_thermo_flux = 0.0_dkind
 				
@@ -158,11 +158,14 @@ contains
 				end select					
 				
                 do dim = 1,dimensions
+                    cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+                    
 					thermo_flux1	= 0.5_dkind * (kappa%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + kappa%cells(i,j,k)) * lame_coeffs(dim,1)  &
-												* (T%cells(i,j,k) - T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / cell_size(dim)
+												* (T%cells(i,j,k) - T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / (0.5_dkind*(cell_size(dim) + cell_size_lower(dim)))
 
 					thermo_flux2	= 0.5_dkind * (kappa%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + kappa%cells(i,j,k)) * lame_coeffs(dim,3)  &
-												* (T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - T%cells(i,j,k)) / cell_size(dim)
+												* (T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - T%cells(i,j,k)) / (0.5_dkind*(cell_size(dim) + cell_size_upper(dim)))
 
 					div_thermo_flux = div_thermo_flux  + (thermo_flux2 - thermo_flux1) / cell_size(dim) / lame_coeffs(dim,2)
 					continue
@@ -341,7 +344,7 @@ contains
 								kappa%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= - kappa%cells(i,j,k)
 								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 								select case(boundary_type_name)
-									case('wall')
+									case('wall','piston')
 										if(bc%boundary_types(bound_number)%is_conductive()) then	
 											wall_conductivity_ratio = bc%boundary_types(bound_number)%get_wall_conductivity_ratio()
 											kappa%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= wall_conductivity_ratio * kappa%cells(i,j,k)

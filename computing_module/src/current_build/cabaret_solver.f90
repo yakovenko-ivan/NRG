@@ -701,8 +701,6 @@ contains
 		flow_utter_loop = this%domain%get_local_utter_faces_bounds()
 		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
 
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-
 		if (.not.allocated(v_inv)) then
 			allocate(v_inv(dimensions,2), v_inv_corrected(dimensions,2), v_inv_new(dimensions,2))
 			allocate(v_inv_half(dimensions), v_inv_old(dimensions))
@@ -805,14 +803,16 @@ contains
 			v_old(dim,:,:,:)		=	v%pr(dim)%cells
 		end do	
 
-		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r) , &
+		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_inner_loop,bc,dimensions,species_number,p,p_old,p_f,rho,rho_f,rho_prod,rho_old,v,v_f,v_prod,v_old,v_s,v_s_old,Max_v_s,Min_v_s,Y,Y_f,Y_prod,Y_old,E_f,E_f_f,E_f_prod,E_F_old,mesh,cell_size,nu,coordinate_system)
+		!$omp& shared(cons_inner_loop,bc,dimensions,species_number,p,p_old,p_f,rho,rho_f,rho_prod,rho_old,v,v_f,v_prod,v_old,v_s,v_s_old,Max_v_s,Min_v_s,Y,Y_f,Y_prod,Y_old,E_f,E_f_f,E_f_prod,E_F_old,mesh,nu,coordinate_system)
 		!$omp do collapse(3) schedule(guided) reduction(max:Max_v_s) reduction(min:Min_v_s)	 		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
+                
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 				
                 r = mesh%mesh(1,i,j,k)
                 
@@ -832,7 +832,7 @@ contains
                     mean_higher	= rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) 
 					mean_lower	= rho_f(dim,i,j,k) * v_f(dim,dim,i,j,k)                   
 
-					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) /cell_size(1)
+					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) / cell_size(dim)
                     
                     if(dim == 1) then
 						rho%cells(i,j,k)	=	rho%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -851,7 +851,7 @@ contains
 						mean_higher	=  rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * y_f(spec,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 						mean_lower	=  rho_f(dim,i,j,k) * y_f(spec,dim,i,j,k) * v_f(dim,dim,i,j,k)
 						
-						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
+						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) / cell_size(dim)
                         
                         if(dim == 1) then
 							Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -877,7 +877,7 @@ contains
 						mean_higher	=  rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))
 						mean_lower	=  rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k)
                         
-						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
+						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower ) / cell_size(dim1)
 
                         if(dim1 == 1) then                        
 							v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -888,7 +888,7 @@ contains
 
 					end do
 
-					v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k)	-	 ( p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_f(dim,i,j,k)) /cell_size(1)
+					v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k)	-	 ( p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_f(dim,i,j,k)) / cell_size(dim)
 					
 					v%pr(dim)%cells(i,j,k)	=	rho_old(i,j,k)*v_old(dim,i,j,k) + 0.5_dkind*this%time_step*v%pr(dim)%cells(i,j,k) 
 					v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k) /rho%cells(i,j,k)
@@ -900,7 +900,7 @@ contains
  					mean_higher	=  (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 					mean_lower	=  (rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)																	+	p_f(dim,i,j,k))									*v_f(dim,dim,i,j,k)                   
                     
-					E_f%cells(i,j,k)	= 	E_f%cells(i,j,k) -	(mean_higher - mean_lower ) /cell_size(1)
+					E_f%cells(i,j,k)	= 	E_f%cells(i,j,k) -	(mean_higher - mean_lower ) / cell_size(dim)
                     
                     if(dim == 1) then
 						E_f%cells(i,j,k)	=	E_f%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -962,9 +962,9 @@ contains
 		end do
 		!$omp end parallel		
 		
-		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half,G_half_old,G_half_lower,G_half_higher,r_inv,R_inv_half,R_inv_old,q_inv,Q_inv_half,Q_inv_old,v_inv,v_inv_half,v_inv_old,r_inv_new,q_inv_new,v_inv_new,g_inv,max_inv,min_inv,maxmin_inv,r_inv_corr,q_inv_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,alpha_loc,sign,bound_number) , &
+		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half,G_half_old,G_half_lower,G_half_higher,r_inv,R_inv_half,R_inv_old,q_inv,Q_inv_half,Q_inv_old,v_inv,v_inv_half,v_inv_old,r_inv_new,q_inv_new,v_inv_new,g_inv,max_inv,min_inv,maxmin_inv,r_inv_corr,q_inv_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,alpha_loc,sign,bound_number,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,bc,v_s,v_s_old,rho,rho_old,p,p_old,v,v_old,E_f,gamma,p_f,v_f,rho_f,rho_prod,v_prod,E_f_prod,p_f_new,rho_f_new,v_f_new,Max_v_s,Min_v_s,diss,alpha,dissipator_active,mesh,cell_size,lock,coordinate_system)
+		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,bc,v_s,v_s_old,rho,rho_old,p,p_old,v,v_old,E_f,gamma,p_f,v_f,rho_f,rho_prod,v_prod,E_f_prod,p_f_new,rho_f_new,v_f_new,Max_v_s,Min_v_s,diss,alpha,dissipator_active,mesh,lock,coordinate_system)
 		do dim = 1,dimensions
 
 			thread = 0
@@ -984,6 +984,8 @@ contains
 			do i = loop(1,1),loop(1,2)
 
 				if(bc%bc_markers(i,j,k) == 0) then
+                    
+                    cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 
 					G_half			= 1.0_dkind / (v_s%cells(i,j,k)*rho%cells(i,j,k))
 					G_half_old		= 1.0_dkind / (v_s_old(i,j,k)*rho_old(i,j,k))
@@ -1037,7 +1039,7 @@ contains
 					alpha_loc = 0.0_dkind
 
 					g_inv = 0.0_dkind
-					g_inv = ((R_inv_half - R_inv_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) + v_s%cells(i,j,k))*(r_inv(2) - r_inv(1))/cell_size(1))
+					g_inv = ((R_inv_half - R_inv_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) + v_s%cells(i,j,k))*(r_inv(2) - r_inv(1))/cell_size(dim))
 				!	g_inv = ((R_half - R_old)/(this%time_step) + (v%pr(dim)%cells(i,j,k) + v_s%cells(i,j,k))*(r(2) - r(1))/cell_size(1))
 
 					max_inv = max(r_inv(1),R_inv_half,r_inv(2)) + g_inv*this%time_step
@@ -1056,7 +1058,7 @@ contains
 					if (max_inv < r_inv_new(2))										r_inv_corr(2,dim,i,j,k) = max_inv               
 					
 					g_inv = 0.0_dkind
-					g_inv = ((Q_inv_half - Q_inv_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) - v_s%cells(i,j,k))*(q_inv(2) - q_inv(1))/cell_size(1))
+					g_inv = ((Q_inv_half - Q_inv_old)/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k) - v_s%cells(i,j,k))*(q_inv(2) - q_inv(1))/cell_size(dim))
                 !   g_inv = ((Q_half - Q_old)/(this%time_step) + (v%pr(dim)%cells(i,j,k) - v_s%cells(i,j,k))*(q(2) - q(1))/cell_size(1))
 
 					max_inv = max(q_inv(1),Q_inv_half,q_inv(2)) + g_inv*this%time_step
@@ -1077,7 +1079,7 @@ contains
 					do dim2 = 1,dimensions
 						g_inv = 0.0_dkind
 
-						g_inv = ((v_inv_half(dim2) - v_inv_old(dim2))/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k))*(v_inv(dim2,2) - v_inv(dim2,1))/cell_size(1))
+						g_inv = ((v_inv_half(dim2) - v_inv_old(dim2))/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k))*(v_inv(dim2,2) - v_inv(dim2,1))/cell_size(dim))
                     !   g_inv = ((v_inv_half(dim2) - v_inv_old(dim2))/(this%time_step) + (v%pr(dim)%cells(i,j,k))*(v_inv(dim2,2) - v_inv(dim2,1))/cell_size(1))
                         if(dim2 == dim) g_inv = 0.0_dkind
                         
@@ -1130,9 +1132,9 @@ contains
                     
 
         
-		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half_lower,G_half_higher,r_inv_corr,q_inv_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,sign,bound_number) , &
+		!$omp parallel default(none)  private(thread,i,j,k,dim,dim1,loop,G_half_lower,G_half_higher,r_inv_corr,q_inv_corr,v_inv_corr,v_f_approx,v_s_f_approx,characteristic_speed,sign,bound_number,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_utter_loop,flow_inner_loop,dimensions,bc,v_s,rho,p,p_old,v,p_f_new,rho_f_new,v_f_new,mesh,cell_size,lock,coordinate_system)
+		!$omp& shared(cons_utter_loop,flow_inner_loop,dimensions,bc,v_s,rho,p,p_old,v,p_f_new,rho_f_new,v_f_new,mesh,lock,coordinate_system)
         
         do dim = 1, dimensions
 
@@ -1333,9 +1335,9 @@ contains
 		call this%mpi_support%exchange_flow_scalar_field(rho_f_new)
 		call this%mpi_support%exchange_flow_scalar_field(p_f_new)
 
-		!$omp parallel default(none)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,max_inv,min_inv,maxmin_inv,alpha_loc,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,spec_summ,bound_number,diss_r,diss_l) , &
+		!$omp parallel default(none)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,max_inv,min_inv,maxmin_inv,alpha_loc,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,spec_summ,bound_number,diss_r,diss_l,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,species_number,bc,Y,Y_f,Y_f_new,Y_prod,v,v_f_new,v_s,v_s_f,p,p_f,p_f_new,rho,rho_f,rho_f_new,gamma,E_f_prod,Max_v_s,Min_v_s,diss,alpha,cell_size,lock)		
+		!$omp& shared(cons_utter_loop,cons_inner_loop,dimensions,species_number,bc,Y,Y_f,Y_f_new,Y_prod,v,v_f_new,v_s,v_s_f,p,p_f,p_f_new,rho,rho_f,rho_f_new,gamma,E_f_prod,Max_v_s,Min_v_s,diss,alpha,lock)		
 
 		do dim = 1,dimensions
 
@@ -1356,6 +1358,8 @@ contains
 			do i = loop(1,1),loop(1,2)		
 			
 				if(bc%bc_markers(i,j,k) == 0) then
+                    
+                    cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 	
 					do spec = 1,species_number
 						y_inv(spec,1)		= y_f(spec,dim,i,j,k)
@@ -1367,7 +1371,7 @@ contains
 						!y_inv(spec,1)		= Y_f(spec,dim,i,j,k)									* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i,j,k)							
 						!y_inv(spec,2)		= Y_f(spec,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 						!Y_inv_half(spec)	= Y%pr(spec)%cells(i,j,k)								* rho%cells(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p%cells(i,j,k)		
-						!Y_inv_old(spec)		= Y_old(spec,i,j,k)										* rho_old(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
+						!Y_inv_old(spec)	= Y_old(spec,i,j,k)										* rho_old(i,j,k)		- Y%pr(spec)%cells(i,j,k) / v_s%cells(i,j,k)**2 * p_old(i,j,k)	                        
 
                     end do
 					
@@ -1382,7 +1386,7 @@ contains
 					do spec = 1,species_number
 						g_inv =  0.0_dkind
 						
-						g_inv = ((Y_inv_half(spec) - Y_inv_old(spec))/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k))*(y_inv(spec,2) - y_inv(spec,1))/cell_size(1))
+						g_inv = ((Y_inv_half(spec) - Y_inv_old(spec))/(0.5_dkind*this%time_step) + (v%pr(dim)%cells(i,j,k))*(y_inv(spec,2) - y_inv(spec,1))/cell_size(dim))
 					!	g_inv = ((Y_inv_half(spec) - Y_inv_old(spec))/(this%time_step) + (v%pr(dim)%cells(i,j,k))*(y_inv(spec,2) - y_inv(spec,1))/cell_size(1))
 						
                         
@@ -1423,7 +1427,7 @@ contains
 							!	v_f_approx_lower		= v_f_new%pr(dim)%cells(dim,i,j,k) 
                                 v_f_approx_lower		= 0.5_dkind * (v%pr(dim)%cells(i,j,k)	+ v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 								if (v_f_approx_lower < 0.0_dkind) then
-                                !	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i,j,k)  / v_s%cells(i,j,k)**2 )  / rho%cells(i,j,k)
+								!	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1) + Y%pr(spec)%cells(i,j,k) * p_f(dim,i,j,k)  / v_s%cells(i,j,k)**2 )  / rho%cells(i,j,k)
                                 	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1))
 								end if	
 							end if
@@ -1461,10 +1465,10 @@ contains
 						spec_summ = 0.0_dkind
 						do spec = 1,species_number
 							spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind)
-						end do
+                        end do
 
 						do spec = 1,species_number
-						!	Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
+							Y_f_new%pr(spec)%cells(dim,i,j,k) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dkind) / spec_summ
 						end do
 					end if
 				end if
@@ -1505,15 +1509,17 @@ contains
 
         ! *********** Conservative variables calculation ***************
 		
-		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r) , &
+		!$omp parallel default(none)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_inner_loop,bc,dimensions,species_number,p,p_f,p_f_new,rho,rho_f,rho_f_new,rho_prod,rho_old,v,v_f,v_f_new,v_prod,v_old,Y,Y_f,Y_f_new,Y_prod,Y_old,E_f,E_f_f,E_f_f_new,E_f_prod,E_F_old,mesh,cell_size,nu,coordinate_system)
+		!$omp& shared(cons_inner_loop,bc,dimensions,species_number,p,p_f,p_f_new,rho,rho_f,rho_f_new,rho_prod,rho_old,v,v_f,v_f_new,v_prod,v_old,Y,Y_f,Y_f_new,Y_prod,Y_old,E_f,E_f_f,E_f_f_new,E_f_prod,E_F_old,mesh,nu,coordinate_system)
 		!$omp do collapse(3) schedule(guided)			
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
   			
 			if (bc%bc_markers(i,j,k) == 0) then	
+                
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
                 
                 r = mesh%mesh(1,i,j,k)
                 
@@ -1533,7 +1539,7 @@ contains
                     mean_higher	= rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) 
 					mean_lower	= rho_f_new%cells(dim,i,j,k)    *v_f_new%pr(dim)%cells(dim,i,j,k)                    
 
-					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) /cell_size(1)
+					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) / cell_size(dim)
                     
                     if(dim == 1) then
 						rho%cells(i,j,k)	=	rho%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -1551,7 +1557,7 @@ contains
 						mean_higher	=  rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  * y_f_new%pr(spec)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 						mean_lower	=  rho_f_new%cells(dim,i,j,k)    * y_f_new%pr(spec)%cells(dim,i,j,k)   *v_f_new%pr(dim)%cells(dim,i,j,k)
 						
-						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
+						Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	(mean_higher - mean_lower ) / cell_size(dim)
                         
                         if(dim == 1) then
 							Y%pr(spec)%cells(i,j,k)	=  Y%pr(spec)%cells(i,j,k)	-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -1575,8 +1581,9 @@ contains
 					do dim1 = 1,dimensions
 						mean_higher	= rho_f_new%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))  *v_f_new%pr(dim)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3)) *v_f_new%pr(dim1)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))
 						mean_lower	= rho_f_new%cells(dim1,i,j,k)  *v_f_new%pr(dim)%cells(dim1,i,j,k) *v_f_new%pr(dim1)%cells(dim1,i,j,k)
+                        
 													
-						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/cell_size(1)
+						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/ cell_size(dim1)
                         
                         
                         if(dim1 == 1) then                        
@@ -1584,16 +1591,17 @@ contains
 																				*	0.5_dkind * (mean_higher +	mean_lower)																		&
 																				*	((r + 0.5_dkind*cell_size(1))**(nu - 1) - (r - 0.5_dkind*cell_size(1))**(nu - 1))							&
 																				/	((r + 0.5_dkind*cell_size(1)) - (r - 0.5_dkind*cell_size(1))) 
-                        end if                        
+                        end if    
 					end do
 	   
 					mean_higher	= p_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 					mean_lower	= p_f_new%cells(dim,i,j,k)
 													
-					v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/cell_size(1)
+					v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/ cell_size(dim)
 					
 					v%pr(dim)%cells(i,j,k)	= rho_old(i,j,k)*v_old(dim,i,j,k) +  0.5_dkind * this%time_step * v%pr(dim)%cells(i,j,k)
-					v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) / rho%cells(i,j,k) 
+					v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) / rho%cells(i,j,k)
+                    
 				end do	
 	   
 				E_f%cells(i,j,k)		=	0.0_dkind  
@@ -1601,7 +1609,7 @@ contains
 					mean_higher	= (rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))*E_f_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))	+	p_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))*v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 					mean_lower	= (rho_f_new%cells(dim,i,j,k)*E_f_f_new%cells(dim,i,j,k)	+	p_f_new%cells(dim,i,j,k))*v_f_new%pr(dim)%cells(dim,i,j,k)	
 				
-					E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	(mean_higher - mean_lower)	/cell_size(1)
+					E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	(mean_higher - mean_lower)	/ cell_size(dim)
                     
                     if(dim == 1) then
 						E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	2.0_dkind * (nu - 1)/((r + 0.5_dkind*cell_size(1))**(nu - 1) + (r - 0.5_dkind*cell_size(1))**(nu - 1))		&
@@ -1653,15 +1661,17 @@ contains
 		Y_prod		= 0.0_dkind
 		v_prod		= 0.0_dkind	
 		
-		!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ) , &
+		!$omp parallel default(none)  private(i,j,k,dim,spec,spec_summ,cell_size) , &
 		!$omp& firstprivate(this) , &
-		!$omp& shared(cons_inner_loop,bc,mesh,rho,v,Y,E_f,E_f_prod,E_f_prod_chem,E_f_prod_heat,E_f_prod_visc,E_f_prod_diff,Y_prod,Y_prod_chem,Y_prod_diff,v_prod,v_prod_visc,species_number,dimensions,energy_source,energy_output_rho,energy_output,energy_output_flag,energy_output_time,energy_output_radii,cell_size,coordinate_system)
+		!$omp& shared(cons_inner_loop,bc,mesh,rho,v,Y,E_f,E_f_prod,E_f_prod_chem,E_f_prod_heat,E_f_prod_visc,E_f_prod_diff,Y_prod,Y_prod_chem,Y_prod_diff,v_prod,v_prod_visc,species_number,dimensions,energy_source,energy_output_rho,energy_output,energy_output_flag,energy_output_time,energy_output_radii,coordinate_system)
 		!$omp do collapse(3) schedule(guided)		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			
 			if(bc%bc_markers(i,j,k) == 0) then	
+				
+				cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 				
 				if (this%reactive_flag)	then
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_chem%cells(i,j,k) * this%time_step
@@ -1687,7 +1697,7 @@ contains
 						v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) * this%time_step
 				!		v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * this%time_step
 					end do
-                end if		
+                end if	
                 
 				! ************************* Energy release ******************
 				if (energy_output_flag == 1) then 
@@ -1708,7 +1718,7 @@ contains
 						stop
 						energy_output_flag = 0
 					end if				
-				end if
+                end if                
 				! ***********************************************************				
 				
 				E_f%cells(i,j,k) = E_f%cells(i,j,k) + E_f_prod(i,j,k)/rho%cells(i,j,k)
@@ -2275,6 +2285,7 @@ contains
 
 		integer		,dimension(3,2)	:: cons_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size
+        real(dkind)                 :: min_cell_size
 		integer	:: sign
 		integer :: i,j,k,dim,error
 
@@ -2306,11 +2317,13 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+                min_cell_size	= minval(cell_size(1:dimensions))
 				velocity_value		= 0.0_dkind
 				do dim = 1,dimensions
 					velocity_value = velocity_value + v%pr(dim)%cells(i,j,k)*v%pr(dim)%cells(i,j,k)
 				end do
-				delta_t_interm = minval(cell_size,cell_size > 0.0_dkind) / (sqrt(velocity_value) + v_s%cells(i,j,k))
+				delta_t_interm = min_cell_size / (sqrt(velocity_value) + v_s%cells(i,j,k))
 				if (delta_t_interm < time_step(1)) then
 					time_step(1) = delta_t_interm
 				end if
@@ -2540,8 +2553,6 @@ contains
 		species_number	= this%chem%chem_ptr%species_number
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-				
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
 		
@@ -2566,6 +2577,7 @@ contains
 				max_val = 0.0_dkind
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
+                        cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 					
 						!! Grad temp
 						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then

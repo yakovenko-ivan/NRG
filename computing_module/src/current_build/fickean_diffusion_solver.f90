@@ -129,7 +129,7 @@ contains
 		
 		integer						:: dimensions, species_number
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size			
+		real(dkind)	,dimension(3)	:: cell_size, cell_size_lower, cell_size_upper			
 		character(len=20)	:: coordinate_system
 		
 		character(len=20)		:: boundary_type_name
@@ -144,8 +144,6 @@ contains
 		species_number	= this%chem%chem_ptr%species_number
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
@@ -169,9 +167,9 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(D)
 		call this%mpi_support%exchange_conservative_vector_field(Y)
 					
-	!$omp parallel default(none)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name) , &
+	!$omp parallel default(none)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name,cell_size,cell_size_lower,cell_size_upper) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(D, mol_mix_conc, rho, E_f_prod, Y, Y_prod, T, time_step,cons_inner_loop,dimensions,species_number,bc,cell_size, mesh,coordinate_system) 
+	!$omp& shared(D, mol_mix_conc, rho, E_f_prod, Y, Y_prod, T, time_step,cons_inner_loop,dimensions,species_number,bc, mesh,coordinate_system) 
 	!$omp do collapse(3) schedule(guided)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -183,8 +181,12 @@ contains
 			end do		
 		
 			if((bc%bc_markers(i,j,k) == 0)) then
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 
 				do dim = 1,dimensions
+                
+					cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 					div_dif_flux		= 0.0_dkind
 					diff_velocity_corr1 = 0.0_dkind
 					diff_velocity_corr2 = 0.0_dkind
@@ -207,10 +209,10 @@ contains
 					do specie_number = 1,species_number
 						if (molar_masses(specie_number) /= 0.0_dkind) then
 							diff_velocity1(specie_number) = 0.5_dkind * (D%pr(specie_number)%cells(i,j,k) + D%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * lame_coeffs(dim,1) 	* &
-															(	Y%pr(specie_number)%cells(i,j,k) - Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))  / cell_size(dim) 
+															(	Y%pr(specie_number)%cells(i,j,k) - Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))  / (0.5_dkind*(cell_size(dim) + cell_size_lower(dim)))
 				
 							diff_velocity2(specie_number) = 0.5_dkind * (D%pr(specie_number)%cells(i,j,k) + D%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * lame_coeffs(dim,3) 	* &
-															(	Y%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - Y%pr(specie_number)%cells(i,j,k))  / cell_size(dim)
+															(	Y%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - Y%pr(specie_number)%cells(i,j,k))  / (0.5_dkind*(cell_size(dim) + cell_size_upper(dim)))
 																		
 							diff_velocity_corr1	= diff_velocity_corr1 + diff_velocity1(specie_number)
 					
