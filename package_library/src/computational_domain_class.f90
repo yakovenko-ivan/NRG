@@ -21,6 +21,11 @@ module computational_domain_class
 		real(dkind)			,dimension(:,:)	,allocatable	:: lengths				! Domain length in meters
 		character(len=5)	,dimension(:)	,allocatable	:: axis_names			! Axis names
 		character(len=20)									:: coordinate_system	! Coordinate system (cartesian/cylindrical/spherical)
+        character(len=20)	,dimension(:)   ,allocatable    :: mesh_types				! Mesh types (uniform/linear/exponential)
+        real(dkind)         ,dimension(:,:) ,allocatable	:: reference_coordinates    ! Reference coordinates for cell size tendency change
+        real(dkind)         ,dimension(:,:) ,allocatable	:: reference_cell_sizes		! Cell sizes in reference coordinates
+        integer				,dimension(:)	,allocatable	:: reference_coordinates_number	! Reference coordinates number
+        integer				,dimension(:,:) ,allocatable	:: local_mesh_cells_number	! Local mesh cells number between reference coordinates
 
 	! MPI Global data
 		integer												:: mpi_communicator			
@@ -52,6 +57,11 @@ module computational_domain_class
 		procedure				:: get_axis_number
 		procedure				:: get_axis_names
 		procedure				:: get_coordinate_system_name
+        procedure				:: get_mesh_types
+        procedure				:: get_reference_coordinates
+        procedure				:: get_reference_cell_sizes
+        procedure				:: get_reference_coordinates_number
+        procedure				:: get_local_mesh_cells_number
 		
 		procedure				:: get_global_cells_number
 		procedure				:: get_global_faces_number
@@ -100,16 +110,40 @@ module computational_domain_class
 
 contains
 
-	type(computational_domain)	function constructor(dimensions,cells_number,coordinate_system,lengths,axis_names)
-		integer								,intent(in)	:: dimensions
-		integer				,dimension(3)	,intent(in)	:: cells_number
-		character(len=*)					,intent(in)	:: coordinate_system		
-		real(dkind)			,dimension(:,:)	,intent(in)	:: lengths
-		character(len=*)	,dimension(:)	,intent(in)	:: axis_names
+	type(computational_domain)	function constructor(dimensions,cells_number,coordinate_system,lengths,axis_names,mesh_types,reference_coordinates,reference_coordinates_number,reference_cell_sizes)
+		integer								,intent(in)				:: dimensions
+		integer				,dimension(3)	,intent(in), optional	:: cells_number
+		character(len=*)					,intent(in)             :: coordinate_system
+        real(dkind)			,dimension(:,:)	,intent(in)				:: lengths
+		character(len=*)	,dimension(:)	,intent(in)             :: axis_names
+        character(len=20)	,dimension(:)	,intent(in), optional	:: mesh_types
+        integer				,dimension(:)	,intent(in), optional	:: reference_coordinates_number
+        real(dkind)			,dimension(:,:)	,intent(in), optional	:: reference_cell_sizes
+        real(dkind)			,dimension(:,:)	,intent(in), optional	:: reference_coordinates
 
 		integer	:: io_unit
+        
+        if ((present(reference_cell_sizes) .and. .not.present(mesh_types)) .or. (present(mesh_types) .and. .not.present(reference_cell_sizes))) then
+            print *, "Error in problem domain set properies: mesh_types and reference_cell_sizes must be present or absent simultaneously"
+            pause
+        end if
+        
+        if  ((present(reference_cell_sizes) .and. .not.present(reference_coordinates)) .or. (present(reference_coordinates) .and. .not.present(reference_cell_sizes))) then
+            print *, "Error in problem domain set properies: reference_coordinates and reference_cell_sizes must be present or absent simultaneously"
+            pause
+        end if
+        
+        if  ((present(reference_coordinates_number) .and. .not.present(reference_cell_sizes))) then
+            print *, "Error in problem domain set properies: if reference_coordinates_number is present also must present reference_cell_sizes and reference_coordinates"
+            pause
+        end if
+        
+        if ((present(reference_cell_sizes) .and. present(cells_number)) .or. (.not.present(reference_cell_sizes) .and. .not.present(cells_number))) then
+            print *, "Error in problem domain set properies: reference_cell_sizes and cells_number can't be present or absent simultaneously"
+            pause
+        end if
 		
-		call constructor%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names)
+		call constructor%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names,mesh_types,reference_coordinates_number,reference_cell_sizes,reference_coordinates)
 		
 		open(newunit = io_unit, file = domain_data_file_name, status = 'replace', form = 'formatted')
 		call constructor%write_properties(io_unit)
@@ -133,18 +167,30 @@ contains
 		character(len=20)					:: coordinate_system
 		real(dkind)			,dimension(:,:)	,allocatable	:: lengths
 		character(len=5)	,dimension(:)	,allocatable	:: axis_names
+        character(len=20)	,dimension(:)	,allocatable	:: mesh_types
+        integer				,dimension(:)	,allocatable	:: reference_coordinates_number
+        real(dkind)			,dimension(:,:)	,allocatable	:: reference_cell_sizes
+        real(dkind)			,dimension(:,:)	,allocatable	:: reference_coordinates
 
 		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system
-		namelist /domain_properties_2/ lengths, axis_names
+		namelist /domain_properties_2/ lengths, axis_names, mesh_types, reference_coordinates_number
+        namelist /domain_properties_3/ reference_cell_sizes, reference_coordinates
 		
 		read(unit = domain_data_unit, nml = domain_properties_1)
 		
 		allocate(lengths(dimensions,2))
 		allocate(axis_names(dimensions))
+        allocate(mesh_types(dimensions))
+        allocate(reference_coordinates_number(dimensions))
 		
 		read(unit = domain_data_unit, nml = domain_properties_2)
+        
+        allocate(reference_cell_sizes(dimensions,maxval(reference_coordinates_number)))
+        allocate(reference_coordinates(dimensions,maxval(reference_coordinates_number)))
+        
+        read(unit = domain_data_unit, nml = domain_properties_3)
 	
-		call this%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names)
+		call this%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names,mesh_types,reference_coordinates_number,reference_cell_sizes,reference_coordinates)
 	end subroutine
 	
 	subroutine write_properties(this,domain_data_unit)
@@ -156,9 +202,14 @@ contains
 		character(len=20)					:: coordinate_system
 		real(dkind)			,dimension(:,:)	,allocatable	:: lengths
 		character(len=5)	,dimension(:)	,allocatable	:: axis_names
+        character(len=20)	,dimension(:)	,allocatable	:: mesh_types
+        integer				,dimension(:)	,allocatable	:: reference_coordinates_number
+        real(dkind)			,dimension(:,:)	,allocatable	:: reference_cell_sizes
+        real(dkind)			,dimension(:,:)	,allocatable	:: reference_coordinates
 
 		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system
-		namelist /domain_properties_2/ lengths, axis_names
+		namelist /domain_properties_2/ lengths, axis_names, mesh_types, reference_coordinates_number
+        namelist /domain_properties_3/ reference_cell_sizes, reference_coordinates
 		
 		dimensions			= this%dimensions
 		cells_number		= this%cells_number
@@ -166,33 +217,148 @@ contains
 		
 		allocate(axis_names(dimensions))
 		allocate(lengths(dimensions,2))
+        allocate(mesh_types(dimensions))
+        allocate(reference_coordinates_number(dimensions))
 		
-		axis_names	= this%axis_names
-		lengths		= this%lengths
+		axis_names          = this%axis_names
+		lengths				= this%lengths
+        mesh_types			= this%mesh_types
+        reference_coordinates_number = this%reference_coordinates_number
+        
+        allocate(reference_cell_sizes(dimensions,maxval(reference_coordinates_number)))
+        allocate(reference_coordinates(dimensions,maxval(reference_coordinates_number)))
+        
+        reference_cell_sizes	= this%reference_cell_sizes
+        reference_coordinates	= this%reference_coordinates
 		
 		write(unit = domain_data_unit, nml = domain_properties_1)
 		write(unit = domain_data_unit, nml = domain_properties_2)
+        write(unit = domain_data_unit, nml = domain_properties_3)
 	end subroutine
 	
-	subroutine set_properties(this,dimensions,cells_number,lengths,coordinate_system,axis_names)
+	subroutine set_properties(this,dimensions,cells_number,lengths,coordinate_system,axis_names,mesh_types,reference_coordinates_number,reference_cell_sizes,reference_coordinates)
 		class(computational_domain)			,intent(inout)	:: this
-		integer								,intent(in)		:: dimensions
-		integer		,dimension(3)			,intent(in)		:: cells_number
-		real(dkind)	,dimension(:,:)			,intent(in)		:: lengths
-		character(len=*)					,intent(in)		:: coordinate_system
-		character(len=*)	,dimension(:)	,intent(in)		:: axis_names
+		integer								,intent(in)				:: dimensions
+		integer				,dimension(3)	,intent(in), optional	:: cells_number
+		character(len=*)					,intent(in)             :: coordinate_system
+        real(dkind)			,dimension(:,:)	,intent(in)				:: lengths
+		character(len=*)	,dimension(:)	,intent(in)             :: axis_names
+        character(len=20)	,dimension(:)	,intent(in), optional	:: mesh_types
+        integer				,dimension(:)	,intent(in), optional	:: reference_coordinates_number
+        real(dkind)			,dimension(:,:)	,intent(in), optional	:: reference_cell_sizes
+        real(dkind)			,dimension(:,:)	,intent(in), optional	:: reference_coordinates
 		
-		integer	:: dim
+		real(dkind) 	:: domain_side_length, domain_local_side_length, cell_size_koef
+		
+		integer			:: dim, i, j
 		
 		allocate(this%axis_names(dimensions))
 		allocate(this%lengths(dimensions,2))
+        allocate(this%mesh_types(dimensions))
+        allocate(this%reference_coordinates_number(dimensions))
 
 		this%dimensions				= dimensions
-		this%cells_number			= cells_number		
-		this%faces_number			= cells_number + 1
 		this%lengths				= lengths(1:dimensions,:)
 		this%coordinate_system		= coordinate_system
 		this%axis_names				= axis_names(1:dimensions)
+        
+        if (present(cells_number)) then
+			this%cells_number			= cells_number
+        else
+            this%cells_number			= 0
+        end if
+        
+        if (present(mesh_types)) then
+            this%mesh_types = mesh_types
+        else
+            this%mesh_types = 'uniform'
+        end if
+        
+        do dim = 1,dimensions
+            if (.not.(this%mesh_types(dim) == 'uniform' .or. this%mesh_types(dim) == 'linear' .or. this%mesh_types(dim) == 'exponential')) then
+                print *, "Error in problem domain set properies: unknown mesh type ", this%mesh_types(dim)
+				pause
+            end if
+        end do
+        
+        if (present(reference_coordinates_number)) then
+            this%reference_coordinates_number = reference_coordinates_number
+        else
+            this%reference_coordinates_number = 2
+        end if
+        
+        do dim = 1,dimensions
+            if (this%mesh_types(dim) == 'uniform') then
+                this%reference_coordinates_number(dim) = 2
+            else
+                if (this%reference_coordinates_number(dim) < 2) then
+                    print *, "Error in problem domain set properies: wrong reference coordinates number for dim = ", dim
+					pause
+                end if
+            end if
+        end do
+        
+        allocate(this%reference_cell_sizes(dimensions,maxval(this%reference_coordinates_number)))
+        allocate(this%reference_coordinates(dimensions,maxval(this%reference_coordinates_number)))
+        
+        if (present(reference_cell_sizes)) then
+            this%reference_cell_sizes(:,:)	= reference_cell_sizes(:,:maxval(this%reference_coordinates_number))
+            this%reference_coordinates(:,:) = reference_coordinates(:,:maxval(this%reference_coordinates_number))
+            do dim = 1,dimensions
+				this%reference_coordinates(dim,1) = this%lengths(dim,1)
+                this%reference_coordinates(dim,this%reference_coordinates_number(dim)) = this%lengths(dim,2)
+            end do
+        else
+            this%reference_cell_sizes = 0.0_dkind
+            do dim = 1,dimensions
+                domain_side_length = this%lengths(dim,2) - this%lengths(dim,1)
+				this%reference_cell_sizes(dim,:) = domain_side_length / this%cells_number(dim)
+                this%reference_coordinates(dim,1) = this%lengths(dim,1)
+                this%reference_coordinates(dim,2) = this%lengths(dim,2)
+			end do
+        end if
+        
+        allocate(this%local_mesh_cells_number(dimensions,maxval(this%reference_coordinates_number)-1))
+        this%local_mesh_cells_number = 0
+        
+        do dim = 1,dimensions
+            domain_side_length = this%lengths(dim,2) - this%lengths(dim,1)
+            select case (this%mesh_types(dim))
+            case('uniform')
+                if (this%cells_number(dim) == 0) this%cells_number(dim) = ceiling(domain_side_length / this%reference_cell_sizes(dim,1))
+                
+            case('linear')
+                this%cells_number(dim) = 0
+                do i = 1,this%reference_coordinates_number(dim)-1
+                    domain_local_side_length = this%reference_coordinates(dim,i+1) - this%reference_coordinates(dim,i)
+                    if (domain_local_side_length > domain_side_length * 1.01_dkind) then
+                        print *, "Error in problem domain set properies: check reference coordinates for dim = ", dim
+						pause
+					end if
+					this%local_mesh_cells_number(dim,i) = ceiling(2.0_dkind*domain_local_side_length/(this%reference_cell_sizes(dim,i)+this%reference_cell_sizes(dim,i+1)))
+                    this%cells_number(dim) = this%cells_number(dim) + this%local_mesh_cells_number(dim,i)
+                end do
+                
+            case('exponential')
+                this%cells_number(dim) = 0
+                do i = 1,this%reference_coordinates_number(dim)-1
+                    domain_local_side_length = this%reference_coordinates(dim,i+1) - this%reference_coordinates(dim,i)
+                    if (domain_local_side_length > domain_side_length * 1.01_dkind) then
+                        print *, "Error in problem domain set properies: check reference coordinates for dim = ", dim
+						pause
+                    end if
+                    cell_size_koef = (domain_local_side_length - this%reference_cell_sizes(dim,i)) / (domain_local_side_length - this%reference_cell_sizes(dim,i+1))
+                    if (abs(cell_size_koef - 1.0_dkind) < 1.0e-50_dkind) then
+                        this%local_mesh_cells_number(dim,i) = ceiling(domain_local_side_length/this%reference_cell_sizes(dim,i))
+                    else
+                        this%local_mesh_cells_number(dim,i) = 1 + ceiling(log(this%reference_cell_sizes(dim,i+1) / this%reference_cell_sizes(dim,i)) / log(cell_size_koef))
+                    end if
+                    this%cells_number(dim) = this%cells_number(dim) + this%local_mesh_cells_number(dim,i)
+                end do                
+            end select
+        end do
+        
+		this%faces_number			= this%cells_number + 1
 
 		this%cells_number(dimensions+1:3) = 1
 		this%faces_number(dimensions+1:3) = 1
@@ -438,7 +604,42 @@ contains
 		character(len=20)	:: get_coordinate_system_name
 		
 		get_coordinate_system_name = this%coordinate_system
-	end function	
+    end function
+    
+    pure function get_mesh_types(this)
+		class(computational_domain)			,intent(in)		:: this
+		character(len=20)	,dimension(:)	,allocatable	:: get_mesh_types
+        
+        allocate(get_mesh_types,source = this%mesh_types)
+	end function
+    
+    pure function get_reference_coordinates(this)
+		class(computational_domain)			,intent(in)		:: this
+        real(dkind)         ,dimension(:,:) ,allocatable	:: get_reference_coordinates
+		
+		allocate(get_reference_coordinates,source = this%reference_coordinates)
+    end function
+    
+    pure function get_reference_cell_sizes(this)
+		class(computational_domain)			,intent(in)		:: this
+        real(dkind)         ,dimension(:,:) ,allocatable	:: get_reference_cell_sizes
+		
+        allocate(get_reference_cell_sizes,source = this%reference_cell_sizes)
+    end function
+    
+    pure function get_reference_coordinates_number(this)
+		class(computational_domain)			,intent(in)		:: this
+        integer		       ,dimension(:)    ,allocatable	:: get_reference_coordinates_number
+		
+        allocate(get_reference_coordinates_number,source = this%reference_coordinates_number)
+    end function
+    
+    pure function get_local_mesh_cells_number(this)
+		class(computational_domain)			,intent(in)		:: this
+        integer             ,dimension(:,:) ,allocatable	:: get_local_mesh_cells_number
+		
+        allocate(get_local_mesh_cells_number,source = this%local_mesh_cells_number)
+    end function
 
 	pure integer function get_processor_rank(this)
 		class(computational_domain)	,intent(in)		:: this
