@@ -93,6 +93,8 @@ contains
 
 		real(dkind)	:: div_thermo_flux, thermo_flux1, thermo_flux2
 		real(dkind)	:: energy_prod_summ
+        
+        real(dkind)						:: coef1_middle, coef1_lower, coef2_middle, coef2_upper
 
 		real(dkind), dimension (3,3)	:: lame_coeffs		
 		
@@ -126,7 +128,7 @@ contains
 		call this%mpi_support%exchange_conservative_scalar_field(kappa)
 		call this%mpi_support%exchange_conservative_scalar_field(T)					
 				
-	!$omp parallel default(none)  private(i,j,k,dim,div_thermo_flux,thermo_flux1,thermo_flux2,lame_coeffs,sign,bound_number,boundary_type_name,cell_size,cell_size_lower,cell_size_upper) , &
+	!$omp parallel default(none)  private(i,j,k,dim,div_thermo_flux,thermo_flux1,thermo_flux2,lame_coeffs,sign,bound_number,boundary_type_name,cell_size,cell_size_lower,cell_size_upper,coef1_middle,coef1_lower,coef2_middle,coef2_upper) , &
 	!$omp& firstprivate(this)	,&
 	!$omp& shared(E_f_prod,rho,kappa,T,time_step,cons_inner_loop,dimensions,mesh,bc,coordinate_system)
 	!$omp do collapse(3) schedule(static)
@@ -160,11 +162,15 @@ contains
                 do dim = 1,dimensions
                     cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+                    coef1_middle		= cell_size_lower(dim) / (cell_size(dim) + cell_size_lower(dim))
+                    coef1_lower			= cell_size(dim) / (cell_size(dim) + cell_size_lower(dim))
+                    coef2_middle		= cell_size_upper(dim) / (cell_size(dim) + cell_size_upper(dim))
+                    coef2_upper			= cell_size(dim) / (cell_size(dim) + cell_size_upper(dim))
                     
-					thermo_flux1	= 0.5_dkind * (kappa%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + kappa%cells(i,j,k)) * lame_coeffs(dim,1)  &
+					thermo_flux1	= (coef1_lower * kappa%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + coef1_middle * kappa%cells(i,j,k)) * lame_coeffs(dim,1)  &
 												* (T%cells(i,j,k) - T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / (0.5_dkind*(cell_size(dim) + cell_size_lower(dim)))
 
-					thermo_flux2	= 0.5_dkind * (kappa%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + kappa%cells(i,j,k)) * lame_coeffs(dim,3)  &
+					thermo_flux2	= (coef2_upper * kappa%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + coef2_middle * kappa%cells(i,j,k)) * lame_coeffs(dim,3)  &
 												* (T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - T%cells(i,j,k)) / (0.5_dkind*(cell_size(dim) + cell_size_upper(dim)))
 
 					div_thermo_flux = div_thermo_flux  + (thermo_flux2 - thermo_flux1) / cell_size(dim) / lame_coeffs(dim,2)
