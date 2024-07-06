@@ -141,7 +141,7 @@ contains
 		real(dkind)	:: av_pressure1, av_velocity1, av_pressure2, av_velocity2, div_p_v	
 
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dkind)	,dimension(3)	:: cell_size, cell_size_lower, cell_size_upper
 		
 		integer	:: dimensions
 		integer	:: sign
@@ -160,7 +160,7 @@ contains
 
 		call this%mpi_support%exchange_conservative_scalar_field(p)
 
-	!$omp parallel default(none)  private(i,j,k,dim,cell_size) , &
+	!$omp parallel default(none)  private(i,j,k,dim,cell_size,cell_size_lower,cell_size_upper) , &
 	!$omp& firstprivate(this)	,&
 	!$omp& shared(bc,p,v_prod,rho,dimensions,time_step,cons_inner_loop)
 	!$omp do collapse(3) schedule(guided)
@@ -170,10 +170,12 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
                 
-                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+                cell_size			= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+                cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+                cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
                 
 				do dim = 1,dimensions
-					v_prod%pr(dim)%cells(i,j,k)  = - 0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
+					v_prod%pr(dim)%cells(i,j,k)  = - (p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / (0.5_dkind*(cell_size_lower(dim) + cell_size_upper(dim) + 2.0_dkind * cell_size(dim))) / rho%cells(i,j,k) 
 					v_prod%pr(dim)%cells(i,j,k) = v_prod%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
 				end do
 			end if
@@ -518,7 +520,7 @@ contains
 		
 		integer	                    :: dimensions, iterations
 		integer	,dimension(3,2)	    :: cons_inner_loop, cons_utter_loop
-		real(dkind)	,dimension(3)	:: cell_size        
+		real(dkind)	,dimension(3)	:: cell_size, cell_size_lower, cell_size_upper  
         real(dkind)					:: time_step_adj
 		
 		integer						:: processor_rank, processor_number, mpi_communicator		
@@ -625,7 +627,9 @@ contains
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
                 
-					cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+					cell_size			= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+					cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 								
 					lame_coeffs		= 1.0_dkind		
 				 
@@ -646,9 +650,9 @@ contains
 					
 					div_pres_flux = 0.0_dkind
 					do dim = 1,dimensions
-						pres_flux1	= lame_coeffs(dim,1)* (p_int%cells(i,j,k) - p_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / cell_size(dim)
+						pres_flux1	= lame_coeffs(dim,1)* (p_int%cells(i,j,k) - p_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / (0.5_dkind*(cell_size(dim) + cell_size_lower(dim)))
      
-						pres_flux2	= lame_coeffs(dim,3)* (p_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_int%cells(i,j,k)) / cell_size(dim)
+						pres_flux2	= lame_coeffs(dim,3)* (p_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_int%cells(i,j,k)) / (0.5_dkind*(cell_size(dim) + cell_size_upper(dim)))
      
 						div_pres_flux = div_pres_flux  + (pres_flux2 - pres_flux1) / cell_size(dim) / lame_coeffs(dim,2)
 					end do			
