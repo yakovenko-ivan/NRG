@@ -100,14 +100,17 @@ contains
 				constructor%cell_edges_length(dim, :, :, :)	= domain_side_length / global_cells_number(dim)
                 
             case('linear')
-                i = allocation_bounds(dim,1)
+                if (dim == 1) constructor%cell_edges_length(dim,allocation_bounds(dim,1),:,:)   = reference_cell_sizes(dim, 1)
+                if (dim == 2) constructor%cell_edges_length(dim,:,allocation_bounds(dim,1),:)   = reference_cell_sizes(dim, 1)
+                if (dim == 3) constructor%cell_edges_length(dim,:,:,allocation_bounds(dim,1))   = reference_cell_sizes(dim, 1)
+                i = allocation_bounds(dim,1) + 1
                 do j = 1,reference_coordinates_number(dim)-1
                     cell_size_koef = (reference_cell_sizes(dim, j+1) - reference_cell_sizes(dim, j)) / (local_mesh_cells_number(dim, j) - 1)
                     if (dim == 1) constructor%cell_edges_length(dim,i,:,:)   = reference_cell_sizes(dim, j)
                     if (dim == 2) constructor%cell_edges_length(dim,:,i,:)   = reference_cell_sizes(dim, j)
                     if (dim == 3) constructor%cell_edges_length(dim,:,:,i)   = reference_cell_sizes(dim, j)
                     i = i + 1
-                    do k = 1,local_mesh_cells_number(dim, j)
+                    do k = 2,local_mesh_cells_number(dim, j)
                         if (dim == 1) constructor%cell_edges_length(dim,i,:,:)	= reference_cell_sizes(dim, j) + cell_size_koef * (k - 1)
 						if (dim == 2) constructor%cell_edges_length(dim,:,i,:)	= reference_cell_sizes(dim, j) + cell_size_koef * (k - 1)
 						if (dim == 3) constructor%cell_edges_length(dim,:,:,i)	= reference_cell_sizes(dim, j) + cell_size_koef * (k - 1)
@@ -119,7 +122,10 @@ contains
                 if (dim == 3) constructor%cell_edges_length(dim,:,:,allocation_bounds(dim,2))   = reference_cell_sizes(dim, reference_coordinates_number(dim))
                 
             case('exponential')
-                i = allocation_bounds(dim,1)
+                if (dim == 1) constructor%cell_edges_length(dim,allocation_bounds(dim,1),:,:)   = reference_cell_sizes(dim, 1)
+                if (dim == 2) constructor%cell_edges_length(dim,:,allocation_bounds(dim,1),:)   = reference_cell_sizes(dim, 1)
+                if (dim == 3) constructor%cell_edges_length(dim,:,:,allocation_bounds(dim,1))   = reference_cell_sizes(dim, 1)
+                i = allocation_bounds(dim,1) + 1
                 do j = 1,reference_coordinates_number(dim)-1
                     domain_side_length = reference_coordinates(dim, j+1) - reference_coordinates(dim, j)
                     cell_size_koef = (domain_side_length - reference_cell_sizes(dim, j)) / (domain_side_length - reference_cell_sizes(dim, j+1))
@@ -127,7 +133,7 @@ contains
                     if (dim == 2) constructor%cell_edges_length(dim,:,i,:)   = reference_cell_sizes(dim, j)
                     if (dim == 3) constructor%cell_edges_length(dim,:,:,i)   = reference_cell_sizes(dim, j)
                     i = i + 1
-                    do k = 1,local_mesh_cells_number(dim, j)
+                    do k = 2,local_mesh_cells_number(dim, j)
                         if (dim == 1) constructor%cell_edges_length(dim,i,:,:)	= reference_cell_sizes(dim, j) * cell_size_koef ** (k - 1)
 						if (dim == 2) constructor%cell_edges_length(dim,:,i,:)	= reference_cell_sizes(dim, j) * cell_size_koef ** (k - 1)
 						if (dim == 3) constructor%cell_edges_length(dim,:,:,i)	= reference_cell_sizes(dim, j) * cell_size_koef ** (k - 1)
