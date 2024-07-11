@@ -738,15 +738,16 @@ contains
 					bc				=> this%boundary%bc_ptr	, &
 					mesh			=> this%mesh%mesh_ptr)
 		
-		!$omp parallel default(none)  private(i,j,k,dim,delta_t_interm,velocity_value) , &
+		!$omp parallel default(none)  private(i,j,k,dim,delta_t_interm,velocity_value,cell_size) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(v,v_s,bc,time_step,cons_inner_loop,dimensions,cell_size)
+		!$omp& shared(v,v_s,bc,time_step,cons_inner_loop,dimensions)
 		!$omp do collapse(3) schedule(guided) reduction(min:time_step)						
 						
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
+                cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 				velocity_value		= 0.0_dkind
 				do dim = 1,dimensions
 					velocity_value = velocity_value + v%pr(dim)%cells(i,j,k)*v%pr(dim)%cells(i,j,k)

@@ -137,11 +137,10 @@ contains
 		real(dkind)	:: div_sigma, v_div_sigma, sigma_dv
         
 		character(len=20)				:: coordinate_system
-		real(dkind), dimension (3,3)	:: lame_coeffs
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size			
+		real(dkind)	,dimension(3)	:: cell_size, cell_size_lower, cell_size_upper		
 		
 		integer	:: sign
 		integer :: i,j,k,plus,dim1,dim2
@@ -152,8 +151,6 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
@@ -168,9 +165,9 @@ contains
 
 		call this%mpi_support%exchange_conservative_tensor_field(sigma)
 				
-	!$omp parallel default(none)  private(i,j,k,dim1,dim2,plus,sign,v_div_sigma,div_sigma,sigma_dv,lame_coeffs) , &
+	!$omp parallel default(none)  private(i,j,k,dim1,dim2,plus,sign,v_div_sigma,div_sigma,sigma_dv,cell_size,cell_size_lower,cell_size_upper) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,v_prod,v,rho,E_f_prod,E_f_prod_FDS,sigma,time_step,cons_inner_loop,dimensions,cell_size,coordinate_system) 
+	!$omp& shared(bc,mesh,v_prod,v,rho,E_f_prod,E_f_prod_FDS,sigma,time_step,cons_inner_loop,dimensions,coordinate_system) 
 	!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -180,38 +177,24 @@ contains
             E_f_prod_FDS%cells(i,j,k)	= 0.0_dkind
 		
 			if(bc%bc_markers(i,j,k) == 0) then
+
+				cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
                 
 				v_div_sigma		= 0.0_dkind
-				sigma_dv		= 0.0_dkind
-                
-				lame_coeffs		= 1.0_dkind				
-			
-				select case(coordinate_system)
-					case ('cartesian')	
-						lame_coeffs			= 1.0_dkind
-					case ('cylindrical')
-						! x -> z, y -> r
-						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
-						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + cell_size(1)	
-					
-					case ('spherical')
-						! x -> r
-						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
-						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + cell_size(1))**2
-				end select							
-				
+				sigma_dv		= 0.0_dkind			
 				
 				do dim1 = 1,dimensions
 					div_sigma	= 0.0_dkind
 					
 					do dim2 = 1,dimensions
+
+						cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))
+						cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))
 							
 						div_sigma	= div_sigma + (	sigma%pr(dim1,dim2)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) &
-												-	sigma%pr(dim1,dim2)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3)))/(2.0_dkind * cell_size(dim2))
+												-	sigma%pr(dim1,dim2)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (0.5_dkind*(cell_size_lower(dim2) + cell_size_upper(dim2) + 2.0_dkind*cell_size(dim2)))
                         
-                        sigma_dv	= sigma_dv + sigma%pr(dim1,dim2)%cells(i,j,k) * (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dkind*cell_size(dim2))
+                        sigma_dv	= sigma_dv + sigma%pr(dim1,dim2)%cells(i,j,k) * (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (0.5_dkind*(cell_size_lower(dim2) + cell_size_upper(dim2) + 2.0_dkind*cell_size(dim2)))
                     end do
                     
 					select case(coordinate_system)
@@ -258,7 +241,7 @@ contains
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop, flow_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size		
+		real(dkind)	,dimension(3)	:: cell_size, cell_size_lower, cell_size_upper	
 		
 		call this%calculate_viscosity_coeff()
 		
@@ -267,8 +250,6 @@ contains
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 
 		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
@@ -280,51 +261,67 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(v)					
 					
 
-		!$omp parallel default(none)  private(i,j,k,dim1,dim2,dim3,div_v,dv1_dx2,dv2_dx1,lame_coeffs) , &
+		!$omp parallel default(none)  private(i,j,k,dim1,dim2,dim3,div_v,dv1_dx2,dv2_dx1,lame_coeffs,cell_size,cell_size_lower,cell_size_upper) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(mesh,sigma,v,nu,cons_inner_loop,flow_inner_loop,cell_size,dimensions,coordinate_system) 
+		!$omp& shared(mesh,sigma,v,nu,cons_inner_loop,flow_inner_loop,dimensions,coordinate_system) 
 
 		!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+
+			cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
+            
+            lame_coeffs		= 1.0_dkind	
 		
             do dim1 = 1,dimensions
             do dim2 = 1,dimensions
   
                 div_v = 0.0_dkind
 			
-				lame_coeffs		= 1.0_dkind				
-			
-				select case(coordinate_system)
-					case ('cartesian')	
-						lame_coeffs			= 1.0_dkind
-					case ('cylindrical')
-						! x -> r, y -> z
-						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
-						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + cell_size(1)	
-
-					case ('spherical')
-						! x -> r
-						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
-						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + cell_size(1))**2
-				end select					
-
                 if (dim1 <= dim2) then
                     if (dim1 == dim2) then
                         do dim3 = 1,dimensions
-                            div_v = div_v + (v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) * lame_coeffs(dim3,3) - v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) * lame_coeffs(dim3,1))/(2.0_dkind*cell_size(dim3)*lame_coeffs(dim3,2))
+
+							cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3))
+							cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3))
+                            
+                            if (dim3 == 1) then	
+								select case(coordinate_system)
+									case ('cartesian')	
+										lame_coeffs			= 1.0_dkind
+									case ('cylindrical')
+										! x -> r, y -> z
+										lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*(cell_size(1) + cell_size_lower(1))	
+										lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+										lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*(cell_size(1) + cell_size_upper(1))
+
+									case ('spherical')
+										! x -> r
+										lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - (0.5_dkind*(cell_size(1) + cell_size_lower(1))))**2
+										lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+										lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + (0.5_dkind*(cell_size(1) + cell_size_upper(1))))**2
+                                    end select
+                            end if
+                        
+                            div_v = div_v + (v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) * lame_coeffs(dim3,3) - v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) * lame_coeffs(dim3,1)) &
+											/ (0.5_dkind*(cell_size_lower(dim3) + cell_size_upper(dim3) + 2.0_dkind*cell_size(dim3))*lame_coeffs(dim3,2))
+                        
                         end do
                     else
                         div_v = 0.0_dkind
                     end if
 
-                    dv1_dx2 = (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dkind*cell_size(dim2))
-                    dv2_dx1 = (v%pr(dim2)%cells(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) - v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / (2.0_dkind*cell_size(dim1))
+                    cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))
+					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))    
+                    dv1_dx2				= (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (0.5_dkind*(cell_size_lower(dim2) + cell_size_upper(dim2) + 2.0_dkind*cell_size(dim2)))
+                    
+                    cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))
+					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))  
+                    dv2_dx1				= (v%pr(dim2)%cells(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) - v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / (0.5_dkind*(cell_size_lower(dim1) + cell_size_upper(dim1) + 2.0_dkind*cell_size(dim1)))
 
                     sigma%pr(dim1,dim2)%cells(i,j,k) = nu%cells(i,j,k) * (dv1_dx2 + dv2_dx1 - 2.0_dkind/3.0_dkind*div_v)
+                   ! print *, i, nu%cells(i,j,k)
 
                     select case(coordinate_system)
 						case ('cylindrical')

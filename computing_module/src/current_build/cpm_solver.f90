@@ -898,8 +898,7 @@ contains
 					mesh			=> this%mesh%mesh_ptr)
 		
 		dimensions			= this%domain%get_domain_dimensions()
-		cons_inner_loop		= this%domain%get_local_inner_cells_bounds()
-		cell_size			= mesh%get_cell_edges_length()					
+		cons_inner_loop		= this%domain%get_local_inner_cells_bounds()			
 					
 		!!$omp parallel default(shared)  private(i,j,k,dim,delta_t_interm,velocity_value) , &
 		!!$omp& firstprivate(this)	,&
@@ -910,6 +909,7 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
+				cell_size			= mesh%get_cell_edges_length_loc(i,j,k)
 				velocity_value		= 0.0_dkind
 				do dim = 1,dimensions
 					velocity_value = velocity_value + v%pr(dim)%cells(i,j,k)*v%pr(dim)%cells(i,j,k)
@@ -1025,8 +1025,6 @@ contains
 		species_number	= this%chem%chem_ptr%species_number
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-				
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 !		CO_index	= this%chem%chem_ptr%get_chemical_specie_index('CO')
 !		HO2_index	= this%chem%chem_ptr%get_chemical_specie_index('HO2')
@@ -1057,6 +1055,8 @@ contains
 				max_val = 0.0_dkind
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
+                
+						cell_size		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
 					
 						!! Grad temp
 						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
