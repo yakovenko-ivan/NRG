@@ -246,7 +246,6 @@ contains
 				conc_in = 0.0_dkind
 				do i_specie	= 1,species_number
 					if (molar_masses(i_specie) /= 0.0_dkind) then
-					!	conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)	! For table approximated kinetics
 						conc_in(i_specie) = Y%pr(i_specie)%cells(i,j,k)*rho%cells(i,j,k)/molar_masses(i_specie)
 						if(this%ODE_solver == 'table_approximated') then
 							conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)	! For table approximated kinetics
@@ -310,7 +309,6 @@ contains
 
 				do i_specie	= 1,species_number
 					if (molar_masses(i_specie) /= 0.0_dkind) then
-			!		Y_prod%pr(i_specie)%cells(i,j,k) = (conc_out(i_specie) - conc_in(i_specie))/rho%cells(i,j,k)*molar_masses(i_specie)
 						Y_prod%pr(i_specie)%cells(i,j,k) = (conc_out(i_specie) - conc_in(i_specie))*molar_masses(i_specie) / time_step
 						Y_prod2%pr(i_specie)%cells(i,j,k)	= (conc_out(i_specie) - conc_in(i_specie))
 						
@@ -323,9 +321,7 @@ contains
 				end do
 
 				do i_specie = 1,species_number
-					specie_enthalpy = this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i,j,k),i_specie)
-			!		E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie) - conc_in(i_specie))/rho%cells(i,j,k)
-!					E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie) - conc_in(i_specie)) / time_step
+					specie_enthalpy = this%thermo%thermo_ptr%calculate_specie_enthalpy(T_ref,i_specie)
 
 					if (this%ODE_solver == 'table_approximated') then
 						E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie)) / time_step
@@ -410,14 +406,14 @@ contains
 				rate_constants(i_react,1) = A(i_react)*(T**beta(i_react))*exp(-E_act(i_react)/r_gase_J/T)
 
 				Kp = exp(d_s/r_gase_j - d_h/r_gase_j/T)
-				Kc = Kp * (100000.0_dkind/r_gase_j/T) ** d_nu
+				Kc = Kp * (P_atm/r_gase_j/T) ** d_nu
 
 				rate_constants(i_react,2) = rate_constants(i_react,1) / Kc
 			case(1)         ! reversible +M
 				rate_constants(i_react,1) = A(i_react)*(T**beta(i_react))*exp(-E_act(i_react)/r_gase_J/T)
 
 				Kp = exp(d_s/r_gase_j - d_h/r_gase_j/T)
-				Kc = Kp * (100000.0_dkind/r_gase_j/T) ** d_nu
+				Kc = Kp * (P_atm/r_gase_j/T) ** d_nu
 
 				rate_constants(i_react,2) = rate_constants(i_react,1) / Kc
 			case(2)         ! Lindemann form
@@ -429,7 +425,7 @@ contains
 				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dkind + reduced_pressure))
 
 				Kp = exp(d_s/r_gase_j - d_h/r_gase_j/T)
-				Kc = Kp * (100000.0_dkind/r_gase_j/T) ** d_nu
+				Kc = Kp * (P_atm/r_gase_j/T) ** d_nu
 
 				rate_constants(i_react,2) = rate_constants(i_react,1) / Kc
 			case(3)         ! Troe form
@@ -444,22 +440,23 @@ contains
 
 				F_cent = (1.0_dkind - Troe_coeffs(i_react,1))*exp(-T/Troe_coeffs(i_react,2)) + Troe_coeffs(i_react,1)*exp(-T/Troe_coeffs(i_react,3)) + exp(-Troe_coeffs(i_react,4)/T)
 
-				c = -0.4_dkind - 0.67_dkind * log(F_cent)
-				n = 0.75_dkind - 1.27_dkind * log(F_cent)
+				c = -0.4_dkind - 0.67_dkind * log10(F_cent)
+				n = 0.75_dkind - 1.27_dkind * log10(F_cent)
 				d = 0.14_dkind
 
 				if (reduced_pressure /= 0.0_dkind) then
-					blending_function = F_cent ** (1.0_dkind/ (1.0_dkind + ((log(reduced_pressure) + c)/(n - d*(log(reduced_pressure)+c)))**2))
+					blending_function = F_cent ** (1.0_dkind/ (1.0_dkind + ((log10(reduced_pressure) + c)/(n - d*(log10(reduced_pressure)+c)))**2))
 				else
 					blending_function = F_cent ** (-1.0_dkind / d)
 				end if
 					
-				dfd = log(blending_function)
+        !       dfd = (1.0_dkind + ((log10(reduced_pressure) + c)/(n - d * (log10(reduced_pressure) + c))) ** 2) ** (-1) * log10(F_cent)
+       	!		dfd = log10(blending_function)
 				
 				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dkind + reduced_pressure)) * blending_function
 
 				Kp = exp(d_s/r_gase_j - d_h/r_gase_j/T)
-				Kc = Kp * (100000.0_dkind/r_gase_j/T) ** d_nu
+				Kc = Kp * (P_atm/r_gase_j/T) ** d_nu
 
 				rate_constants(i_react,2) = rate_constants(i_react,1) / Kc
 			case(4)         ! duplicate

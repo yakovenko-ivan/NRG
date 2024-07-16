@@ -172,7 +172,7 @@ contains
  		species_number = size(species_concentrations)
 
 		temp = temperature
-			if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 
 		do specie_number = 1,species_number
 			if(temp < 1000.0) then
@@ -206,7 +206,7 @@ contains
 
 		specie_cp = 0.0_dkind
 		temp = temperature
-        if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+        if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 
 		if (temp < 1000.0_dkind) then
 			specie_cp = this%a_coeffs(5,1,specie_number)
@@ -242,7 +242,7 @@ contains
  		species_number = size(species_concentrations)
 
 		temp = temperature
-			if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+			if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 
 		do specie_number = 1,species_number
 			if(temp < 1000.0) then
@@ -276,7 +276,7 @@ contains
 
 		calculate_specie_enthalpy = 0.0_dkind
 		temp = temperature
-		if(temperature >= 4200.0_rkind) temp = 4200.0_dkind
+		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 		
 		if(temp < 1000.0) then
 			specie_enthalpy = this%a_coeffs(5,1,specie_number) / 5.0_dkind
@@ -314,7 +314,7 @@ contains
 		calculate_mixture_enthalpy = 0.0_dkind
 		
 		temp = temperature
-		if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 		
 		do specie_number = 1,species_number
 			specie_enthalpy = 0.0_dkind
@@ -358,7 +358,7 @@ contains
 		calculate_mixture_energy = 0.0_dkind
 		
 		temp = temperature
-		if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 		
 		do specie_number = 1,species_number
 			specie_energy = 0.0_dkind
@@ -378,7 +378,7 @@ contains
 				end do
 				specie_energy = specie_energy + this%a_coeffs(6,2,specie_number) / temp
 			end if
-			specie_energy				= (specie_energy - r_gase_J )* temp
+			specie_energy				= (specie_energy - r_gase_J)* temp
 			calculate_mixture_energy	= calculate_mixture_energy + specie_energy * species_concentrations(specie_number)
 		end do
 
@@ -398,7 +398,7 @@ contains
 
 		calculate_specie_entropy = 0.0_dkind
 		temp = temperature
-		if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 
 		if(temp < 1000.0) then
 			specie_entropy = this%a_coeffs(5,1,specie_number) / 4.0_dkind
@@ -465,35 +465,50 @@ contains
 	!	continue
 	!end function
 
-	recursive pure function calculate_temperature(this,temperature,e_i,concentrations)
+	function calculate_temperature(this,temperature,e_i,concentrations)
 
-		real(dkind)             :: calculate_temperature
+		real(dkind)										:: calculate_temperature
 
 		class(thermophysical_properties)    ,intent(in) :: this
 		real(dkind)                         ,intent(in) :: temperature, e_i
 		real(dkind) ,dimension(:)           ,intent(in) :: concentrations
 		!!$OMP threadprivate (calculate_temperature)
 
-		real(dkind) :: temp		
-		integer :: species_number
-		integer :: i, specie_number
-		integer	:: iter, max_iter
-		real(dkind)	:: eps, residual
-
+		real(dkind)		:: temp		
+		integer			:: species_number
+		integer			:: i, specie_number
+		integer			:: iter, max_iter
+		real(dkind)		:: eps, residual, old_residual, cp, cv, e_int, h_int, h_const, e_const
+		real(rkind)		:: var
+        
+        
 		species_number          = size(concentrations)
         temp = temperature
-        if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+        if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 
-		calculate_temperature   = temp
-		
-		max_iter	= 100
+        max_iter	= 1000
 		eps			= 1e-08
-		do iter = 1, max_iter
-			calculate_temperature = calculate_temperature + (e_i - (this%calculate_mixture_energy(calculate_temperature, concentrations) - this%calculate_mixture_enthalpy(298.15_dkind, concentrations))) / (this%calculate_mixture_cp(calculate_temperature, concentrations) - r_gase_J)
-			residual =  e_i - this%calculate_mixture_energy(calculate_temperature, concentrations) + this%calculate_mixture_enthalpy(298.15_dkind, concentrations)
-			if ( abs(residual) < eps) exit
-		end do
 
+        h_const		= this%calculate_mixture_enthalpy(T_ref, concentrations)
+	    e_const		= this%calculate_mixture_energy(T_ref, concentrations)
+        
+        cp		= this%calculate_mixture_cp(temp, concentrations) 
+        cv		= cp - r_gase_J        
+       
+        !# Newton method
+		do iter = 1, max_iter
+            e_int	= this%calculate_mixture_energy(temp, concentrations) - h_const
+			residual =  (e_i - e_int) / cp
+			temp = temp + (residual) 
+            if ( abs(residual) < eps) exit
+            if ( e_int > 0.0) then
+                continue
+            end if
+	    end do
+        
+        calculate_temperature = temp
+        
+        
     end function
     
 	recursive pure function calculate_temperature_Pconst(this,temperature,h_s,concentrations)
@@ -513,15 +528,15 @@ contains
 
 		species_number          = size(concentrations)
         temp = temperature
-        if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+        if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
 
 		calculate_temperature_Pconst   = temp
 		
 		max_iter	= 100
 		eps			= 1e-08
 		do iter = 1, max_iter
-			calculate_temperature_Pconst = calculate_temperature_Pconst + (h_s - (this%calculate_mixture_enthalpy(calculate_temperature_Pconst, concentrations) - this%calculate_mixture_enthalpy(298.15_dkind, concentrations))) / (this%calculate_mixture_cp(calculate_temperature_Pconst, concentrations))
-			residual =  h_s - this%calculate_mixture_enthalpy(calculate_temperature_Pconst, concentrations) + this%calculate_mixture_enthalpy(298.15_dkind, concentrations)
+			calculate_temperature_Pconst = calculate_temperature_Pconst + (h_s - (this%calculate_mixture_enthalpy(calculate_temperature_Pconst, concentrations) - this%calculate_mixture_enthalpy(T_ref, concentrations))) / (this%calculate_mixture_cp(calculate_temperature_Pconst, concentrations))
+			residual =  h_s - this%calculate_mixture_enthalpy(calculate_temperature_Pconst, concentrations) + this%calculate_mixture_enthalpy(T_ref, concentrations)
 			if ( abs(residual) < eps) exit
         end do
         

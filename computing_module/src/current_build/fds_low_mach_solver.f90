@@ -1115,7 +1115,7 @@ contains
 					
 					do spec = 1, species_number
 					
-						specie_enthalpy = (thermo%calculate_specie_enthalpy(T%cells(i,j,k),spec) - thermo%calculate_specie_enthalpy(298.15_dkind,spec))  / thermo%molar_masses(spec)
+						specie_enthalpy = (thermo%calculate_specie_enthalpy(T%cells(i,j,k),spec) - thermo%calculate_specie_enthalpy(T_ref,spec))  / thermo%molar_masses(spec)
 					
 						do dim = 1, dimensions
 					
