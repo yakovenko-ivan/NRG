@@ -121,7 +121,7 @@ contains
 		real(dkind)	:: diff_velocity_corr1, diff_velocity_corr2
 		
 		real(dkind)	,dimension(:)	,allocatable	:: diff_velocity11, diff_velocity22		
-		real(dkind)					:: specie_enthalpy, specie_enthalpy1, specie_enthalpy2
+		real(dkind)					:: specie_enthalpy, specie_enthalpy1, specie_enthalpy2, h_s_Tref
 		real(dkind)					:: Y_prod_summ
 		real(dkind)					:: check_summ1, check_summ2
 		
@@ -130,9 +130,9 @@ contains
 		integer						:: dimensions, species_number
 		integer		,dimension(3,2)	:: cons_inner_loop
 		real(dkind)	,dimension(3)	:: cell_size			
-		character(len=20)	:: coordinate_system
+		character(len=20)			:: coordinate_system
 		
-		character(len=20)		:: boundary_type_name
+		character(len=20)			:: boundary_type_name
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim,specie_number,specie_number1
 		
@@ -169,7 +169,7 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(D)
 		call this%mpi_support%exchange_conservative_vector_field(Y)
 					
-	!$omp parallel default(none)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name) , &
+	!$omp parallel default(none)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, h_s_Tref, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name) , &
 	!$omp& firstprivate(this)	,&
 	!$omp& shared(D, mol_mix_conc, rho, E_f_prod, Y, Y_prod, T, time_step,cons_inner_loop,dimensions,species_number,bc,cell_size, mesh,coordinate_system) 
 	!$omp do collapse(3) schedule(guided)
@@ -232,14 +232,21 @@ contains
 							
 							Y_prod%pr(specie_number)%cells(i,j,k) = Y_prod%pr(specie_number)%cells(i,j,k) + div_dif_flux! * time_step
 							
-							specie_enthalpy = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),specie_number))*T%cells(i,j,k)
-							
-							specie_enthalpy1 = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),specie_number))*T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-				
-							specie_enthalpy2 = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),specie_number))*T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-							
-							div_dif_flux =  (diffusion_flux2 * 0.5_dkind * (specie_enthalpy + specie_enthalpy2) - diffusion_flux1 * 0.5_dkind * (specie_enthalpy + specie_enthalpy1)) / cell_size(dim) / lame_coeffs(dim,2)	
-							
+							!specie_enthalpy = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),specie_number))*T%cells(i,j,k)
+							!specie_enthalpy1 = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),specie_number))*T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							!specie_enthalpy2 = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),specie_number))*T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+       
+							!div_dif_flux		=  (diffusion_flux2 * 0.5_dkind * (specie_enthalpy + specie_enthalpy2) - diffusion_flux1 * 0.5_dkind * (specie_enthalpy + specie_enthalpy1)) / cell_size(dim) / lame_coeffs(dim,2)	
+                            !print *, div_dif_flux
+                            
+                            h_s_Tref			=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T_ref, specie_number)
+                            specie_enthalpy		=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i,j,k), specie_number)	- h_s_Tref
+                            specie_enthalpy1	=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), specie_number) - h_s_Tref
+                            specie_enthalpy2	=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), specie_number) - h_s_Tref
+     
+							div_dif_flux		=  (diffusion_flux2 * 0.5_dkind * (specie_enthalpy + specie_enthalpy2) - diffusion_flux1 * 0.5_dkind * (specie_enthalpy + specie_enthalpy1)) / cell_size(dim) / lame_coeffs(dim,2)	
+!							print *, div_dif_flux
+                            
 							E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) +  div_dif_flux / molar_masses(specie_number)! * time_step 
 						end if							
 					end do
