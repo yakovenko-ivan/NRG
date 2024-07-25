@@ -770,7 +770,7 @@ contains
 			if (stabilized) then
                stop_flag = .true.
 !				call this%chem_kin_solver%write_chemical_kinetics_table('15.0_pcnt_H2-Air_table(T).dat')
-!				call this%write_data_table('H2-Air_initials.dat')
+				call this%write_data_table('H2-Air_flamelet.dat')
 				stop
             end if
 		end if
@@ -2244,7 +2244,7 @@ contains
 					!$omp barrier
 					!$omp master
 					poisson_iteration = 0
-					print *, "01", a_norm, poisson_iteration
+					!print *, "01", a_norm, poisson_iteration
 					!$omp end master
 					!$omp barrier
 					
@@ -2383,7 +2383,7 @@ contains
 					end do	
 					
 					if(abs(a_norm_init) > 1e-10_dkind) then
-						print *,a_norm,a_norm_init,a_norm/a_norm_init
+					!	print *,a_norm,a_norm_init,a_norm/a_norm_init
 						if((a_norm/a_norm_init < tolerance).or.(a_norm < 100e-0)) then
 							v_cycle_converged = .true.
 							
@@ -3195,7 +3195,7 @@ contains
 		integer	:: bound_number,sign
 		integer :: i,j,k,plus,dim,dim1,spec, lp_index,lp_index2,lp_index3
 		
-		
+		logical	,save			:: correction_flag = .true.
 		character(len=20)		:: boundary_type_name
 		
 		dimensions		= this%domain%get_domain_dimensions()
@@ -3220,18 +3220,10 @@ contains
 					E_f_prod_chem 	=> this%E_f_prod_chem%s_ptr	, &
 					bc				=> this%boundary%bc_ptr)
 
-	!	time_delay			= 1e-03_dkind			
-	!	time_diff			= 5e-05_dkind
-	!	time_stabilization	= 5e-04_dkind			
-					
 		time_delay			= 1e-05_dkind			
-		time_diff			= 1e-04_dkind
+		time_diff			= 2e-05_dkind
 		time_stabilization	= 5e-06_dkind		
-        
-		!time_delay			= 5e-06_dkind			
-		!time_diff			= 1e-06_dkind
-		!time_stabilization	= 5e-06_dkind	        
-		
+       
 		if ( time > (correction+1)*(time_diff) + time_delay) then			
 					
 			current_time = time
@@ -3243,39 +3235,12 @@ contains
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
 					
-						!! Grad temp
-						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
-						!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-						!	flame_front_index = i
-      !                  end if
-                        
-      !                  if ((T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
-						!	max_val = T%cells(i+1,j,k)-T%cells(i-1,j,k)
-						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-						!	flame_front_index = i
-						!end if
-					
 						if ((E_f_prod_chem%cells(i,j,k)) > max_val) then
 							max_val = E_f_prod_chem%cells(i,j,k)
 							flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
 							flame_front_index = i
 						end if
-      !                  
-						!! max H
-						!if (abs(Y%pr(OH_index)%cells(i,j,k)) > max_val) then
-						!	max_val = Y%pr(OH_index)%cells(i,j,k)
-						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-						!	flame_front_index = i
-						!end if					
-					 !
-						! max CO
-						!if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_val) then
-						!	max_val = Y%pr(CO_index)%cells(i,j,k)
-						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
-						!	flame_front_index = i
-						!end if
-				
+
 					end if
 				end do
 			end do
@@ -3349,8 +3314,7 @@ contains
             
             left_val2	= Y%pr(H_index)%cells(flame_front_index-2,1,1)
             right_val2	= Y%pr(H_index)%cells(flame_front_index+2,1,1)
-            
-            
+
 			a = (right_val + left_val - 2.0_dkind * max_val)/2.0_dkind/cell_size(1)**2
 			b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*flame_front_coords(1)
 			
@@ -3359,27 +3323,8 @@ contains
 			current_flame_location_H = -b/2.0_dkind/a
             
             current_flame_location_H = Newton(flame_front_coords(1),(/left_val2,left_val,max_val,right_val,right_val2/),cell_size(1),1e-06*max_val)
-           
+ 
             
-			!left_val	= T%cells(flame_front_index,1,1) - T%cells(flame_front_index-2,1,1)
-			!right_val	= T%cells(flame_front_index+2,1,1) - T%cells(flame_front_index,1,1)
-			
-			!left_val	= E_f_prod_chem%cells(flame_front_index-1,1,1)
-			!right_val	= E_f_prod_chem%cells(flame_front_index+1,1,1)	            
-            
-			!left_val	= Y%pr(CO_index)%cells(flame_front_index-1,1,1)
-			!right_val	= Y%pr(CO_index)%cells(flame_front_index+1,1,1)	
-			 
-			!left_val	= Y%pr(OH_index)%cells(flame_front_index-1,1,1)
-			!right_val	= Y%pr(OH_index)%cells(flame_front_index+1,1,1)				
-            
-!			left_val	= Y%pr(HO2_index)%cells(flame_front_index-1,1,1)
-!			right_val	= Y%pr(HO2_index)%cells(flame_front_index+1,1,1)            
-			
-			!a = (right_val + left_val - 2.0_dkind * max_val)/2.0_dkind/cell_size(1)**2
-			!b = (max_val - left_val)/cell_size(1) - a*(2.0_dkind*flame_front_coords(1) - cell_size(1))
-			!
-			!current_flame_location = -b/2.0_dkind/a
             
             current_flame_location = current_flame_location_E
             
@@ -3388,58 +3333,33 @@ contains
 				farfield_velocity = farfield_velocity_array(1)
 				previous_flame_location = current_flame_location
                 previous_time = current_time
-!                print*, 'correction', previous_flame_location, current_flame_location
-!                pause
 			end if  
 
 			if( (correction /= 0).and.(current_flame_location /=  previous_flame_location) )then 
-                
-!                print *, 'Performing velocity correction # ', correction, '. At time:' , time
-!                print *, 'Flame velocity: ', flame_velocity, '. Current flame location: ', current_flame_location
                 
 				flame_velocity		= (current_flame_location - previous_flame_location)/(current_time - previous_time)
                 
                 flame_velocity_T	= (current_flame_location_T - previous_flame_location_T)/(current_time - previous_time)
                 flame_velocity_H	= (current_flame_location_H - previous_flame_location_H)/(current_time - previous_time)
                 flame_velocity_E	= (current_flame_location_E - previous_flame_location_E)/(current_time - previous_time)
-                
-		!		farfield_velocity_array = max(farfield_velocity_array - 0.25_dkind*flame_velocity,0.0_dkind)
-				
-                
+
                 flame_velocity_hist(mod(correction,size(flame_velocity_hist))+1) = flame_velocity
                 av_flame_velocity = sum(flame_velocity_hist)/(count((flame_velocity_hist) > 1e-08_dkind) + count((flame_velocity_hist) < -1e-08_dkind))         
 
-!                print*, flame_velocity_hist
-!                print*, count((flame_velocity_hist) > 1e-08_dkind)  
-!                print*, count((flame_velocity_hist) < -1e-08_dkind)  
-!                print*, correction, mod(correction,size(flame_velocity_hist))
-!                pause
-                                
-				!if (abs(flame_velocity) > 1e-01) then
-				!	farfield_velocity_array = max(farfield_velocity_array - 0.005_dkind*av_flame_velocity, 0.0_dkind)
+				!if (av_flame_velocity < 0.0_dkind) then
+				!	correction_flag = .true.
 				!else
-				!	farfield_velocity_array = max(farfield_velocity_array - 0.0005_dkind*av_flame_velocity, 0.0_dkind)
+				!	correction_flag = .false.
     !            end if
-
-				if (correction > 10) then
-					farfield_velocity_array = max(farfield_velocity_array - 0.05*av_flame_velocity, 0.0_dkind)
+                
+				if ((correction > 10).and.(correction_flag)) then
+					farfield_velocity_array = max(farfield_velocity_array - 0.1_dkind*av_flame_velocity, 0.0_dkind)
 				end if
-                
-                
-!                end if
-                
-
-!                else
-!                    farfield_velocity_array = max(farfield_velocity_array - 0.75_dkind*flame_velocity, 0.0_dkind)
-!                end if
 				
 				if (mod(correction,1) == 0) then
-					write (flame_loc_unit,'(13E20.12,I6)') time, current_flame_location, flame_velocity, av_flame_velocity, farfield_velocity_array(1), abs(farfield_velocity_array(1))+abs(flame_velocity), max_val_E, current_flame_location_T, flame_velocity_T, max_val_T, current_flame_location_H, flame_velocity_H, max_val_H, counter
+					write (flame_loc_unit,'(13E20.12,I6)') time, current_flame_location, flame_velocity, av_flame_velocity, farfield_velocity_array(1), abs(farfield_velocity_array(1))+abs(av_flame_velocity), max_val_E, current_flame_location_T, flame_velocity_T, max_val_T, current_flame_location_H, flame_velocity_H, max_val_H, counter
 				end if
-!                write (flame_loc_unit,'(7E20.12)') time, current_time, previous_time, current_flame_location, previous_flame_location, flame_velocity, farfield_velocity_array(1) 
-!                print*, correction
-!                pause
-                
+
 				previous_flame_location		= current_flame_location
                 
                 previous_flame_location_T	= current_flame_location_T
@@ -4372,7 +4292,7 @@ contains
 				!if(a_norm/a_norm_init < tolerance) converged = .true.
 				
 				if ((poisson_iteration == 0).or.(poisson_iteration == nu_1)) then
-					print *, mesh_iter, a_norm, poisson_iteration
+				!	print *, mesh_iter, a_norm, poisson_iteration
 				end if				
 						
 				!pause	
@@ -4758,7 +4678,7 @@ contains
 				!$omp master
 					
 				if ((poisson_iteration == 0).or.(poisson_iteration == nu_2)) then
-					print *, mesh_iter, a_norm, poisson_iteration
+				!	print *, mesh_iter, a_norm, poisson_iteration
 				end if	
 				!pause
 				!if(a_norm/a_norm_init < tolerance) converged = .true.
@@ -5011,7 +4931,7 @@ contains
 		integer	:: i, spec, dim
 		integer	:: ierr
 		
-		open(newunit = io_unit	, file = trim(task_setup_folder) // trim(fold_sep) // trim(table_file), status = 'replace'	, form = 'formatted') 	
+		open(newunit = io_unit	, file = trim(table_file), status = 'replace'	, form = 'formatted') 	
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number

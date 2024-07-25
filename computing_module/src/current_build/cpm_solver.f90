@@ -381,8 +381,8 @@ contains
 			call this%calculate_time_step()
 		end if		
 		
-        call this%if_stabilized(this%time, stabilized)
-        if (stabilized) stop       
+        !call this%if_stabilized(this%time, stabilized)
+        !if (stabilized) stop       
         
 		!call this%state_eq%check_conservation_laws()
 
