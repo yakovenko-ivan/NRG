@@ -171,10 +171,10 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
                 
                 cell_size			= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
-                cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
                 
 				do dim = 1,dimensions
+					cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 					v_prod%pr(dim)%cells(i,j,k)  = - (p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / (0.5_dkind*(cell_size_lower(dim) + cell_size_upper(dim) + 2.0_dkind * cell_size(dim))) / rho%cells(i,j,k) 
 					v_prod%pr(dim)%cells(i,j,k) = v_prod%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
 				end do
@@ -327,9 +327,6 @@ contains
 	!		if(bc%bc_markers(i,j,k) == 0) then
                 
                 cell_size			= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
-                cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                coef_middle			= cell_size_lower(dim) / (cell_size(dim) + cell_size_lower(dim))
-                coef_lower			= cell_size(dim) / (cell_size(dim) + cell_size_lower(dim))
 				cell_surface_area	= this%mesh%mesh_ptr%get_cell_surface_area_loc(i,j,k)
 
 				do dim = 1,dimensions		
@@ -344,7 +341,12 @@ contains
 						case ('spherical')
 							! x -> r
 							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2	
-					end select		
+                    end select		
+                
+                    cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+
+					coef_middle			= cell_size_lower(dim) / (cell_size(dim) + cell_size_lower(dim))
+					coef_lower			= cell_size(dim) / (cell_size(dim) + cell_size_lower(dim))
 	
                     av_velocity     = (coef_lower * v_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + coef_middle * v_int%pr(dim)%cells(i,j,k))
                     dif_velocity    = time_step *(v_int%pr(dim)%cells(i,j,k) - v_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / (0.5_dkind * (cell_size(dim) + cell_size_lower(dim)))
@@ -640,8 +642,6 @@ contains
 				if(bc%bc_markers(i,j,k) == 0) then
                 
 					cell_size			= this%mesh%mesh_ptr%get_cell_edges_length_loc(i,j,k)
-					cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-					cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 								
 					lame_coeffs		= 1.0_dkind		
 				 
@@ -662,6 +662,9 @@ contains
 					
 					div_pres_flux = 0.0_dkind
 					do dim = 1,dimensions
+						cell_size_lower		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+						cell_size_upper		= this%mesh%mesh_ptr%get_cell_edges_length_loc(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+                    
 						pres_flux1	= lame_coeffs(dim,1)* (p_int%cells(i,j,k) - p_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / (0.5_dkind*(cell_size(dim) + cell_size_lower(dim)))
      
 						pres_flux2	= lame_coeffs(dim,3)* (p_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_int%cells(i,j,k)) / (0.5_dkind*(cell_size(dim) + cell_size_upper(dim)))
