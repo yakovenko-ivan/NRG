@@ -450,9 +450,9 @@ contains
 		constructor%initial_time_step	= problem_solver_options%get_initial_time_step()
 		constructor%time_step			= constructor%initial_time_step
 
-		constructor%rho_0				= constructor%rho%s_ptr%cells(1,1,1)!constructor%rho%s_ptr%cells(1,1,1)
+		constructor%rho_0				= constructor%rho%s_ptr%cells(cons_inner_loop(1,2),cons_inner_loop(2,2) ,1)!constructor%rho%s_ptr%cells(1,1,1)
 		print *,constructor%rho_0
-	
+
 		species_number = manager%chemistry%chem_ptr%species_number
 		
 		do bound = 1, size(constructor%boundary%bc_ptr%boundary_types)
@@ -2682,6 +2682,8 @@ contains
 		
 		integer					:: plus, sign, bound_number
 		character(len=20)		:: boundary_type_name
+        
+        real(dkind)				:: farfield_velocity
 		
 		integer :: i,j,k,dim,dim1,dim2,spec
 	
@@ -2737,40 +2739,59 @@ contains
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)	
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1, dimensions
+                        v%pr(dim)%cells(i,j,k) = 0.5_dkind * ( v_f%pr(dim)%cells(dim,i,j,k) + v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+					end do	
+				end if
+			end do
+			end do
+            end do
+                    
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)	
+				if(bc%bc_markers(i,j,k) == 0) then
+					do dim = 1, dimensions
 						do plus = 1,2
 							sign			= (-1)**plus
 							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 							if( bound_number /= 0 ) then
 								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-								select case(boundary_type_name)
+                                select case(boundary_type_name)
 									case('wall')
-									!	v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) = 0.0_dkind 
-										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))
+										do dim1 = 1, dimensions
+											if(dim1 == dim) then
+											v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
+											else
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+											end if
+										end do
 									case('outlet')
-										!if (sign > 0 ) then
-										!	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = v_f%pr(dim)%cells(dim,i,j,k)
-										!else
-										!	v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) 
-										!end if
-										
-										!v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))
-										
-										!do dim2 = 1, dimensions
-										!	if (dim2 /= dim) then
-										!		v_f%pr(dim2)%cells(dim2,i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 2.0_dkind*v_f%pr(dim2)%cells(dim2,i,j,k) - v_f%pr(dim2)%cells(dim2,i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3))
-										!	end if
-										!end do
+										do dim1 = 1, dimensions
+											if(dim1 == dim) then
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+											else
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
+											end if
+										end do
+									case('inlet')
+										farfield_velocity		=  farfield_velocity_array(j)
+
+										do dim1 = 1, dimensions
+											if(dim1 == dim) then
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  farfield_velocity
+											else
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  0.0_dkind 
+											end if
+										end do
 								end select
 							end if
 						end do
-						v%pr(dim)%cells(i,j,k) = 0.5_dkind * ( v_f%pr(dim)%cells(dim,i,j,k) + v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
 					end do	
 				end if
 				
 			end do
 			end do
-			end do
-			
+			end do                   
 		!	print *, '4', v_f%pr(2)%cells(2,50,20,1), v_f%pr(1)%cells(1,50,20,1)
 			
 			continue

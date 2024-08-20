@@ -513,9 +513,11 @@ contains
 							if( bound_number /= 0 ) then
 								do dim1 = 1,dimensions
 								do dim2 = 1,dimensions
-								!	if (dim1 == dim2) then
-										sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 2*sigma%pr(dim1,dim2)%cells(i,j,k) - sigma%pr(dim1,dim2)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3))
-								!	end if
+									if (dim1 == dim2) then
+										sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= sigma%pr(dim1,dim2)%cells(i,j,k)
+                                    else 
+                                        sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sigma%pr(dim1,dim2)%cells(i,j,k)
+									end if
 								end do
 								end do
 							end if
