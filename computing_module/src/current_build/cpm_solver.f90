@@ -44,7 +44,7 @@ module cpm_solver_class
     integer	:: flame_loc_unit    
 
 	type cpm_solver
-		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, multiphase_flag, CFL_condition_flag
+		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, perturbed_velocity, hydrodynamics_flag, multiphase_flag, CFL_condition_flag
 		real(dkind)		:: courant_fraction
 		real(dkind)		:: time, time_step, initial_time_step
 		integer			:: additional_particles_phases_number, additional_droplets_phases_number
@@ -71,7 +71,7 @@ module cpm_solver_class
 
 		type(field_scalar_cons_pointer)	:: rho	, T				, p				, v_s			,mol_mix_conc
 		type(field_scalar_cons_pointer)	:: E_f	, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff, E_f_int
-		type(field_vector_cons_pointer)	:: v	, v_prod_gd		, v_prod_visc	, v_prod_source	, v_int
+		type(field_vector_cons_pointer)	:: v	, v_prod_gd		, v_prod_sources, v_prod_visc	, v_prod_source	, v_int
 		type(field_vector_cons_pointer)	:: Y	, Y_prod_diff	, Y_prod_chem	, Y_int
 		type(field_vector_flow_pointer)	:: v_f
 		
@@ -126,14 +126,14 @@ contains
 		
         integer	,dimension(3,2)	:: cons_allocation_bounds
 
-		constructor%diffusion_flag		= problem_solver_options%get_molecular_diffusion_flag()
-		constructor%viscosity_flag		= problem_solver_options%get_viscosity_flag()
-		constructor%heat_trans_flag		= problem_solver_options%get_heat_transfer_flag()
-		constructor%reactive_flag		= problem_solver_options%get_chemical_reaction_flag()
-		constructor%hydrodynamics_flag	= problem_solver_options%get_hydrodynamics_flag()
-		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
-		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
-		constructor%sources_flag		= .false.
+		constructor%diffusion_flag			= problem_solver_options%get_molecular_diffusion_flag()
+		constructor%viscosity_flag			= problem_solver_options%get_viscosity_flag()
+		constructor%heat_trans_flag			= problem_solver_options%get_heat_transfer_flag()
+		constructor%reactive_flag			= problem_solver_options%get_chemical_reaction_flag()
+		constructor%hydrodynamics_flag		= problem_solver_options%get_hydrodynamics_flag()
+		constructor%courant_fraction		= problem_solver_options%get_CFL_condition_coefficient()
+		constructor%CFL_condition_flag		= problem_solver_options%get_CFL_condition_flag()
+		constructor%perturbed_velocity		= .false.
 		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
 		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()
 		
@@ -175,6 +175,8 @@ contains
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_gas_dynamics')
 		constructor%v_prod_gd%v_ptr				=> vect_ptr%v_ptr
+        call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_sources')
+		constructor%v_prod_sources%v_ptr		=> vect_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_gas_dynamics')
 		constructor%E_f_prod_gd%s_ptr			=> scal_ptr%s_ptr
 
@@ -337,12 +339,14 @@ contains
 			end do	            
 		end if
         
-		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
-		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)
-		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
-		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
+		if (this%viscosity_flag)		call this%visc_solver%solve_viscosity(this%time_step)
+		if (this%heat_trans_flag)		call this%heat_trans_solver%solve_heat_transfer(this%time_step)
+		if (this%diffusion_flag)		call this%diff_solver%solve_diffusion(this%time_step)
+		if (this%reactive_flag)			call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
 		!call this%sources%calculate_sources(this%time,this%time_step)
-		
+		if (this%perturbed_velocity)	call this%gas_dynamics_solver%perturb_velocity_field(this%time_step)
+        
+        
 		if(this%additional_droplets_phases_number /= 0) then
 			do droplets_phase_counter = 1, this%additional_droplets_phases_number
 !				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
@@ -403,19 +407,19 @@ contains
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
-		associate (	rho				=> this%rho%s_ptr			, &
-					v				=> this%v%v_ptr				, &
-					v_int			=> this%v_int%v_ptr			, &
-					v_prod_gd		=> this%v_prod_gd%v_ptr		, &
-					v_prod_visc		=> this%v_prod_visc%v_ptr	, &
-					v_prod_source	=> this%v_prod_source%v_ptr , &
+		associate (	rho					=> this%rho%s_ptr			, &
+					v					=> this%v%v_ptr				, &
+					v_int				=> this%v_int%v_ptr			, &
+					v_prod_gd			=> this%v_prod_gd%v_ptr		, &
+					v_prod_visc			=> this%v_prod_visc%v_ptr	, &
+					v_prod_sources		=> this%v_prod_sources%v_ptr , &
 					v_prod_particles	=> this%v_prod_particles	, &
-                    v_prod_droplets	=> this%v_prod_droplets	, &
-					bc				=> this%boundary%bc_ptr)
+                    v_prod_droplets		=> this%v_prod_droplets		, &
+					bc					=> this%boundary%bc_ptr)
 
 		!$omp parallel default(none)  private(i,j,k,dim,particles_phase_counter) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(rho,v,v_int,v_prod_gd,v_prod_visc,v_prod_source,v_prod_particles,bc,cons_inner_loop,dimensions,time_step)
+		!$omp& shared(rho,v,v_int,v_prod_gd,v_prod_visc,v_prod_sources,v_prod_particles,bc,cons_inner_loop,dimensions,time_step)
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -429,6 +433,8 @@ contains
 						
 						if (this%viscosity_flag)		v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) / rho%cells(i,j,k) * time_step
 						
+                        if (this%perturbed_velocity)	v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i,j,k) / rho%cells(i,j,k) * time_step
+                        
 						if (this%additional_droplets_phases_number /= 0) then
 							do droplets_phase_counter = 1, this%additional_droplets_phases_number
 								v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) * time_step																		!# Continuum droplets solver
@@ -572,9 +578,9 @@ contains
 		!$omp end do nowait
 		!$omp end parallel
 			
-		if((this%time <= 1.0E-06_dkind).and.(this%sources_flag)) then		
-			print *, energy_output
-		end if				
+		!if((this%time <= 1.0E-06_dkind).and.(this%sources_flag)) then		
+		!	print *, energy_output
+		!end if				
 			
 		end associate
 

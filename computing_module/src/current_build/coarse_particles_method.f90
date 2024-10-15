@@ -26,12 +26,13 @@ module coarse_particles_method
 	type(field_scalar_cons)	,target	:: E_f_prod_gd
 	type(field_scalar_flow)	,target	:: m_flux
 	type(field_vector_cons)	,target	:: v_prod_gd	
+    type(field_vector_cons)	,target	:: v_prod_sources
 	type(field_vector_flow)	,target	:: v_f
 
 	type	:: coarse_particles
 		type(field_scalar_cons_pointer)		:: p, E_f_prod, rho, E_f, e_i, E_f_int, p_int, foam_marker
 		type(field_scalar_flow_pointer)		:: m_flux
-		type(field_vector_cons_pointer)		:: v_prod, v, v_int, Y_int, Y
+		type(field_vector_cons_pointer)		:: v_prod_gd, v_prod_sources, v, v_int, Y_int, Y
 		type(field_scalar_cons_pointer)		:: p_dyn, p_stat, div_v		
 		type(field_vector_flow_pointer)		:: v_f
 		
@@ -49,6 +50,7 @@ module coarse_particles_method
 		procedure				::	lagrange_step
 		procedure				:: calculate_p_dyn		
 		procedure				::	final_step
+        procedure				::	perturb_velocity_field
 	end type
 
 	interface	coarse_particles_c
@@ -114,9 +116,11 @@ contains
 		constructor%Y_int%v_ptr			=> vect_ptr%v_ptr		
 		
 		call manager%create_vector_field(v_prod_gd	,'velocity_production_gas_dynamics'		,'v_prod_gd'	,'spatial')
-		constructor%v_prod%v_ptr		=> v_prod_gd
+		constructor%v_prod_gd%v_ptr		=> v_prod_gd
 		
-		
+		call manager%create_vector_field(v_prod_sources	,'velocity_production_sources'		,'v_prod_sources'	,'spatial')
+		constructor%v_prod_sources%v_ptr	=> v_prod_sources
+				
 
 		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr
 		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
@@ -154,7 +158,7 @@ contains
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		associate(  p			=> this%p%s_ptr			, &
-					v_prod		=> this%v_prod%v_ptr	, &
+					v_prod_gd	=> this%v_prod_gd%v_ptr	, &
 					v			=> this%v%v_ptr			, &
 					rho			=> this%rho%s_ptr		, &
 					mesh		=> this%mesh%mesh_ptr	, &
@@ -164,7 +168,7 @@ contains
 
 	!$omp parallel default(none)  private(i,j,k,dim) , &
 	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,p,v_prod,rho,dimensions,cell_size,time_step,cons_inner_loop)
+	!$omp& shared(bc,p,v_prod_gd,rho,dimensions,cell_size,time_step,cons_inner_loop)
 	!$omp do collapse(3) schedule(guided)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -172,8 +176,8 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				do dim = 1,dimensions
-					v_prod%pr(dim)%cells(i,j,k)  = - 0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
-					v_prod%pr(dim)%cells(i,j,k) = v_prod%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
+					v_prod_gd%pr(dim)%cells(i,j,k)  = - 0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
+					v_prod_gd%pr(dim)%cells(i,j,k) = v_prod_gd%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
 				end do
 			end if
 		end do
@@ -696,6 +700,77 @@ contains
 		
 		end associate
 
-	end subroutine	
+    end subroutine	
+    
+    subroutine perturb_velocity_field(this,time_step)
+		class(coarse_particles)	,intent(inout)	:: this
+		real(dkind)				,intent(in)		:: time_step
+
+		real(dkind)	,dimension(3)	:: cell_size		
+		real(dkind) ,save			:: time = 0.0_dkind
+        
+		integer	:: dimensions, iterations
+		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
+		integer	,dimension(3,2)	:: loop
+		
+		character(len=20)		:: boundary_type_name
+		
+		integer	:: sign, bound_number
+		integer :: i,j,k,dim,dim1,dim2,spec,plus
+
+		real(dkind)	:: kappa_turb, gamma_turb, kx_turb, ky_turb, kappa_turb_max, time_scale
+		
+		dimensions		= this%domain%get_domain_dimensions()
+		
+		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
+		cons_utter_loop = this%domain%get_local_utter_cells_bounds()
+		
+		flow_inner_loop	= this%domain%get_local_inner_faces_bounds()
+		
+		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		
+		associate (	v_prod_source	=> this%v_prod_sources%v_ptr	, &
+					bc				=> this%boundary%bc_ptr)
+
+            time_scale		= 1.0e-03_dkind
+            kappa_turb_max	= 100000.0_dkind
+            
+            kappa_turb	= min(kappa_turb_max, kappa_turb_max/time_scale * time)
+
+			call RANDOM_SEED()
+			call RANDOM_NUMBER(gamma_turb)
+			
+			gamma_turb = 2.0_dkind * pi * gamma_turb   !2.0_dkind*gamma_turb - 1.0_dkind   !cos(alpha) sin(alpha)=sqrt(1-gamma_turb**2.0)
+			
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+                do dim = 1, dimensions
+					if((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then	
+
+						!call RANDOM_NUMBER(gamma_turb)
+						!gamma_turb = 2.0_dkind*gamma_turb - 1.0_dkind
+						!v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) + kappa_turb*gamma_turb*sqrt(this%time_step)
+							
+						kx_turb = 2.0_dkind*pi*sin(gamma_turb)/0.005_dkind   !0.002   !sqrt(1.0_dkind-gamma_turb**2.0)/0.002  
+						ky_turb = 2.0_dkind*pi*cos(gamma_turb)/0.005_dkind   !0.002   !gamma_turb/0.002
+							
+						if(dim == 1)then
+							v_prod_sources%pr(dim)%cells(i,j,k) = kappa_turb*cos(gamma_turb)*sqrt(time_step)*cos(kx_turb*(i-0.5)*cell_size(1)+ky_turb*(j-0.5)*cell_size(1))
+						endif
+						if(dim == 2)then
+							v_prod_sources%pr(dim)%cells(i,j,k) = -kappa_turb*sin(gamma_turb)*sqrt(time_step)*cos(kx_turb*(i-0.5)*cell_size(1)+ky_turb*(j-0.5)*cell_size(1))
+						endif                        
+					end if
+				end do
+			end do
+			end do
+            end do
+
+            time = time + time_step
+            
+			continue
+		end associate
+	end subroutine
 	
 end module
