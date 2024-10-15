@@ -60,7 +60,7 @@ program computing_module
 
 	integer		:: log_unit, mpi_io_unit
 
-	integer		:: processor_rank
+	integer		:: processor_rank, num, nth
 
 	integer		:: iter
 	real(dkind)	:: calculation_time, time_step
@@ -74,6 +74,16 @@ program computing_module
 
 #ifdef OMP
 	call omp_set_num_threads(6)
+	
+	!$omp parallel
+	nth		=	omp_get_num_threads()
+	num		=	omp_get_thread_num()
+	if (num == 0) then
+		print *, "Total number of threads: ", nth
+	else
+		print *, "Thread number: ", num
+	end if
+	!$omp end parallel
 #endif
 
 	open(newunit = log_unit, file = problem_setup_log_file, status = 'old', form = 'formatted', position = 'append')
@@ -182,9 +192,9 @@ program computing_module
 !			call problem_cpm_solver%set_CFL_coefficient(0.75_dkind)
 !		end if
 	
-!		if (calculation_time > 160.0e-04_dkind) then
-!        if (calculation_time > 1.60e-04_dkind) then
-!			call problem_data_save%set_save_time(1.0_dkind)
+!		if (calculation_time > 8500.0e-06_dkind) then
+!			call problem_data_save%set_save_time(200.0_dkind)
+!            stop
 !        end if    
             
         call problem_data_io%output_all_data(calculation_time			,stop_flag)	
