@@ -347,6 +347,7 @@ contains
 
 		!$omp end parallel
 					
+        continue
 		end associate
 					
 	end subroutine
@@ -453,13 +454,7 @@ contains
 							sign			= (-1)**plus
 							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 							if( bound_number /= 0 ) then
-								do dim1 = 1,dimensions
-								do dim2 = 1,dimensions
-									if (dim1 == dim2) then
-										nu%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= nu%cells(i,j,k)
-									end if
-								end do
-								end do
+								nu%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= nu%cells(i,j,k)
 							end if
 						end do
 					end do
