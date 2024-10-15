@@ -36,7 +36,7 @@ module fds_low_mach_solver_class
 	type(field_scalar_cons)	,target	:: p_dyn	,p_stat		,p_stat_old	,dp_stat_dt	,p_int, T_int, rho_int, rho_old	
 	type(field_scalar_cons)	,target	:: div_v	,div_v_int	,ddiv_v_dt	,H	, H_old, R
 	type(field_scalar_cons)	,target	:: E_f_int
-	type(field_vector_cons)	,target	:: v_int, Y_int, Y_old
+	type(field_vector_cons)	,target	:: v_int, Y_int, Y_old, v_prod_sources
 	type(field_scalar_flow)	,target	:: F_a, F_b
 	type(field_vector_flow)	,target	:: v_f, v_f_old	
 
@@ -56,7 +56,7 @@ module fds_low_mach_solver_class
 	end type
 
 	type fds_solver
-		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag
+		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag, perturbed_velocity
 		real(dkind)		:: courant_fraction
 		real(dkind)		:: time, time_step, initial_time_step
 		integer			:: additional_particles_phases_number, additional_droplets_phases_number
@@ -67,8 +67,8 @@ module fds_low_mach_solver_class
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(table_approximated_real_gas)	:: state_eq
 
-!		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver			!# Lagrangian droplets solver
-		type(droplets_solver)			, dimension(:)	    ,allocatable	:: droplets_solver			!# Continuum droplets solver
+		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver			!# Lagrangian droplets solver
+!		type(droplets_solver)			, dimension(:)	    ,allocatable	:: droplets_solver			!# Continuum droplets solver
 		
 		type(lagrangian_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
 !		type(particles_solver)			, dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
@@ -85,15 +85,15 @@ module fds_low_mach_solver_class
 		type(field_scalar_cons_pointer)	:: nu		, kappa
 		type(field_scalar_flow_pointer)	:: F_a		, F_b
 		
-		type(field_vector_cons_pointer)	:: v		, v_prod_gd		, v_prod_visc	, v_prod_source	, v_int	
-		type(field_vector_cons_pointer)	:: Y		, Y_prod_diff	, Y_prod_chem	, Y_int			, Y_old
+		type(field_vector_cons_pointer)	:: v		, v_prod_gd		, v_prod_visc	, v_prod_sources	, v_int	
+		type(field_vector_cons_pointer)	:: Y		, Y_prod_diff	, Y_prod_chem	, Y_int				, Y_old
 		type(field_vector_cons_pointer)	:: D
 		type(field_vector_flow_pointer)	:: v_f		, v_f_old
 		
 		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	::  rho_prod_droplets, E_f_prod_droplets, E_f_prod_particles
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_droplets		
-!		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Lagrangian droplets solver
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Continuum droplets solver
+		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Lagrangian droplets solver
+!		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Continuum droplets solver
 		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_particles			!# Lagrangian particles solver
 !		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_particles			!# Continuum particles solver		
 
@@ -187,7 +187,7 @@ contains
 		constructor%hydrodynamics_flag	= problem_solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
-		constructor%sources_flag		= .false.
+		constructor%perturbed_velocity	= .true.
 		
 		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()		
 		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
@@ -306,8 +306,13 @@ contains
 			constructor%Y_prod_diff%v_ptr			=> vect_ptr%v_ptr
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'diffusivity')
 			constructor%D%v_ptr						=> vect_ptr%v_ptr
-		end if
+        end if
 
+        if(constructor%perturbed_velocity) then
+			call manager%create_vector_field(v_prod_sources	,'velocity_production_sources'		,'v_prod_sources'	,'spatial')
+			constructor%v_prod_sources%v_ptr	=> v_prod_sources
+        end if
+        
 		if(constructor%additional_droplets_phases_number /= 0) then
 			allocate(constructor%droplets_solver(constructor%additional_droplets_phases_number))
 			call constructor%droplets_solver(1)%pre_constructor(constructor%additional_droplets_phases_number)
@@ -317,8 +322,8 @@ contains
 			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
 			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
 				droplets_params = problem_solver_options%get_droplets_params(droplets_phase_counter)
-!				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
-				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
+				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
+!				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%E_f_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr
@@ -326,10 +331,10 @@ contains
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%rho_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
 				write(var_name,'(A,I2.2)') 'velocity_production_droplets', droplets_phase_counter						
-!				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian droplets solver
-!				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian droplets solver
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum droplets solver								
-				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum droplets solver
+				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian droplets solver
+				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian droplets solver
+!				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum droplets solver								
+!				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'concentration_production_droplets', droplets_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%Y_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
@@ -692,6 +697,8 @@ contains
 		!!!!!######
 		!constructor%sub_bc(5)%cells(2,0,1) = 3.0
 
+        call RANDOM_SEED()
+        
 		continue
 		
 	end function
@@ -704,36 +711,36 @@ contains
 		integer	:: droplets_phase_counter, particles_phase_counter
 		integer	:: specie
 
-		logical	:: perturbed_velocity_field, stabilizing_inlet, ignite, stabilized
-		
-		perturbed_velocity_field	= .false.
-		stabilizing_inlet			= .true.
+		logical	:: stabilizing_inlet, ignite, stabilized
+
+        
+		stabilizing_inlet			= .false.
 		ignite						= .false.
 		
 		this%time = this%time + this%time_step		
 
 		if (ignite) then
 			call this%igniter(this%time)
-		end if
+        end if
 		
 !		call this%farfield_values_modifier(this%time)
 		
 !		if (iteration > 10) perturbed_velocity_field = .false.
-		if (perturbed_velocity_field)	call this%perturb_velocity_field(this%time_step)
 
-		if (this%reactive_flag)		call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
-		if (this%diffusion_flag)	call this%diff_solver%solve_diffusion(this%time_step)
-		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
-		if (this%heat_trans_flag)	call this%heat_trans_solver%solve_heat_transfer(this%time_step)				
-		
+		if (this%reactive_flag)				call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
+		if (this%diffusion_flag)			call this%diff_solver%solve_diffusion(this%time_step)
+		if (this%viscosity_flag)			call this%visc_solver%solve_viscosity(this%time_step)
+		if (this%heat_trans_flag)			call this%heat_trans_solver%solve_heat_transfer(this%time_step)				
+		if (this%perturbed_velocity)		call this%perturb_velocity_field(this%time_step)
+        
 		if(this%additional_droplets_phases_number /= 0) then
 			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-!				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
-				call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main(this%time)		!# Continuum droplets solver
-				call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
-				call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
-				call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
-				call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)			!# Continuum droplets solver		
+				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
+				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main(this%time)		!# Continuum droplets solver
+				!call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
+				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
+				!call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
+				!call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)			!# Continuum droplets solver		
 			end do		
 		end if  	
 		
@@ -754,9 +761,10 @@ contains
 		call this%calculate_divergence_v		(this%time_step,predictor=.true.)
 		call this%calculate_pressure_poisson	(this%time_step,predictor=.true.)
 		call this%calculate_velocity			(this%time_step,predictor=.true.)
-		
-		if (this%viscosity_flag)	call this%visc_solver%solve_viscosity(this%time_step)
-
+		        
+		if (this%viscosity_flag)		call this%visc_solver%solve_viscosity(this%time_step)
+!		if (this%perturbed_velocity)	call this%perturb_velocity_field(this%time_step)
+        
 		call this%calculate_interm_Y_corrector(this%time_step)
 		call this%state_eq%apply_state_equation_low_mach_fds(this%time_step,predictor=.false.)
 		call this%apply_boundary_conditions(this%time_step,predictor=.false.)
@@ -765,8 +773,10 @@ contains
 		call this%calculate_pressure_poisson	(this%time_step,predictor=.false.)
 		call this%calculate_velocity			(this%time_step,predictor=.false.)		
 
-		call this%calculate_time_step()
-		
+        if (this%CFL_condition_flag) then
+			call this%calculate_time_step()
+		end if
+        
 !		call this%chem_kin_solver%write_chemical_kinetics_table('15_pcnt_H2-Air_table(T).dat')
 
 		if (stabilizing_inlet) then
@@ -1320,6 +1330,7 @@ contains
 					v_prod_visc		=> this%v_prod_visc%v_ptr	, &
 					v_prod_droplets	=> this%v_prod_droplets		, &
 					v_prod_particles=> this%v_prod_particles	, &
+					v_prod_sources	=> this%v_prod_sources%v_ptr , &
 					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr		, &
 					
@@ -1340,7 +1351,7 @@ contains
 			
 			!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity,sign,bound_number,bound_number1,bound_number2,bound_number3,plus,boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3,bc_coeff) , &
 			!$omp& firstprivate(this) , &
-			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,grad_F_a, grad_F_a_summ, rho_old,rho_int,v_prod_visc,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,mesh,time_step,r_summ)					
+			!$omp& shared(ddiv_v_dt,sum_ddiv_v_dt,div_v_int,vorticity,v_f,v_f_old,F_a,grad_F_a, grad_F_a_summ, rho_old,rho_int,v_prod_visc,v_prod_sources,bc,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,mesh,time_step,r_summ)					
 			!$omp do collapse(3) schedule(guided)	reduction(+:sum_ddiv_v_dt,r_summ) 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -1565,14 +1576,15 @@ contains
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* g(dim))
 							end if
 
-							if (this%viscosity_flag)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(0.5_dkind*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
-						else
+							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(0.5_dkind*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+                        else
 							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* g(dim))
 							end if
 								
-							if (this%viscosity_flag)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(0.5_dkind*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
-						
+							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dkind/(0.5_dkind*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(0.5_dkind*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 						end if
 					end if
 				end do
@@ -1599,9 +1611,9 @@ contains
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then 
 						if (this%additional_droplets_phases_number /= 0) then
 							do droplets_phase_counter = 1, this%additional_droplets_phases_number
-!									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)	![m/s^2]						!# Lagrangian droplets solver
+									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)	![m/s^2]						!# Lagrangian droplets solver
 								if (bc%bc_markers(i,j,k) == 0) then
-									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum droplets solver
+!									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum droplets solver
 								end if
 							end do		
 						end if
@@ -2684,7 +2696,7 @@ contains
 		character(len=20)		:: boundary_type_name
         
         real(dkind)				:: farfield_velocity
-		
+       
 		integer :: i,j,k,dim,dim1,dim2,spec
 	
 		dimensions		= this%domain%get_domain_dimensions()
@@ -2717,7 +2729,7 @@ contains
 				do k = loop(3,1), loop(3,2)		
 				do j = loop(2,1), loop(2,2)		
 				do i = loop(1,1), loop(1,2)		
-				
+				                    
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
 
 						if (predictor)	then
@@ -2725,10 +2737,9 @@ contains
 							v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) - time_step * (F_a%cells(dim,i,j,k) + F_b%cells(dim,i,j,k)  +  (H%cells(i,j,k) - H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/cell_size(1))
 						else
 							v_f%pr(dim)%cells(dim,i,j,k) = 0.5_dkind * (v_f%pr(dim)%cells(dim,i,j,k) + v_f_old%pr(dim)%cells(dim,i,j,k)) - (0.5_dkind * time_step) * (F_a%cells(dim,i,j,k) + F_b%cells(dim,i,j,k)  +  (H%cells(i,j,k) - H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/cell_size(1) )
-						end if	
-
-					end if
-
+                        end if	
+                        
+                    end if
 				end do
 				end do
 				end do
@@ -2760,7 +2771,7 @@ contains
 									case('wall')
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-											v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
+												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
 											else
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if
@@ -2803,7 +2814,8 @@ contains
 		real(dkind)			,intent(in)		:: time_step
 
 		real(dkind)	,dimension(3)	:: cell_size		
-		
+		real(dkind) ,save			:: time = 0.0_dkind
+        
 		integer	:: dimensions, iterations
 		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
 		integer	,dimension(3,2)	:: loop
@@ -2813,7 +2825,7 @@ contains
 		integer	:: sign, bound_number
 		integer :: i,j,k,dim,dim1,dim2,spec,plus
 
-		real(dkind)	:: kappa_turb, gamma_turb, kx_turb, ky_turb	
+		real(dkind)	:: kappa_turb, gamma_turb, kx_turb, ky_turb, kappa_turb_max, time_scale
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		
@@ -2825,51 +2837,48 @@ contains
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 		
 		associate (	v_f				=> this%v_f%v_ptr			, &
+					v_prod_sources	=> this%v_prod_sources%v_ptr	, &
 					bc				=> this%boundary%bc_ptr)
 
-			kappa_turb	= 350.0e00_dkind
-
-			call RANDOM_SEED()
+            time_scale		= 1.0e-03_dkind
+            kappa_turb_max	= 7.0e05_dkind
+            
+            kappa_turb	= min(kappa_turb_max, kappa_turb_max/time_scale * time)
+			if (time > 50.0e-03) kappa_turb = 0.0_dkind
+            
 			call RANDOM_NUMBER(gamma_turb)
 			
-		!	gamma_turb = 0.25
 			gamma_turb = 2.0_dkind * pi * gamma_turb   !2.0_dkind*gamma_turb - 1.0_dkind   !cos(alpha) sin(alpha)=sqrt(1-gamma_turb**2.0)
 			
-			
-			do dim = 1, dimensions
-				loop(3,1) = cons_inner_loop(3,1)
-				loop(3,2) = cons_utter_loop(3,2)*I_m(dim,3) + cons_inner_loop(3,2)*(1 - I_m(dim,3))
-
-				loop(2,1) = cons_inner_loop(2,1)+5
-				loop(2,2) = (cons_utter_loop(2,2)-5)*I_m(dim,2) + (cons_inner_loop(2,2)-5)*(1 - I_m(dim,2))	
-
-				loop(1,1) = cons_inner_loop(1,1)+5
-				loop(1,2) = (cons_utter_loop(1,2)-5)*I_m(dim,1) + (cons_inner_loop(1,2)-5)*(1 - I_m(dim,1))		
-				
-				do k = loop(3,1), loop(3,2)		
-				do j = loop(2,1), loop(2,2)		
-				do i = loop(1,1), loop(1,2)		
-				!	if((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then	
+			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
+                do dim = 1, dimensions
+					if((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then	
 
 						!call RANDOM_NUMBER(gamma_turb)
 						!gamma_turb = 2.0_dkind*gamma_turb - 1.0_dkind
 						!v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) + kappa_turb*gamma_turb*sqrt(this%time_step)
 							
-						kx_turb = 2.0_dkind*pi*sin(gamma_turb)/0.005_dkind    !0.002   !sqrt(1.0_dkind-gamma_turb**2.0)/0.002  
-						ky_turb = 2.0_dkind*pi*cos(gamma_turb)/0.005_dkind   !0.002   !gamma_turb/0.002
+                        !gamma_turb  = atan(i*cell_size(1)/j*cell_size(1))
+                        
+						kx_turb = 2.0_dkind*pi*sin(gamma_turb)/0.001_dkind   !0.002   !sqrt(1.0_dkind-gamma_turb**2.0)/0.002  
+						ky_turb = 2.0_dkind*pi*cos(gamma_turb)/0.001_dkind   !0.002   !gamma_turb/0.002
 							
 						if(dim == 1)then
-							v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) + kappa_turb*cos(gamma_turb)*sqrt(this%time_step)*cos(kx_turb*(i-1.0)*cell_size(1)+ky_turb*(j-0.5)*cell_size(1))
+							v_prod_sources%pr(dim)%cells(i,j,k) = kappa_turb*cos(gamma_turb)*sqrt(time_step)*cos(kx_turb*(i-0.5)*cell_size(1)+ky_turb*(j-0.5)*cell_size(1))
 						endif
 						if(dim == 2)then
-							v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) - kappa_turb*sin(gamma_turb)*sqrt(this%time_step)*cos(kx_turb*(i-0.5)*cell_size(1)+ky_turb*(j-1.0)*cell_size(1))
+							v_prod_sources%pr(dim)%cells(i,j,k) = -kappa_turb*sin(gamma_turb)*sqrt(time_step)*cos(kx_turb*(i-0.5)*cell_size(1)+ky_turb*(j-0.5)*cell_size(1))
 						endif                        
-				!	end if
-				end do
-				end do
+					end if
 				end do
 			end do
+			end do
+            end do
 
+            time = time + time_step
+            
 			continue
 		end associate
 	end subroutine
@@ -3106,9 +3115,9 @@ contains
 					E_f_prod_chem 		=> this%E_f_prod_chem%s_ptr	, &
 					bc				=> this%boundary%bc_ptr)
 
-		time_delay			= 1e-05_dkind			
-		time_diff			= 2e-04_dkind
-		time_stabilization	= 5e-06_dkind		
+		time_delay			= 1e-05_dkind!1e-05_dkind!1e-05_dkind!1e-05_dkind			
+		time_diff			= 1e-05_dkind!2e-04_dkind!1e-05_dkind!2e-04_dkind
+		time_stabilization	= 1e-05_dkind!5e-06_dkind!1e-05_dkind!5e-06_dkind		
        
 		if ( time > (correction+1)*(time_diff) + time_delay) then			
 					
@@ -3125,12 +3134,14 @@ contains
 			current_time = time
 		
 			!# 1D front tracer
-			flame_front_index	= cons_inner_loop(1,2)
+			flame_front_index	= 0 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-				max_val(j)		= 0.0_dkind
-                max_coord(j)	= 0.0_dkind
-				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
+                
+				max_val(j)		= 1.0e07_dkind
+                max_coord(j)	= cons_inner_loop(1,2) * cell_size(1)
+                
+				do i = cons_inner_loop(1,1)+10,cons_inner_loop(1,2)-10
 					if(bc%bc_markers(i,j,k) == 0) then	
 						if ((E_f_prod_chem%cells(i,j,k)) > max_val(j)) then
 							max_val(j)				= E_f_prod_chem%cells(i,j,k)
@@ -3139,15 +3150,17 @@ contains
 					end if
                 end do
                 
-                left_val		= E_f_prod_chem%cells(flame_front_index(j)-1,j,1)
-				right_val		= E_f_prod_chem%cells(flame_front_index(j)+1,j,1)	            
+                if ( flame_front_index(j) /= 0) then
+					left_val		= E_f_prod_chem%cells(flame_front_index(j)-1,j,1)
+					right_val		= E_f_prod_chem%cells(flame_front_index(j)+1,j,1)	            
               
-                max_coord(j)	= (flame_front_index(j) - 0.5_dkind)*cell_size(1)
+					max_coord(j)	= (flame_front_index(j) - 0.5_dkind)*cell_size(1)
                 
-                a = (right_val + left_val - 2.0_dkind * max_val(j))/2.0_dkind/cell_size(1)**2
-				b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*max_coord(j) 
+					a = (right_val + left_val - 2.0_dkind * max_val(j))/2.0_dkind/cell_size(1)**2
+					b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*max_coord(j) 
                 
-                max_coord(j) = -b/2.0_dkind/a
+					max_coord(j) = -b/2.0_dkind/a
+                end if
 			end do
             end do
 			
@@ -3177,29 +3190,33 @@ contains
 			current_flame_location_E(2) = coords_lp(2)
             
 			!# 1D front tracer
-			flame_front_index	= cons_inner_loop(1,2)
+			flame_front_index	= 0
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+                
 				max_val(j) 		= 0.0_dkind
-                max_coord(j)	= 0.0_dkind
-				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
+                max_coord(j)	= cons_inner_loop(1,2) * cell_size(1)
+                
+				do i = cons_inner_loop(1,1)+10,cons_inner_loop(1,2)-10
 					if(bc%bc_markers(i,j,k) == 0) then	
 						if ((T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val(j)) then
 							max_val(j) 		= T%cells(i+1,j,k)-T%cells(i-1,j,k)
 							flame_front_index(j)	= i
 						end if
 					end if
-                end do
+                end do                
                 
-				left_val	= T%cells(i_lp,j_lp,1) - T%cells(i_lp-2,j_lp,1)
-				right_val	= T%cells(i_lp+2,j_lp,1) - T%cells(i_lp,j_lp,1)                 
+                if ( flame_front_index(j) /= 0) then                
+					left_val	= T%cells(i_lp,j_lp,1) - T%cells(i_lp-2,j_lp,1)
+					right_val	= T%cells(i_lp+2,j_lp,1) - T%cells(i_lp,j_lp,1)                 
                 
-                max_coord(j)	= (flame_front_index(j) - 0.5_dkind)*cell_size(1)
+					max_coord(j)	= (flame_front_index(j) - 0.5_dkind)*cell_size(1)
                 
-                a = (right_val + left_val - 2.0_dkind * max_val(j))/2.0_dkind/cell_size(1)**2
-				b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*max_coord(j) 
+					a = (right_val + left_val - 2.0_dkind * max_val(j))/2.0_dkind/cell_size(1)**2
+					b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*max_coord(j) 
                 
-                max_coord(j) = -b/2.0_dkind/a
+					max_coord(j) = -b/2.0_dkind/a
+                end if
 			end do
             end do
 
@@ -3227,11 +3244,13 @@ contains
 			current_flame_location_T(2) = coords_lp(2)
 
 			!# 1D front tracer
-			flame_front_index	= cons_inner_loop(1,2)
+			flame_front_index	= 0
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
+                
 				max_val(j) 		= 0.0_dkind
-                max_coord(j)	= 0.0_dkind
+                max_coord(j)	= cons_inner_loop(1,2) * cell_size(1)
+                
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
 						! max H
@@ -3242,15 +3261,17 @@ contains
 					end if
                 end do
                 
-				left_val	= Y%pr(H_index)%cells(i_lp-1,j_lp,1)
-				right_val	= Y%pr(H_index)%cells(i_lp+1,j_lp,1)                
+                if ( flame_front_index(j) /= 0) then  
+					left_val	= Y%pr(H_index)%cells(i_lp-1,j_lp,1)
+					right_val	= Y%pr(H_index)%cells(i_lp+1,j_lp,1)                
                 
-                max_coord(j)	= (flame_front_index(j) - 0.5_dkind)*cell_size(1)
+					max_coord(j)	= (flame_front_index(j) - 0.5_dkind)*cell_size(1)
                 
-                a = (right_val + left_val - 2.0_dkind * max_val(j))/2.0_dkind/cell_size(1)**2
-				b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*max_coord(j) 
+					a = (right_val + left_val - 2.0_dkind * max_val(j))/2.0_dkind/cell_size(1)**2
+					b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*max_coord(j) 
                 
-                max_coord(j) = -b/2.0_dkind/a
+					max_coord(j) = -b/2.0_dkind/a
+                end if
 			end do
 			end do
 
@@ -3298,16 +3319,19 @@ contains
                     previous_flame_location	= data_array(2:3)
                     av_flame_velocity		= data_array(5)
                     correction				= data_array(18)
-                    
+
                     if( correction < size(flame_velocity_hist)) then
                         flame_velocity_hist(:mod(correction,size(flame_velocity_hist))) = av_flame_velocity
                     else
                         flame_velocity_hist = av_flame_velocity
                     end if
+                    
+                    flame_velocity_hist(mod(correction,size(flame_velocity_hist))+1) = data_array(4)
                 end if
  			end if  
 
 			if( (correction /= 0).and.(correction /= nint(data_array(18))).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
+!            if( (correction /= 0).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
                 
 				flame_velocity		= (current_flame_location(1) - previous_flame_location(1))/(current_time - previous_time)
                 
@@ -3363,7 +3387,7 @@ contains
 				
 			end if
 
-			if(counter > 1000) then
+			if(counter > 100) then
 				stabilized = .true.
 			end if
 			
@@ -4013,8 +4037,8 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
 				velocity_value		= 0.0_dkind
 				do dim = 1,dimensions
-					velocity_value	= velocity_value + abs(v%pr(dim)%cells(i,j,k))/(cell_size(1))			!#L1 norm
-				!	velocity_value	= velocity_value + (v%pr(dim)%cells(i,j,k)/minval(cell_size(1)))**2		!#L2 norm
+					velocity_value	= velocity_value + abs(v%pr(dim)%cells(i,j,k))/(cell_size(1))       !#L1 norm
+				!	velocity_value	= velocity_value + (v%pr(dim)%cells(i,j,k)/(cell_size(1)))**2		!#L2 norm
 				end do
 
 				if((velocity_value > 0.0_dkind).or.(abs(div_v_int%cells(i,j,k)) > 0.0_dkind)) then
