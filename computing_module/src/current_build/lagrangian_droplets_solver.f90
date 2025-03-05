@@ -196,26 +196,8 @@ contains
 		lengths			= this%domain%get_domain_lengths()
 		
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-		
-!		delta = 0.0009_dkind
 
-!		lengths(1,1) = 0.01_dkind
-!		lengths(1,2) = 0.02_dkind
-		
-		drop_number = 10
-		!do dim = 1,dimensions
-		!	drop_number(dim) =  (lengths(dim,2)-lengths(dim,1)-cell_size(1)) /delta
-		!end do
-		
-		drop_number(1)  = 900
-		drop_number(2)  = 15
-        
-        
-		
-!		delta = (lengths(1,2)-lengths(1,1) - 3 * cell_size(1)) / (drop_number(1) - 1) 
-!		delta = (lengths(2,2)-lengths(2,1) - 3 * cell_size(1)) / (drop_number(2) - 1) 
-        
-        delta = 1e-03_dkind
+		drop_number = 1
         
 		this%droplets_number = drop_number(1)*drop_number(2)*drop_number(3)
 		
@@ -228,85 +210,17 @@ contains
 			this%droplets(drop)%dm				= 0.0_dkind 
         end do 
 
+        this%droplets(1)%coords(1)			= 0.5_dkind * (lengths(1,2) + cell_size(1))
+        this%droplets(1)%coords(2)			= 0.5_dkind * (lengths(2,2) + cell_size(1))
+        this%droplets(1)%coords(3)			= 0.5_dkind * (lengths(3,2) + cell_size(1))
         
+        this%droplets(1)%outside_domain		= .false. 
+        this%droplets(1)%temperature		= 300.0_dkind
         
-		do drop_x = 1, int(3.0*(lengths(1,2)-lengths(1,1))/4.0/delta)
-		!do drop_y = 1, drop_number(2)
-		!do drop_z = 1, drop_number(3)
-		!
-		!	droplet = drop_x + (drop_y-1)*drop_number(1) + (drop_z-1)*drop_number(1)*drop_number(2)
-		!
-		!	this%droplets(droplet)%coords			= 0.0_dkind
-		!	this%droplets(droplet)%velocity			= 0.0_dkind
-		!	this%droplets(droplet)%dm				= 0.0_dkind  
-		!	this%droplets(droplet)%outside_domain = .false.
-		!		
-		!	this%droplets(droplet)%temperature	= 300.0_dkind
-		!	this%droplets(droplet)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
-		!	do dim = 1, dimensions
-		!		dimless_length = real((drop_x-1)*I_m(dim,1)+(drop_y-1)*I_m(dim,2)+(drop_z-1)*I_m(dim,3),dkind)
-		!	
-		!		this%droplets(droplet)%velocity(dim)	= 0.0_dkind
-		!		this%droplets(droplet)%coords(dim)		= lengths(dim,1) + cell_size(1)*1.5 + dimless_length*delta
-		!	end do
-		
-            this%droplets(drop_x)%coords(1) = lengths(1,1) + delta*drop_x
-            this%droplets(drop_x)%coords(2) = 0.004_dkind !lengths(2,2)  / 4.0_dkind            
-            
-            this%droplets(drop_x)%velocity(1)		= 1.0_dkind
-            
-            this%droplets(drop_x)%temperature		= 300.0_dkind
-			this%droplets(drop_x)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
-            
-			initial_cell = this%get_droplet_cell(this%droplets(drop_x)%coords,out_flag)
-			this%droplets(drop_x)%cell				= initial_cell
-			this%droplets(drop_x)%outside_domain	= out_flag		
-            
-
-		!end do
-		!end do
-        end do
+		this%droplets(1)%mass	= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
         
+        continue 
         
-		do drop_x = int(3.0*(lengths(1,2)-lengths(1,1))/4.0/delta)+1, 2*int(3.0*(lengths(1,2)-lengths(1,1))/4.0/delta)
-		!do drop_y = 1, drop_number(2)
-		!do drop_z = 1, drop_number(3)
-		!
-		!	droplet = drop_x + (drop_y-1)*drop_number(1) + (drop_z-1)*drop_number(1)*drop_number(2)
-		!
-		!	this%droplets(droplet)%coords			= 0.0_dkind
-		!	this%droplets(droplet)%velocity			= 0.0_dkind
-		!	this%droplets(droplet)%dm				= 0.0_dkind  
-		!	this%droplets(droplet)%outside_domain = .false.
-		!		
-		!	this%droplets(droplet)%temperature	= 300.0_dkind
-		!	this%droplets(droplet)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
-		!	do dim = 1, dimensions
-		!		dimless_length = real((drop_x-1)*I_m(dim,1)+(drop_y-1)*I_m(dim,2)+(drop_z-1)*I_m(dim,3),dkind)
-		!	
-		!		this%droplets(droplet)%velocity(dim)	= 0.0_dkind
-		!		this%droplets(droplet)%coords(dim)		= lengths(dim,1) + cell_size(1)*1.5 + dimless_length*delta
-		!	end do
-		
-            this%droplets(drop_x)%coords(1) = lengths(1,1) + delta*(drop_x - int(3.0*(lengths(1,2)-lengths(1,1))/4.0/delta))
-            this%droplets(drop_x)%coords(2) = 0.006_dkind !3.0_dkind * lengths(2,2)  / 4.0_dkind            
-            
-            this%droplets(drop_x)%velocity(1)		= 1.0_dkind
-            
-            this%droplets(drop_x)%temperature		= 300.0_dkind
-			this%droplets(drop_x)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
-            
-			initial_cell = this%get_droplet_cell(this%droplets(drop_x)%coords,out_flag)
-			this%droplets(drop_x)%cell				= initial_cell
-			this%droplets(drop_x)%outside_domain	= out_flag		
-            
-
-		!end do
-		!end do
-		end do        
-				
-		continue
-		
 	end subroutine
 	
 	
@@ -414,7 +328,9 @@ contains
 				do dim = 1, dimensions
 					if (abs(this%droplets(drop)%velocity(dim)) > 1e-10_dkind) then
                         if (this%droplets(drop)%velocity(dim)/cell_size(dim) > CFL_p) CFL_p = this%droplets(drop)%velocity(dim)/cell_size(dim)
-					end if
+                    else
+                        CFL_p = 1.0_dkind/0.9_dkind
+                    end if
                 end do
                 CFL_p = time_step*CFL_p
 
@@ -741,7 +657,7 @@ contains
 		end if
 		
 		
-		if (dimensions	== 2) then
+		if (dimensions	>= 2) then
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				if (( 0.5_dkind*(mesh%mesh(2,1,j-1,get_droplet_cell(3)) + mesh%mesh(2,1,j,get_droplet_cell(3))) <= droplet_coords(2)).and. &
 					( 0.5_dkind*(mesh%mesh(2,1,j+1,get_droplet_cell(3)) + mesh%mesh(2,1,j,get_droplet_cell(3))) > droplet_coords(2))) then
