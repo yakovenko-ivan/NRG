@@ -24,3 +24,4 @@ package_utilities/release_OMP
 package_utilities/debug_seq
 package_utilities/release_seq
 *.bak
+cmake-build-debug
