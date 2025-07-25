@@ -122,9 +122,9 @@ contains
 		class(field_vector_cons)			,intent(in)		:: this
 		type(boundary_conditions_pointer)	,intent(in)		:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)		:: bound
-		real(dkind)							,intent(out)	:: field_mean_square_value
+		real(dp)							,intent(out)	:: field_mean_square_value
 		
-		real(dkind)				:: mean_square_value
+		real(dp)				:: mean_square_value
 		integer	,dimension(3,2)	:: bound_sl
 
 		integer		:: i,j,k, dim, cells_number
@@ -136,7 +136,7 @@ contains
 
 		!$omp parallel default(none)  private(i,j,k) , &
 		!$omp& shared(this,bc_ptr,bound_sl,mean_square_value,cells_number)
-		mean_square_value = 0.0_dkind
+		mean_square_value = 0.0_dp
 		cells_number = 0
 		!$omp do collapse(3) schedule(static) reduction(+:mean_square_value,cells_number)
 		do k = bound_sl(3,1),bound_sl(3,2)

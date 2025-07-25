@@ -11,9 +11,9 @@ module boundary_type_class
 		private
 		character(len=20)						:: type_name
 		logical									:: slip, conductive
-		real(dkind)								:: wall_temperature ,wall_conductivity_ratio
-		real(dkind)								:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity, farfield_energy
-		real(dkind)			,dimension(:)	,allocatable	:: farfield_concentrations
+		real(dp)								:: wall_temperature ,wall_conductivity_ratio
+		real(dp)								:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity, farfield_energy
+		real(dp)			,dimension(:)	,allocatable	:: farfield_concentrations
 		character(len=10)	,dimension(:)	,allocatable	:: farfield_species_names			
 		integer									:: priority
 	contains
@@ -59,9 +59,9 @@ contains
 	type(boundary_type)  function constructor(type_name,slip,conductive,wall_temperature,wall_conductivity_ratio,farfield_pressure,farfield_temperature,farfield_density,farfield_velocity,farfield_concentrations,farfield_species_names,priority,bc_data_file_unit)
 		character(len=*)		,intent(in)				:: type_name
 		logical					,intent(in)	,optional	:: slip, conductive
-		real(dkind)				,intent(in)	,optional	:: wall_temperature, wall_conductivity_ratio
-		real(dkind)				,intent(in)	,optional	:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
-		real(dkind)			,dimension(:)	,intent(in)	,optional	:: farfield_concentrations
+		real(dp)				,intent(in)	,optional	:: wall_temperature, wall_conductivity_ratio
+		real(dp)				,intent(in)	,optional	:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
+		real(dp)			,dimension(:)	,intent(in)	,optional	:: farfield_concentrations
 		character(len=*)	,dimension(:)	,intent(in)	,optional	:: farfield_species_names		
 		integer					,intent(in)				:: priority
 		integer					,intent(in)				:: bc_data_file_unit
@@ -82,10 +82,10 @@ contains
 		
 		character(len=20)	:: type_name
 		logical				:: slip, conductive
-		real(dkind)			:: wall_temperature, wall_conductivity_ratio
-		real(dkind)			:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
+		real(dp)			:: wall_temperature, wall_conductivity_ratio
+		real(dp)			:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
 		integer				:: farfield_species_number
-		real(dkind)			,dimension(:)	,allocatable	:: farfield_concentrations
+		real(dp)			,dimension(:)	,allocatable	:: farfield_concentrations
 		character(len=10)	,dimension(:)	,allocatable	:: farfield_species_names
 		
 		integer				:: priority
@@ -110,10 +110,10 @@ contains
 		
 		character(len=20)	:: type_name
 		logical				:: slip, conductive
-		real(dkind)			:: wall_temperature, wall_conductivity_ratio
-		real(dkind)			:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
+		real(dp)			:: wall_temperature, wall_conductivity_ratio
+		real(dp)			:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
 		integer				:: farfield_species_number
-		real(dkind)			,dimension(:)	,allocatable	:: farfield_concentrations
+		real(dp)			,dimension(:)	,allocatable	:: farfield_concentrations
 		character(len=10)	,dimension(:)	,allocatable	:: farfield_species_names
 		
 		integer				:: priority
@@ -150,9 +150,9 @@ contains
 		class(boundary_type)	,intent(inout)			:: this
 		character(len=*)		,intent(in)				:: type_name
 		logical					,intent(in)	,optional	:: slip, conductive
-		real(dkind)				,intent(in)	,optional	:: wall_temperature, wall_conductivity_ratio
-		real(dkind)				,intent(in)	,optional	:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
-		real(dkind)			,dimension(:)	,intent(in)	,optional	:: farfield_concentrations
+		real(dp)				,intent(in)	,optional	:: wall_temperature, wall_conductivity_ratio
+		real(dp)				,intent(in)	,optional	:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
+		real(dp)			,dimension(:)	,intent(in)	,optional	:: farfield_concentrations
 		character(len=*)	,dimension(:)	,intent(in)	,optional	:: farfield_species_names	
 		integer					,intent(in)				:: priority
 
@@ -178,21 +178,21 @@ contains
 					stop
 				end if
 			else
-				this%wall_temperature			= 0.0_dkind
-				this%wall_conductivity_ratio	= 0.0_dkind	
+				this%wall_temperature			= 0.0_dp
+				this%wall_conductivity_ratio	= 0.0_dp	
 			end if
-			this%farfield_pressure			= 0.0_dkind
-			this%farfield_temperature		= 0.0_dkind
-			this%farfield_density			= 0.0_dkind
-			this%farfield_velocity			= 0.0_dkind
+			this%farfield_pressure			= 0.0_dp
+			this%farfield_temperature		= 0.0_dp
+			this%farfield_density			= 0.0_dp
+			this%farfield_velocity			= 0.0_dp
 			allocate(this%farfield_concentrations(0))
 			allocate(this%farfield_species_names(0))
 			this%priority					= priority
 		case('outlet','outlet2','inlet')
 			this%slip						= .false.
 			this%conductive					= .false.
-			this%wall_temperature			= 0.0_dkind
-			this%wall_conductivity_ratio	= 0.0_dkind
+			this%wall_temperature			= 0.0_dp
+			this%wall_conductivity_ratio	= 0.0_dp
 
 			if(present(farfield_pressure).and.present(farfield_temperature).and.present(farfield_velocity).and.present(farfield_concentrations).and.present(farfield_species_names)) then
 				this%farfield_pressure			= farfield_pressure
@@ -206,17 +206,17 @@ contains
 				print *, ' Inlet/Outlet boundary with priority ', priority,' was not correctly specified. Please provide full set of inlet parameters (P_inf,T_inf,Rho_inf,v(x)_inf,Y_inf).'
 				stop
 			end if
-			this%farfield_density			= 0.0_dkind
+			this%farfield_density			= 0.0_dp
 			this%priority					= priority
 		case('symmetry_plane')
 			this%slip						= .true.
 			this%conductive					= .false.
-			this%wall_temperature			= 0.0_dkind
-			this%wall_conductivity_ratio	= 0.0_dkind
-			this%farfield_pressure			= 0.0_dkind
-			this%farfield_temperature		= 0.0_dkind
-			this%farfield_density			= 0.0_dkind
-			this%farfield_velocity			= 0.0_dkind
+			this%wall_temperature			= 0.0_dp
+			this%wall_conductivity_ratio	= 0.0_dp
+			this%farfield_pressure			= 0.0_dp
+			this%farfield_temperature		= 0.0_dp
+			this%farfield_density			= 0.0_dp
+			this%farfield_velocity			= 0.0_dp
 			allocate(this%farfield_concentrations(0))
 			allocate(this%farfield_species_names(0))			
 			this%priority					= priority
@@ -250,56 +250,56 @@ contains
 
 	pure function	get_wall_temperature(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_wall_temperature
+		real(dp)								:: get_wall_temperature
 
 		get_wall_temperature = this%wall_temperature
 	end function
 
 	pure function	get_wall_conductivity_ratio(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_wall_conductivity_ratio
+		real(dp)								:: get_wall_conductivity_ratio
 
 		get_wall_conductivity_ratio	= this%wall_conductivity_ratio
 	end function
 
 	pure function	get_farfield_pressure(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_farfield_pressure
+		real(dp)								:: get_farfield_pressure
 
 		get_farfield_pressure = this%farfield_pressure
 	end function
 
 	pure function	get_farfield_temperature(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_farfield_temperature
+		real(dp)								:: get_farfield_temperature
 
 		get_farfield_temperature = this%farfield_temperature
 	end function
 
 	pure function	get_farfield_density(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_farfield_density
+		real(dp)								:: get_farfield_density
 
 		get_farfield_density = this%farfield_density
     end function
 
 	pure function	get_farfield_energy(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_farfield_energy
+		real(dp)								:: get_farfield_energy
 
 		get_farfield_energy = this%farfield_energy
 	end function
 
 	pure function	get_farfield_velocity(this)
 		class(boundary_type)	,intent(in)		:: this
-		real(dkind)								:: get_farfield_velocity
+		real(dp)								:: get_farfield_velocity
 
 		get_farfield_velocity = this%farfield_velocity
 	end function
 
 	subroutine	get_farfield_concentrations(this, farfield_concentrations)
 		class(boundary_type)		,intent(in)		:: this
-		real(dkind)	,dimension(:)	,allocatable	:: farfield_concentrations
+		real(dp)	,dimension(:)	,allocatable	:: farfield_concentrations
 
 		if (allocated(farfield_concentrations)) deallocate(farfield_concentrations)
 		allocate(farfield_concentrations(size(this%farfield_concentrations)))
@@ -338,42 +338,42 @@ contains
 
 	pure subroutine	set_farfield_pressure(this,farfield_pressure)
 		class(boundary_type)	,intent(inout)		:: this
-		real(dkind)				,intent(in)			:: farfield_pressure
+		real(dp)				,intent(in)			:: farfield_pressure
 
 		this%farfield_pressure = farfield_pressure
 	end subroutine
 
 	pure subroutine	set_farfield_temperature(this,farfield_temperature)
 		class(boundary_type)	,intent(inout)		:: this
-		real(dkind)				,intent(in)			:: farfield_temperature
+		real(dp)				,intent(in)			:: farfield_temperature
 
 		this%farfield_temperature = farfield_temperature
 	end subroutine
 
 	pure subroutine	set_farfield_density(this,farfield_pressure)
 		class(boundary_type)	,intent(inout)		:: this
-		real(dkind)				,intent(in)			:: farfield_pressure
+		real(dp)				,intent(in)			:: farfield_pressure
 
 		this%farfield_density = farfield_pressure
     end subroutine
 
  	pure subroutine	set_farfield_energy(this,farfield_energy)
 		class(boundary_type)	,intent(inout)		:: this
-		real(dkind)				,intent(in)			:: farfield_energy
+		real(dp)				,intent(in)			:: farfield_energy
 
 		this%farfield_energy = farfield_energy
 	end subroutine   
     
 	pure subroutine	set_farfield_velocity(this,farfield_velocity)
 		class(boundary_type)	,intent(inout)		:: this
-		real(dkind)				,intent(in)			:: farfield_velocity
+		real(dp)				,intent(in)			:: farfield_velocity
 
 		this%farfield_velocity = farfield_velocity
 	end subroutine	
 	
 	pure subroutine	set_farfield_concentrations(this,farfield_concentrations)
 		class(boundary_type)		,intent(inout)		:: this
-		real(dkind), dimension(:)	,intent(in)			:: farfield_concentrations
+		real(dp), dimension(:)	,intent(in)			:: farfield_concentrations
 
 		this%farfield_concentrations = farfield_concentrations
 	end subroutine		

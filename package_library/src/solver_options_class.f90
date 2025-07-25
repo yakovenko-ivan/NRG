@@ -11,11 +11,11 @@ module solver_options_class
 	public  solver_options ,solver_options_c
 	
 	type	:: solid_particles_phase
-		real(dkind)	:: diameter, material_heat_capacity, material_density
+		real(dp)	:: diameter, material_heat_capacity, material_density
 	end type
 	
 	type	:: liquid_droplets_phase
-		real(dkind)			:: diameter, material_heat_capacity, material_density, material_latent_heat, material_boiling_temperature
+		real(dp)			:: diameter, material_heat_capacity, material_density, material_latent_heat, material_boiling_temperature
 		character(len=20)	:: material
 		logical				:: combustible
 	end type
@@ -24,7 +24,7 @@ module solver_options_class
 		private
 		character(len=20)	:: solver_name	
 		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
-		real(dkind)			:: CFL_coefficient, initial_time_step
+		real(dp)			:: CFL_coefficient, initial_time_step
 		integer				:: additional_particles_phases
 		integer				:: additional_droplets_phases
 		type(solid_particles_phase)	,dimension(:)	,allocatable	:: particles
@@ -67,7 +67,7 @@ contains
 		logical				,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
 		integer				,intent(in)	,optional	:: additional_particles_phases
 		integer				,intent(in)	,optional	:: additional_droplets_phases
-		real(dkind)			,intent(in)	:: CFL_coefficient, initial_time_step
+		real(dp)			,intent(in)	:: CFL_coefficient, initial_time_step
 		
 		integer	:: additional_particles, additional_droplets
 		
@@ -87,7 +87,7 @@ contains
 		
 		call constructor%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles, additional_droplets, CFL_flag, CFL_coefficient, initial_time_step)
 		
-		open(newunit = io_unit, file = solver_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = solver_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)	
 	end function
@@ -96,8 +96,8 @@ contains
 
 		integer	:: io_unit
 	
-		real(dkind)	:: particles_diameter, particles_material_heat_capacity, particles_material_density
-		real(dkind)	:: droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature
+		real(dp)	:: particles_diameter, particles_material_heat_capacity, particles_material_density
+		real(dp)	:: droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature
 		character(len=20)	:: droplets_material
 		logical		:: droplets_combustible
 		
@@ -139,7 +139,7 @@ contains
 		
 		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
 		integer				:: additional_particles_phases, additional_droplets_phases
-		real(dkind)			:: CFL_coefficient, initial_time_step
+		real(dp)			:: CFL_coefficient, initial_time_step
 		character(len=20)	:: solver_name
 		
 		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step
@@ -166,7 +166,7 @@ contains
 		
 		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
 		integer				:: additional_particles_phases, additional_droplets_phases
-		real(dkind)			:: CFL_coefficient, initial_time_step
+		real(dp)			:: CFL_coefficient, initial_time_step
 		character(len=20)	:: solver_name
 	
 		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step
@@ -180,7 +180,7 @@ contains
 		class(solver_options)	,intent(inout)	:: this
 		logical								,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
 		integer								,intent(in)	:: additional_particles_phases, additional_droplets_phases
-		real(dkind)							,intent(in)	:: CFL_coefficient, initial_time_step
+		real(dp)							,intent(in)	:: CFL_coefficient, initial_time_step
 		character(len=*)					,intent(in)	:: solver_name
 
 		this%solver_name				=	solver_name
@@ -288,14 +288,14 @@ contains
 	
 	pure function get_CFL_condition_coefficient(this)
 		class(solver_options)	,intent(in)	:: this
-		real(dkind)							:: get_CFL_condition_coefficient
+		real(dp)							:: get_CFL_condition_coefficient
 		
 		get_CFL_condition_coefficient	= this%CFL_coefficient
 	end function	
 	
 	pure function get_initial_time_step(this)
 		class(solver_options)	,intent(in)	:: this
-		real(dkind)							:: get_initial_time_step
+		real(dp)							:: get_initial_time_step
 		
 		get_initial_time_step	= this%initial_time_step
 	end function	
@@ -323,8 +323,8 @@ contains
 		type(solid_particles_phase)	,intent(in)	,optional	:: solid_particles_parameters
 		type(liquid_droplets_phase)	,intent(in)	,optional	:: liquid_droplets_parameters
 
-		real(dkind)	:: particles_diameter, particles_material_heat_capacity, particles_material_density
-		real(dkind)	:: droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature	
+		real(dp)	:: particles_diameter, particles_material_heat_capacity, particles_material_density
+		real(dp)	:: droplets_diameter, droplets_material_heat_capacity, droplets_material_density,droplets_material_latent_heat, droplets_material_boiling_temperature	
 		character(len=20)	:: droplets_material
 		logical		:: droplets_combustible
 		

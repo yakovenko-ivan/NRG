@@ -16,7 +16,7 @@ module boundary_conditions_class
 
 	type boundary_conditions
 		type(boundary_type)		,dimension(:)		,allocatable	:: boundary_types
-		integer(ikind)			,dimension(:,:,:)	,allocatable	:: bc_markers
+		integer(i1)			,dimension(:,:,:)	,allocatable	:: bc_markers
 		integer														:: default_boundary_type
 		integer														:: boundary_type_counter
 	contains
@@ -47,7 +47,7 @@ contains
 		
 		call constructor%set_properties(domain, number_of_boundary_types, default_boundary)
 		
-		open(newunit = io_unit, file = boundary_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = boundary_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)
 
@@ -165,9 +165,9 @@ contains
 		class(boundary_conditions)	,intent(inout)			:: this
 		character(len=*)			,intent(in)				:: type_name
 		logical						,intent(in)	,optional	:: slip, conductive
-		real(dkind)					,intent(in)	,optional	:: wall_temperature, wall_conductivity_ratio
-		real(dkind)					,intent(in)	,optional	:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
-		real(dkind)			,dimension(:)	,intent(in)	,optional	:: farfield_concentrations
+		real(dp)					,intent(in)	,optional	:: wall_temperature, wall_conductivity_ratio
+		real(dp)					,intent(in)	,optional	:: farfield_pressure, farfield_temperature, farfield_density, farfield_velocity
+		real(dp)			,dimension(:)	,intent(in)	,optional	:: farfield_concentrations
 		character(len=*)	,dimension(:)	,intent(in)	,optional	:: farfield_species_names
 		integer						,intent(in)				:: priority		
 	
@@ -175,7 +175,7 @@ contains
 		
 		this%boundary_type_counter = this%boundary_type_counter + 1
 		
-		open(newunit = io_unit, file = boundary_data_file_name, status = 'old', form = 'formatted', position = 'append')
+		open(newunit = io_unit, file = boundary_data_file_name, status = 'old', form = 'formatted', position = 'append', delim = 'quote')
 
 		this%boundary_types(this%boundary_type_counter) = boundary_type_c(type_name,slip,conductive,wall_temperature,wall_conductivity_ratio,farfield_pressure,farfield_temperature,farfield_density,farfield_velocity,farfield_concentrations,farfield_species_names,priority,io_unit)
 		close(io_unit)

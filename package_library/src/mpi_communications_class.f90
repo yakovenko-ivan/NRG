@@ -31,8 +31,8 @@ module mpi_communications_class
         integer ,dimension(-1:1,-1:1,-1:1)    :: flow_send_subarray_type_transverse
         integer ,dimension(-1:1,-1:1,-1:1)    :: flow_recv_subarray_type_transverse     
         
-        real(dkind) ,dimension(:,:,:)   ,allocatable    :: cons_buffer
-        real(dkind) ,dimension(:,:,:)   ,allocatable    :: flow_buffer
+        real(dp) ,dimension(:,:,:)   ,allocatable    :: cons_buffer
+        real(dp) ,dimension(:,:,:)   ,allocatable    :: flow_buffer
 
 	contains
 		procedure   :: exchange_conservative_scalar_field
@@ -244,7 +244,7 @@ contains
         class(mpi_communications)   ,target     ,intent(inout)  :: this
         type(field_scalar_cons)	    ,target     ,intent(inout)  :: scal_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer ,dimension(3)   :: processor_number, processor_grid_coord
         
@@ -288,7 +288,7 @@ contains
         class(mpi_communications)               ,target     ,intent(inout)  :: this
         type(boundary_conditions)       	    ,target     ,intent(inout)  :: bc_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer ,dimension(3)   :: processor_number, processor_grid_coord
         
@@ -332,7 +332,7 @@ contains
         class(mpi_communications)   ,target     ,intent(inout)  :: this
         type(computational_mesh)       			,target     ,intent(inout)  :: mesh_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer                 :: dimensions
         integer ,dimension(3)   :: processor_number, processor_grid_coord
@@ -381,7 +381,7 @@ contains
         class(mpi_communications)   ,target     ,intent(inout)  :: this
         type(field_vector_cons)	    ,target     ,intent(inout)  :: vect_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer                 :: vector_projections_number
         integer ,dimension(3)   :: processor_number, processor_grid_coord
@@ -431,7 +431,7 @@ contains
         class(mpi_communications)   ,target     ,intent(inout)  :: this
         type(field_tensor)	        ,target     ,intent(inout)  :: tens_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer ,dimension(2)   :: tensor_projections_number
         integer ,dimension(3)   :: processor_number, processor_grid_coord
@@ -483,7 +483,7 @@ contains
         class(mpi_communications)   ,target     ,intent(inout)  :: this
         type(field_scalar_flow)	    ,target     ,intent(inout)  :: scal_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer                 :: dimensions
         integer ,dimension(3)   :: processor_number, processor_grid_coord
@@ -544,7 +544,7 @@ contains
         class(mpi_communications)   ,target     ,intent(inout)  :: this
         type(field_vector_flow)	    ,target     ,intent(inout)  :: vect_ptr
 
-        real(dkind) ,pointer    ,dimension(:) :: buffer_ptr
+        real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 
         integer                 :: dimensions, vector_projections_number
         integer ,dimension(3)   :: processor_number, processor_grid_coord

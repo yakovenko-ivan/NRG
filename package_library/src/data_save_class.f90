@@ -26,11 +26,11 @@ module data_save_class
 		type(field_scalar_cons_pointer)	,dimension(:)		,allocatable	:: visible_fields
 		character(len=40)				,dimension(:)		,allocatable	:: visible_fields_names
 
-		real(rkind)						,dimension(:,:,:)	,allocatable	:: io_buffer
+		real(sp)						,dimension(:,:,:)	,allocatable	:: io_buffer
 
-		real(dkind)             :: save_time
+		real(dp)             :: save_time
 		character(len=20)       :: save_time_units
-		real(rkind)             :: save_time_coefficient
+		real(sp)             :: save_time_coefficient
 		character(len=25)       :: save_format
 		character(len=10)       :: save_time_units_abbreviation
 		
@@ -87,7 +87,7 @@ contains
 	type(data_save)	function constructor(manager,visible_fields_names,save_time,save_time_units,save_format,data_save_folder,debug_flag)
 		type(data_manager)					,intent(in)	:: manager
 		character(len=40)	,dimension(:)	,intent(in)	:: visible_fields_names
-		real(dkind)							,intent(in)	:: save_time
+		real(dp)							,intent(in)	:: save_time
 		character(len=*)					,intent(in)	:: save_time_units
 		character(len=*)					,intent(in)	:: save_format
 		character(len=*)					,intent(in)	:: data_save_folder
@@ -123,7 +123,7 @@ contains
 		character(len=40)	,dimension(:)	,allocatable	:: visible_fields_names
 		
 		integer				:: visible_fields_number
-		real(dkind)			:: save_time
+		real(dp)			:: save_time
 		character(len=20)	:: save_time_units
 		character(len=25)	:: save_format
 		character(len=20)	:: data_save_folder
@@ -157,7 +157,7 @@ contains
 		character(len=40)	,dimension(:)	,allocatable	:: visible_fields_names
 		
 		integer				:: visible_fields_number
-		real(dkind)			:: save_time
+		real(dp)			:: save_time
 		character(len=20)	:: save_time_units
 		character(len=25)	:: save_format
 		character(len=20)	:: data_save_folder
@@ -185,7 +185,7 @@ contains
 		class(data_save)					,intent(inout)	:: this
 		type(data_manager)					,intent(in)	:: manager
 		character(len=*)	,dimension(:)	,intent(in)	:: visible_fields_names
-		real(dkind)							,intent(in)	:: save_time
+		real(dp)							,intent(in)	:: save_time
 		character(len=*)					,intent(in)	:: save_time_units
 		character(len=*)					,intent(in)	:: save_format
 		character(len=*)					,intent(in)	:: data_save_folder
@@ -231,19 +231,19 @@ contains
 		select case(this%save_time_units)
 			case('minutes')
 				this%save_time_units_abbreviation = 'm'
-				this%save_time_coefficient        = 1.0_dkind/60.0_dkind			
+				this%save_time_coefficient        = 1.0_dp/60.0_dp			
 			case('seconds')
 				this%save_time_units_abbreviation = 's'
-				this%save_time_coefficient        = 1.0_dkind		
+				this%save_time_coefficient        = 1.0_dp		
 			case('milliseconds')
 				this%save_time_units_abbreviation = 'ms'
-				this%save_time_coefficient        = 1e+03_dkind
+				this%save_time_coefficient        = 1e+03_dp
 			case('microseconds')
 				this%save_time_units_abbreviation = 'us'
-				this%save_time_coefficient        = 1e+06_dkind
+				this%save_time_coefficient        = 1e+06_dp
 			case('nanoseconds')
 				this%save_time_units_abbreviation = 'ns'
-				this%save_time_coefficient        = 1e+09_dkind
+				this%save_time_coefficient        = 1e+09_dp
 		end select
 
 		this%mesh 		= manager%computational_mesh_pointer
@@ -331,7 +331,7 @@ contains
 
 	pure function get_save_time(this)
 		class(data_save)	,intent(in)	:: this
-		real(dkind)						:: get_save_time
+		real(dp)						:: get_save_time
 
 		get_save_time = this%save_time
 	end function
@@ -345,7 +345,7 @@ contains
 	
 	pure function get_save_time_coefficient(this)
 		class(data_save)	,intent(in)	:: this
-		real(rkind)			:: get_save_time_coefficient
+		real(sp)			:: get_save_time_coefficient
 
 		get_save_time_coefficient = this%save_time_coefficient
 	end function
@@ -359,7 +359,7 @@ contains
 
 	pure subroutine set_save_time(this,new_save_time)
 		class(data_save)	,intent(inout)	:: this
-		real(dkind)			,intent(in)		:: new_save_time
+		real(dp)			,intent(in)		:: new_save_time
 
 		this%output_counter = this%output_counter * int(this%save_time/new_save_time)
 		this%save_time = new_save_time
@@ -403,7 +403,7 @@ contains
 	
 	subroutine save_all_data(this,time,stop_flag,make_save)
 		class(data_save)	,intent(inout)	:: this
-		real(dkind)			,intent(in)		:: time
+		real(dp)			,intent(in)		:: time
 		logical				,intent(in)		,optional	:: make_save	
 		logical				,intent(in)		:: stop_flag
 
@@ -413,7 +413,7 @@ contains
 		integer(kind=MPI_OFFSET_KIND)	:: initial_displacement, final_displacement
 #endif
 
-		real(dkind)				:: written_time
+		real(dp)				:: written_time
 		character(len=100)		:: file_path, file_name, proc_rank
 		integer					:: unit_io, mpi_io_unit
 		logical					:: debug
@@ -455,7 +455,7 @@ contains
 						call system(system_command)
 
 						file_name = trim(this%data_save_folder) // trim(fold_sep) // trim(file_path) // trim(fold_sep) // trim(file_path) //'_header.plt'
-						open(newunit = unit_io, file = file_name, status = 'replace', form = 'binary')					
+						open(newunit = unit_io, file = file_name, status = 'replace', access='stream', form='unformatted') 				
 						call this%generate_header(written_time,unit_io,debug)
 						close(unit_io)							
 					end if
@@ -465,7 +465,7 @@ contains
 					write(proc_rank,'(A,I4.4)') '_proc_', processor_rank
 
 					file_name = trim(this%data_save_folder) // trim(fold_sep) // trim(file_path) // trim(fold_sep) // trim(file_path) // trim(proc_rank) // '_data.plt'
-					open(newunit = unit_io, file = file_name, status = 'replace', form = 'binary')
+					open(newunit = unit_io, file = file_name, status = 'replace', access='stream', form='unformatted')
 
 					call this%save_mesh(unit_io,debug)
 					call this%save_fields(unit_io,debug)
@@ -499,7 +499,7 @@ contains
 #else
 
 					file_name = trim(this%data_save_folder) // trim(fold_sep) // trim(file_path) //'.plt'
-					open(newunit = unit_io, file = file_name, status = 'replace', form = 'binary')
+					open(newunit = unit_io, file = file_name, status = 'replace', access='stream', form='unformatted')
 
 					call this%generate_header(written_time,unit_io,debug)
 
@@ -524,7 +524,7 @@ contains
 
 	subroutine generate_header(this,time,tecplot_io_unit,debug)
 		class(data_save)								,intent(in)				:: this
-		real(dkind)									,intent(in)					:: time
+		real(dp)									,intent(in)					:: time
 		integer										,intent(in)					:: tecplot_io_unit
 		logical										,intent(in)					:: debug
 
@@ -536,9 +536,9 @@ contains
 		integer		,dimension(3)	:: utter_cells_number, inner_cells_number
 
 		character(len=5)	,dimension(:)	,allocatable	:: axis_names
-		real(dkind)			,dimension(:,:)	,allocatable	:: domain_lengths
+		real(dp)			,dimension(:,:)	,allocatable	:: domain_lengths
 
-		real(dkind)				:: min_value, max_value
+		real(dp)				:: min_value, max_value
 		integer					:: variables_number ,variables_counter
 		integer					:: dim, counter
 
@@ -643,7 +643,7 @@ contains
 			 write(tecplot_io_unit) max_value
 		end do
 		if(debug) then
-			write(tecplot_io_unit) 0.0_dkind
+			write(tecplot_io_unit) 0.0_dp
 			write(tecplot_io_unit) dble(size(this%boundaries%bc_ptr%boundary_types))
 		end if
 

@@ -18,8 +18,8 @@ module computational_domain_class
 		integer												:: dimensions			! Problem dimensions
 		integer				,dimension(3)					:: cells_number			! Cells number without ghost cells
 		integer				,dimension(3)					:: faces_number			! Faces number without ghost cells
-		real(dkind)			,dimension(:,:)	,allocatable	:: lengths				! Domain length in meters
-		character(len=5)	,dimension(:)	,allocatable	:: axis_names			! Axis names
+		real(dp)			,dimension(3,2)		:: lengths				! Domain length in meters
+		character(len=5)	,dimension(3)		:: axis_names			! Axis names
 		character(len=20)									:: coordinate_system	! Coordinate system (cartesian/cylindrical/spherical)
 
 	! MPI Global data
@@ -104,14 +104,14 @@ contains
 		integer								,intent(in)	:: dimensions
 		integer				,dimension(3)	,intent(in)	:: cells_number
 		character(len=*)					,intent(in)	:: coordinate_system		
-		real(dkind)			,dimension(:,:)	,intent(in)	:: lengths
-		character(len=*)	,dimension(:)	,intent(in)	:: axis_names
+        real(dp)         ,dimension(3,2) ,intent(in) :: lengths
+        character(len=*)    ,dimension(3)   ,intent(in) :: axis_names
 
 		integer	:: io_unit
 		
 		call constructor%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names)
 		
-		open(newunit = io_unit, file = domain_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = domain_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)				
 	end function
@@ -131,16 +131,13 @@ contains
 		integer								:: dimensions
 		integer				,dimension(3)	:: cells_number
 		character(len=20)					:: coordinate_system
-		real(dkind)			,dimension(:,:)	,allocatable	:: lengths
-		character(len=5)	,dimension(:)	,allocatable	:: axis_names
+        real(dp)         ,dimension(3,2) :: lengths
+        character(len=5)    ,dimension(3)   :: axis_names
 
 		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system
 		namelist /domain_properties_2/ lengths, axis_names
 		
 		read(unit = domain_data_unit, nml = domain_properties_1)
-		
-		allocate(lengths(dimensions,2))
-		allocate(axis_names(dimensions))
 		
 		read(unit = domain_data_unit, nml = domain_properties_2)
 	
@@ -154,8 +151,8 @@ contains
 		integer								:: dimensions
 		integer				,dimension(3)	:: cells_number
 		character(len=20)					:: coordinate_system
-		real(dkind)			,dimension(:,:)	,allocatable	:: lengths
-		character(len=5)	,dimension(:)	,allocatable	:: axis_names
+        real(dp)         ,dimension(3,2) :: lengths
+        character(len=5)    ,dimension(3)   :: axis_names
 
 		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system
 		namelist /domain_properties_2/ lengths, axis_names
@@ -163,9 +160,6 @@ contains
 		dimensions			= this%dimensions
 		cells_number		= this%cells_number
 		coordinate_system	= this%coordinate_system
-		
-		allocate(axis_names(dimensions))
-		allocate(lengths(dimensions,2))
 		
 		axis_names	= this%axis_names
 		lengths		= this%lengths
@@ -178,21 +172,18 @@ contains
 		class(computational_domain)			,intent(inout)	:: this
 		integer								,intent(in)		:: dimensions
 		integer		,dimension(3)			,intent(in)		:: cells_number
-		real(dkind)	,dimension(:,:)			,intent(in)		:: lengths
+        real(dp)         ,dimension(3,2) ,intent(in)     :: lengths
 		character(len=*)					,intent(in)		:: coordinate_system
-		character(len=*)	,dimension(:)	,intent(in)		:: axis_names
+        character(len=*)    ,dimension(3)   ,intent(in)     :: axis_names
 		
 		integer	:: dim
 		
-		allocate(this%axis_names(dimensions))
-		allocate(this%lengths(dimensions,2))
-
 		this%dimensions				= dimensions
 		this%cells_number			= cells_number		
 		this%faces_number			= cells_number + 1
-		this%lengths				= lengths(1:dimensions,:)
+		this%lengths				= lengths
 		this%coordinate_system		= coordinate_system
-		this%axis_names				= axis_names(1:dimensions)
+		this%axis_names				= axis_names
 
 		this%cells_number(dimensions+1:3) = 1
 		this%faces_number(dimensions+1:3) = 1
@@ -353,7 +344,7 @@ contains
 
 	pure function get_domain_lengths(this)
 		class(computational_domain)	,intent(in)		:: this
-		real(dkind)	,dimension(:,:)	,allocatable	:: get_domain_lengths
+		real(dp)	,dimension(:,:)	,allocatable	:: get_domain_lengths
 
 		
 		allocate(get_domain_lengths(this%dimensions,2))
@@ -428,9 +419,9 @@ contains
 
 	pure function get_axis_names(this)
 		class(computational_domain)			,intent(in)		:: this
-		character(len=5)	,dimension(:)	,allocatable	:: get_axis_names
+		character(len=5)	,dimension(3)					:: get_axis_names
 
-		allocate(get_axis_names,source = this%axis_names)
+        get_axis_names = this%axis_names
 	end function	
 	
 	pure function get_coordinate_system_name(this)

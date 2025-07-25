@@ -14,7 +14,7 @@ module chemical_properties_class
 
 	type 	:: chemical_properties
 		character(len=50)		:: chemical_mechanism_file_name
-		real(dkind)				:: default_enhanced_efficiencies
+		real(dp)				:: default_enhanced_efficiencies
 		character(len=15)		:: E_act_units	
 	
 		integer                                             ::  species_number
@@ -22,8 +22,8 @@ module chemical_properties_class
 		integer                                             ::  reactions_number
 		integer     ,dimension(:)           ,allocatable    ::  reactions_type
 		integer     ,dimension(:,:,:)       ,allocatable    ::  chemical_coeffs
-		real(dkind) ,dimension(:)           ,allocatable    ::  E_act, A, beta, E_act_low, A_low, beta_low
-		real(dkind) ,dimension(:,:)         ,allocatable    ::  enhanced_efficiencies, Troe_coeffs
+		real(dp) ,dimension(:)           ,allocatable    ::  E_act, A, beta, E_act_low, A_low, beta_low
+		real(dp) ,dimension(:,:)         ,allocatable    ::  enhanced_efficiencies, Troe_coeffs
 
 		character(len=20)                                   ::  activation_energy_units
 	contains
@@ -60,14 +60,14 @@ contains
     type(chemical_properties)   function constructor(chemical_mechanism_file_name,default_enhanced_efficiencies,E_act_units)
 
  		character(len=*)	,intent(in)	:: chemical_mechanism_file_name
-		real(dkind)			,intent(in)	:: default_enhanced_efficiencies
+		real(dp)			,intent(in)	:: default_enhanced_efficiencies
 		character(len=*)	,intent(in)	:: E_act_units
 
 		integer	:: io_unit
 		
 		call constructor%set_properties(chemical_mechanism_file_name,default_enhanced_efficiencies,E_act_units)
 		
-		open(newunit = io_unit, file = chemical_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = chemical_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)	
 		
@@ -86,7 +86,7 @@ contains
 		integer						,intent(in)		:: chemical_data_unit
 	
 		character(len=50)	:: chemical_mechanism_file_name
-		real(dkind)			:: default_enhanced_efficiencies
+		real(dp)			:: default_enhanced_efficiencies
 		character(len=15)	:: E_act_units
 		
 		namelist /chemical_properties/ chemical_mechanism_file_name, default_enhanced_efficiencies, E_act_units
@@ -100,7 +100,7 @@ contains
 		integer						,intent(in)	:: chemical_data_unit
 	
 		character(len=50)	:: chemical_mechanism_file_name
-		real(dkind)			:: default_enhanced_efficiencies
+		real(dp)			:: default_enhanced_efficiencies
 		character(len=15)	:: E_act_units
 		
 		namelist /chemical_properties/ chemical_mechanism_file_name, default_enhanced_efficiencies, E_act_units
@@ -118,10 +118,10 @@ contains
 		class(chemical_properties)  ,intent(inout) :: this
 		
  		character(len=*)	,intent(in)	:: chemical_mechanism_file_name
-		real(dkind)			,intent(in)	:: default_enhanced_efficiencies
+		real(dp)			,intent(in)	:: default_enhanced_efficiencies
 		character(len=*)	,intent(in)	:: E_act_units
 		
-		real(dkind) :: activation_energy_coefficient	
+		real(dp) :: activation_energy_coefficient	
 		
 		integer :: chemical_mechanism_data_file_unit
 		integer :: reaction_number
@@ -146,13 +146,13 @@ contains
 
 		this%reactions_type  = 0
 		this%chemical_coeffs = 0
-		this%E_act           = 0.0_dkind
-		this%A               = 0.0_dkind
-		this%beta            = 0.0_dkind
-		this%E_act_low       = 0.0_dkind
-		this%A_low           = 0.0_dkind
-		this%beta_low        = 0.0_dkind
-		this%Troe_coeffs     = 0.0_dkind
+		this%E_act           = 0.0_dp
+		this%A               = 0.0_dp
+		this%beta            = 0.0_dp
+		this%E_act_low       = 0.0_dp
+		this%A_low           = 0.0_dp
+		this%beta_low        = 0.0_dp
+		this%Troe_coeffs     = 0.0_dp
 		this%enhanced_efficiencies   = this%default_enhanced_efficiencies
 
 		call this%read_chemical_reactions_properties(chemical_mechanism_data_file_unit)
@@ -168,10 +168,10 @@ contains
 		end select
 
 		do reaction_number = 1,this%reactions_number
-			if(this%chemical_coeffs(1,reaction_number,1) == 2)	this%A		(reaction_number) = this%A		(reaction_number) * 1.0e-06_dkind		! Second order reaction 10^-6*[sm^3]-> [m^3]
-			if(this%chemical_coeffs(1,reaction_number,1) == 3)	this%A		(reaction_number) = this%A		(reaction_number) * 1.0e-12_dkind		! Third order reaction 10^-12*[sm^6]-> [m^6]
-			if(this%chemical_coeffs(1,reaction_number,1)+1 == 2)	this%A_low	(reaction_number) = this%A_low	(reaction_number) * 1.0e-06_dkind	
-			if(this%chemical_coeffs(1,reaction_number,1)+1 == 3)	this%A_low	(reaction_number) = this%A_low	(reaction_number) * 1.0e-12_dkind
+			if(this%chemical_coeffs(1,reaction_number,1) == 2)	this%A		(reaction_number) = this%A		(reaction_number) * 1.0e-06_dp		! Second order reaction 10^-6*[sm^3]-> [m^3]
+			if(this%chemical_coeffs(1,reaction_number,1) == 3)	this%A		(reaction_number) = this%A		(reaction_number) * 1.0e-12_dp		! Third order reaction 10^-12*[sm^6]-> [m^6]
+			if(this%chemical_coeffs(1,reaction_number,1)+1 == 2)	this%A_low	(reaction_number) = this%A_low	(reaction_number) * 1.0e-06_dp	
+			if(this%chemical_coeffs(1,reaction_number,1)+1 == 3)	this%A_low	(reaction_number) = this%A_low	(reaction_number) * 1.0e-12_dp
 			this%E_act		(reaction_number) = this%E_act		(reaction_number) * activation_energy_coefficient
 			this%E_act_low	(reaction_number) = this%E_act_low	(reaction_number) * activation_energy_coefficient
 		end do

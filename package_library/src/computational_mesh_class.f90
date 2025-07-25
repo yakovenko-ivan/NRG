@@ -15,11 +15,11 @@ module computational_mesh_class
 
 	type computational_mesh
 		private
-		real(dkind)	,dimension(3)		:: cell_edges_length
-		real(dkind)						:: cell_volume
-		real(dkind)	,dimension(3)		:: cell_surface_area
+		real(dp)	,dimension(3)		:: cell_edges_length
+		real(dp)						:: cell_volume
+		real(dp)	,dimension(3)		:: cell_surface_area
 
-		real(rkind)	,dimension(:,:,:,:)	,allocatable	,public	:: mesh
+		real(sp)	,dimension(:,:,:,:)	,allocatable	,public	:: mesh
 	contains
 
 		procedure	,private	:: generate_uniform_mesh
@@ -42,7 +42,7 @@ contains
 		integer					:: dimensions
 		integer	,dimension(3,2)	:: allocation_bounds
 		integer	,dimension(3)	:: cells_number, global_cells_number
-		real(dkind)	,dimension(:,:)	,allocatable	:: domain_lengths
+        real(dp) ,dimension(3,2) :: domain_lengths
 
 		integer	:: dim
 
@@ -53,14 +53,14 @@ contains
 
 		global_cells_number(1:dimensions)	= global_cells_number(1:dimensions) - 2
 
-		allocate(domain_lengths,source = domain%get_domain_lengths())
+        domain_lengths          = domain%get_domain_lengths()
 
 		allocate(constructor%mesh(	dimensions			, &
 									allocation_bounds(1,1):allocation_bounds(1,2)	, &
 									allocation_bounds(2,1):allocation_bounds(2,2)	, &
 									allocation_bounds(3,1):allocation_bounds(3,2)))
 
-		constructor%cell_volume	= 1.0_dkind
+		constructor%cell_volume	= 1.0_dp
 		do dim = 1,dimensions
 			constructor%cell_edges_length(dim)	= (domain_lengths(dim,2) - domain_lengths(dim,1)) / global_cells_number(dim)
 			constructor%cell_volume 			= constructor%cell_volume*constructor%cell_edges_length(dim)
@@ -80,13 +80,13 @@ contains
 		class(computational_mesh)	,intent(inout)	:: this
 		type(computational_domain)	,intent(in)		:: domain
 
-		real(dkind)	:: dimless_length
+		real(dp)	:: dimless_length
 		integer		:: i, j, k, dim
 
 		integer										:: dimensions
 		integer	,dimension(3,2)						:: loop_bounds
 		integer ,dimension(3)						:: decomposition_offset
-		real(dkind)	,dimension(:,:)	,allocatable	:: domain_lengths
+		real(dp)	,dimension(:,:)	,allocatable	:: domain_lengths
 
 		dimensions				= domain%get_domain_dimensions()
 		decomposition_offset	= domain%get_global_offset()
@@ -99,9 +99,9 @@ contains
 			do k = loop_bounds(3,1),loop_bounds(3,2)
 			do j = loop_bounds(2,1),loop_bounds(2,2)
 			do i = loop_bounds(1,1),loop_bounds(1,2)
-				dimless_length = real((i-1)*I_m(dim,1)+(j-1)*I_m(dim,2)+(k-1)*I_m(dim,3),dkind)
+				dimless_length = real((i-1)*I_m(dim,1)+(j-1)*I_m(dim,2)+(k-1)*I_m(dim,3),dp)
 
-				this%mesh(dim,i,j,k) = domain_lengths(dim,1) + (decomposition_offset(dim) + 0.5_dkind + dimless_length)*this%cell_edges_length(dim)
+				this%mesh(dim,i,j,k) = domain_lengths(dim,1) + (decomposition_offset(dim) + 0.5_dp + dimless_length)*this%cell_edges_length(dim)
 			end do
 			end do
 			end do
@@ -114,21 +114,21 @@ contains
 
 	pure function get_cell_volume(this)
 		class(computational_mesh)	,intent(in)	:: this
-		real(dkind)								:: get_cell_volume
+		real(dp)								:: get_cell_volume
 
 		get_cell_volume = this%cell_volume
 	end function	
 
 	pure function get_cell_edges_length(this)
 		class(computational_mesh)	,intent(in)		:: this
-		real(dkind)	,dimension(3)					:: get_cell_edges_length
+		real(dp)	,dimension(3)					:: get_cell_edges_length
 
 		get_cell_edges_length = this%cell_edges_length
 	end function	
 
 	pure function get_cell_surface_area(this)
 		class(computational_mesh)	,intent(in)		:: this
-		real(dkind)	,dimension(3)					:: get_cell_surface_area
+		real(dp)	,dimension(3)					:: get_cell_surface_area
 
 		get_cell_surface_area = this%cell_surface_area
 	end function		

@@ -19,8 +19,8 @@ module thermophysical_properties_class
 	type    :: thermophysical_properties
 	
 		character(len=30)								::	thermo_data_file_name, transport_data_file_name, molar_masses_data_file_name
-		real(dkind) ,dimension(:)       ,allocatable    ::  potential_well_depth, collision_diameter, molar_masses
-		real(dkind) ,dimension(:,:,:)   ,allocatable    ::  a_coeffs
+		real(dp) ,dimension(:)       ,allocatable    ::  potential_well_depth, collision_diameter, molar_masses
+		real(dp) ,dimension(:,:,:)   ,allocatable    ::  a_coeffs
 	contains
 		procedure	,private	:: read_properties
 		procedure	,private	:: write_properties
@@ -57,7 +57,7 @@ contains
 		
 		call constructor%set_properties(chemistry,thermo_data_file_name,transport_data_file_name,molar_masses_data_file_name)
 		
-		open(newunit = io_unit, file = thermophysical_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = thermophysical_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)	
 	end function
@@ -158,21 +158,21 @@ contains
 	
 	recursive pure function calculate_mixture_cp(this,temperature,species_concentrations)
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind)                             :: calculate_mixture_cp
-		real(dkind)                 ,intent(in) :: temperature
-		real(dkind) ,dimension(:)   ,intent(in) :: species_concentrations
-		real(dkind)                             :: specie_cp
+		real(dp)                             :: calculate_mixture_cp
+		real(dp)                 ,intent(in) :: temperature
+		real(dp) ,dimension(:)   ,intent(in) :: species_concentrations
+		real(dp)                             :: specie_cp
 		!!$OMP threadprivate (calculate_mixture_cp)
 
-		real(dkind) :: temp
+		real(dp) :: temp
 		integer :: species_number
 		integer :: i, specie_number
 
-		calculate_mixture_cp = 0.0_dkind
+		calculate_mixture_cp = 0.0_dp
  		species_number = size(species_concentrations)
 
 		temp = temperature
-		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+		if(temperature >= 4200.0_dp) temp = 4200.0_dp
 
 		do specie_number = 1,species_number
 			if(temp < 1000.0) then
@@ -194,21 +194,21 @@ contains
 
 	recursive pure function calculate_specie_cp(this,temperature,specie_number)
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind)             :: calculate_specie_cp
-		real(dkind) ,intent(in) :: temperature
+		real(dp)             :: calculate_specie_cp
+		real(dp) ,intent(in) :: temperature
 		integer     ,intent(in) :: specie_number
 		!!$OMP threadprivate (calculate_specie_cp)
 
-		real(dkind) :: temp
-		real(dkind) :: specie_cp
+		real(dp) :: temp
+		real(dp) :: specie_cp
 
 		integer :: i
 
-		specie_cp = 0.0_dkind
+		specie_cp = 0.0_dp
 		temp = temperature
-        if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+        if(temperature >= 4200.0_dp) temp = 4200.0_dp
 
-		if (temp < 1000.0_dkind) then
+		if (temp < 1000.0_dp) then
 			specie_cp = this%a_coeffs(5,1,specie_number)
 			do i = 4, 1, -1
 				specie_cp = specie_cp * temp
@@ -228,34 +228,34 @@ contains
 
 	recursive pure function calculate_mixture_cp_dT(this,temperature,species_concentrations)
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind)                             :: calculate_mixture_cp_dT
-		real(dkind)                 ,intent(in) :: temperature
-		real(dkind) ,dimension(:)   ,intent(in) :: species_concentrations
-		real(dkind)                             :: specie_cp_dT
+		real(dp)                             :: calculate_mixture_cp_dT
+		real(dp)                 ,intent(in) :: temperature
+		real(dp) ,dimension(:)   ,intent(in) :: species_concentrations
+		real(dp)                             :: specie_cp_dT
 		!!$OMP threadprivate (calculate_mixture_cp)
 
-		real(dkind) :: temp
+		real(dp) :: temp
 		integer :: species_number
 		integer :: i, specie_number
 
-		calculate_mixture_cp_dT = 0.0_dkind
+		calculate_mixture_cp_dT = 0.0_dp
  		species_number = size(species_concentrations)
 
 		temp = temperature
-			if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+			if(temperature >= 4200.0_dp) temp = 4200.0_dp
 
 		do specie_number = 1,species_number
 			if(temp < 1000.0) then
-				specie_cp_dT = 4.0_dkind * this%a_coeffs(5,1,specie_number)
+				specie_cp_dT = 4.0_dp * this%a_coeffs(5,1,specie_number)
 				do i = 4, 2, -1
 					specie_cp_dT = specie_cp_dT * temp
-					specie_cp_dT = specie_cp_dT + real(i-1,dkind)*this%a_coeffs(i,1,specie_number)
+					specie_cp_dT = specie_cp_dT + real(i-1,dp)*this%a_coeffs(i,1,specie_number)
 				end do
 			else
-				specie_cp_dT = 4.0_dkind * this%a_coeffs(5,2,specie_number)
+				specie_cp_dT = 4.0_dp * this%a_coeffs(5,2,specie_number)
 				do i = 4, 2, -1
 					specie_cp_dT = specie_cp_dT * temp
-					specie_cp_dT = specie_cp_dT + real(i-1,dkind)*this%a_coeffs(i,2,specie_number)
+					specie_cp_dT = specie_cp_dT + real(i-1,dp)*this%a_coeffs(i,2,specie_number)
 				end do
 			end if
 			calculate_mixture_cp_dT = calculate_mixture_cp_dT + specie_cp_dT * species_concentrations(specie_number)
@@ -265,31 +265,31 @@ contains
 	
 	recursive pure function calculate_specie_enthalpy(this,temperature, specie_number)
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind)             :: calculate_specie_enthalpy
-		real(dkind) ,intent(in) :: temperature
+		real(dp)             :: calculate_specie_enthalpy
+		real(dp) ,intent(in) :: temperature
 		integer     ,intent(in) :: specie_number
-		real(dkind)             :: specie_enthalpy
+		real(dp)             :: specie_enthalpy
 		!!$OMP threadprivate (calculate_specie_enthalpy)
 
-		real(dkind) :: temp
+		real(dp) :: temp
 		integer :: i
 
-		calculate_specie_enthalpy = 0.0_dkind
+		calculate_specie_enthalpy = 0.0_dp
 		temp = temperature
-		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+		if(temperature >= 4200.0_dp) temp = 4200.0_dp
 		
 		if(temp < 1000.0) then
-			specie_enthalpy = this%a_coeffs(5,1,specie_number) / 5.0_dkind
+			specie_enthalpy = this%a_coeffs(5,1,specie_number) / 5.0_dp
 			do i = 4, 1, -1
 				specie_enthalpy = specie_enthalpy * temp
-				specie_enthalpy = specie_enthalpy + this%a_coeffs(i,1,specie_number) / real(i,dkind)
+				specie_enthalpy = specie_enthalpy + this%a_coeffs(i,1,specie_number) / real(i,dp)
 			end do
 			specie_enthalpy = specie_enthalpy + this%a_coeffs(6,1,specie_number) / temp
 		else
-			specie_enthalpy = this%a_coeffs(5,2,specie_number) / 5.0_dkind 
+			specie_enthalpy = this%a_coeffs(5,2,specie_number) / 5.0_dp 
 			do i = 4, 1, -1
 				specie_enthalpy = specie_enthalpy * temp
-				specie_enthalpy = specie_enthalpy + this%a_coeffs(i,2,specie_number) / real(i,dkind)
+				specie_enthalpy = specie_enthalpy + this%a_coeffs(i,2,specie_number) / real(i,dp)
 			end do
 			specie_enthalpy = specie_enthalpy + this%a_coeffs(6,2,specie_number) / temp
 		end if
@@ -298,39 +298,39 @@ contains
 
 	recursive pure function calculate_mixture_enthalpy(this,temperature,species_concentrations)
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind) ,dimension(:)   ,intent(in) :: species_concentrations
-		real(dkind)             :: calculate_mixture_enthalpy
-		real(dkind) ,intent(in) :: temperature
+		real(dp) ,dimension(:)   ,intent(in) :: species_concentrations
+		real(dp)             :: calculate_mixture_enthalpy
+		real(dp) ,intent(in) :: temperature
 
-		real(dkind)             :: specie_enthalpy
+		real(dp)             :: specie_enthalpy
 		!!$OMP threadprivate (calculate_specie_enthalpy)
 
 		integer :: species_number
-		real(dkind) :: temp
+		real(dp) :: temp
 		integer :: i, specie_number
 
 		species_number = size(species_concentrations)
 		
-		calculate_mixture_enthalpy = 0.0_dkind
+		calculate_mixture_enthalpy = 0.0_dp
 		
 		temp = temperature
-		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+		if(temperature >= 4200.0_dp) temp = 4200.0_dp
 		
 		do specie_number = 1,species_number
-			specie_enthalpy = 0.0_dkind
+			specie_enthalpy = 0.0_dp
 
 			if(temp <= 1000.0) then
-				specie_enthalpy = this%a_coeffs(5,1,specie_number) / 5.0_dkind
+				specie_enthalpy = this%a_coeffs(5,1,specie_number) / 5.0_dp
 				do i = 4, 1, -1
 					specie_enthalpy = specie_enthalpy * temp
-					specie_enthalpy = specie_enthalpy + this%a_coeffs(i,1,specie_number) / real(i,dkind)
+					specie_enthalpy = specie_enthalpy + this%a_coeffs(i,1,specie_number) / real(i,dp)
 				end do
 				specie_enthalpy = specie_enthalpy + this%a_coeffs(6,1,specie_number) / temp
 			else
-				specie_enthalpy = this%a_coeffs(5,2,specie_number) / 5.0_dkind
+				specie_enthalpy = this%a_coeffs(5,2,specie_number) / 5.0_dp
 				do i = 4, 1, -1
 					specie_enthalpy = specie_enthalpy * temp
-					specie_enthalpy = specie_enthalpy + this%a_coeffs(i,2,specie_number) / real(i,dkind)
+					specie_enthalpy = specie_enthalpy + this%a_coeffs(i,2,specie_number) / real(i,dp)
 				end do
 				specie_enthalpy = specie_enthalpy + this%a_coeffs(6,2,specie_number) / temp
 			end if
@@ -342,39 +342,39 @@ contains
 	
 	recursive pure function calculate_mixture_energy(this,temperature,species_concentrations)
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind) ,dimension(:)   ,intent(in) :: species_concentrations
-		real(dkind)             :: calculate_mixture_energy
-		real(dkind) ,intent(in) :: temperature
+		real(dp) ,dimension(:)   ,intent(in) :: species_concentrations
+		real(dp)             :: calculate_mixture_energy
+		real(dp) ,intent(in) :: temperature
 
-		real(dkind)             :: specie_energy
+		real(dp)             :: specie_energy
 		!!$OMP threadprivate (calculate_specie_enthalpy)
 
 		integer :: species_number
-		real(dkind) :: temp
+		real(dp) :: temp
 		integer :: i, specie_number
 
 		species_number = size(species_concentrations)
 		
-		calculate_mixture_energy = 0.0_dkind
+		calculate_mixture_energy = 0.0_dp
 		
 		temp = temperature
-		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+		if(temperature >= 4200.0_dp) temp = 4200.0_dp
 		
 		do specie_number = 1,species_number
-			specie_energy = 0.0_dkind
+			specie_energy = 0.0_dp
 
 			if(temp <= 1000.0) then
-				specie_energy = this%a_coeffs(5,1,specie_number) / 5.0_dkind
+				specie_energy = this%a_coeffs(5,1,specie_number) / 5.0_dp
 				do i = 4, 1, -1
 					specie_energy = specie_energy * temp
-					specie_energy = specie_energy + this%a_coeffs(i,1,specie_number) / real(i,dkind)
+					specie_energy = specie_energy + this%a_coeffs(i,1,specie_number) / real(i,dp)
 				end do
 				specie_energy = specie_energy + this%a_coeffs(6,1,specie_number) / temp
 			else
-				specie_energy = this%a_coeffs(5,2,specie_number) / 5.0_dkind
+				specie_energy = this%a_coeffs(5,2,specie_number) / 5.0_dp
 				do i = 4, 1, -1
 					specie_energy = specie_energy * temp
-					specie_energy = specie_energy + this%a_coeffs(i,2,specie_number) / real(i,dkind)
+					specie_energy = specie_energy + this%a_coeffs(i,2,specie_number) / real(i,dp)
 				end do
 				specie_energy = specie_energy + this%a_coeffs(6,2,specie_number) / temp
 			end if
@@ -385,33 +385,33 @@ contains
 	end function	
 	
 	recursive pure function calculate_specie_entropy(this,temperature, specie_number)
-		real(dkind)             :: calculate_specie_entropy
+		real(dp)             :: calculate_specie_entropy
 
 		class(thermophysical_properties),   intent(in)  :: this
-		real(dkind) ,intent(in) :: temperature
+		real(dp) ,intent(in) :: temperature
 		integer     ,intent(in) :: specie_number
-		real(dkind)             :: specie_entropy
+		real(dp)             :: specie_entropy
 		!!$OMP threadprivate (calculate_specie_entropy)
 
-		real(dkind) :: temp
+		real(dp) :: temp
 		integer :: i
 
-		calculate_specie_entropy = 0.0_dkind
+		calculate_specie_entropy = 0.0_dp
 		temp = temperature
-		if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+		if(temperature >= 4200.0_dp) temp = 4200.0_dp
 
 		if(temp < 1000.0) then
-			specie_entropy = this%a_coeffs(5,1,specie_number) / 4.0_dkind
+			specie_entropy = this%a_coeffs(5,1,specie_number) / 4.0_dp
 			do i = 4, 2, -1
 				specie_entropy = specie_entropy * temp
-				specie_entropy = specie_entropy + this%a_coeffs(i,1,specie_number) / real(i-1,dkind)
+				specie_entropy = specie_entropy + this%a_coeffs(i,1,specie_number) / real(i-1,dp)
 			end do
 			specie_entropy = specie_entropy * temp + this%a_coeffs(7,1,specie_number) + this%a_coeffs(1,1,specie_number) * log(temp)
 		else
-			specie_entropy = this%a_coeffs(5,2,specie_number) / 4.0_dkind
+			specie_entropy = this%a_coeffs(5,2,specie_number) / 4.0_dp
 			do i = 4, 2, -1
 				specie_entropy = specie_entropy * temp
-				specie_entropy = specie_entropy + this%a_coeffs(i,2,specie_number) / real(i-1,dkind)
+				specie_entropy = specie_entropy + this%a_coeffs(i,2,specie_number) / real(i-1,dp)
 			end do
 			specie_entropy = specie_entropy * temp + this%a_coeffs(7,2,specie_number) + this%a_coeffs(1,2,specie_number) * log(temp)
 		end if
@@ -420,44 +420,44 @@ contains
 
 	!recursive pure function calculate_temperature(this,temperature,E_full,mol_mix_conc,cv,concentrations)
  !
-	!	real(dkind)             :: calculate_temperature
+	!	real(dp)             :: calculate_temperature
  !
 	!	class(thermophysical_properties)    ,intent(in) :: this
-	!	real(dkind)                         ,intent(in) :: temperature, E_full, mol_mix_conc, cv
-	!	real(dkind) ,dimension(:)           ,intent(in) :: concentrations
+	!	real(dp)                         ,intent(in) :: temperature, E_full, mol_mix_conc, cv
+	!	real(dp) ,dimension(:)           ,intent(in) :: concentrations
 	!	!!$OMP threadprivate (calculate_temperature)
  !
-	!	real(dkind) :: temp		
-	!	real(dkind) :: specie_dcpdT_T, dcpdT_T
+	!	real(dp) :: temp		
+	!	real(dp) :: specie_dcpdT_T, dcpdT_T
 	!	integer :: species_number
 	!	integer :: i, specie_number
  !
-	!	calculate_temperature   = 0.0_dkind
-	!	dcpdT_T                 = 0.0_dkind
+	!	calculate_temperature   = 0.0_dp
+	!	dcpdT_T                 = 0.0_dp
  !
 	!	species_number          = size(concentrations)
  !       temp = temperature
- !       if(temperature >= 4200.0_rkind) temp = 4200.0_rkind
+ !       if(temperature >= 4200.0_sp) temp = 4200.0_sp
  !
 	!	do specie_number = 1,species_number
 	!		if(temp < 1000.0) then
-	!			specie_dcpdT_T = this%a_coeffs(5,1,specie_number) * 5.0_dkind
+	!			specie_dcpdT_T = this%a_coeffs(5,1,specie_number) * 5.0_dp
 	!			do i = 4, 1, -1
 	!				specie_dcpdT_T = specie_dcpdT_T * temp
-	!				specie_dcpdT_T = specie_dcpdT_T + this%a_coeffs(i,1,specie_number) * real(i,dkind)
+	!				specie_dcpdT_T = specie_dcpdT_T + this%a_coeffs(i,1,specie_number) * real(i,dp)
 	!			end do
 	!		else
-	!			specie_dcpdT_T = this%a_coeffs(5,2,specie_number) * 5.0_dkind
+	!			specie_dcpdT_T = this%a_coeffs(5,2,specie_number) * 5.0_dp
 	!			do i=4,1,-1
 	!				specie_dcpdT_T = specie_dcpdT_T * temp
-	!				specie_dcpdT_T = specie_dcpdT_T + this%a_coeffs(i,2,specie_number) * real(i,dkind)
+	!				specie_dcpdT_T = specie_dcpdT_T + this%a_coeffs(i,2,specie_number) * real(i,dp)
 	!			continue
 	!			end do
 	!		end if
 	!		dcpdT_T = dcpdT_T + specie_dcpdT_T * concentrations(specie_number)
 	!	end do
  !
-	!	if (temperature >= 4200.0_rkind) then
+	!	if (temperature >= 4200.0_sp) then
  !           calculate_temperature = E_full / cv
  !       else
 	!		calculate_temperature = temp + (E_full - cv * temp) / (dcpdT_T - r_gase_J * mol_mix_conc)
@@ -467,24 +467,24 @@ contains
 
 	function calculate_temperature(this,temperature,e_i,concentrations)
 
-		real(dkind)										:: calculate_temperature
+		real(dp)										:: calculate_temperature
 
 		class(thermophysical_properties)    ,intent(in) :: this
-		real(dkind)                         ,intent(in) :: temperature, e_i
-		real(dkind) ,dimension(:)           ,intent(in) :: concentrations
+		real(dp)                         ,intent(in) :: temperature, e_i
+		real(dp) ,dimension(:)           ,intent(in) :: concentrations
 		!!$OMP threadprivate (calculate_temperature)
 
-		real(dkind)		:: temp		
+		real(dp)		:: temp		
 		integer			:: species_number
 		integer			:: i, specie_number
 		integer			:: iter, max_iter
-		real(dkind)		:: eps, residual, old_residual, cp, cv, e_int, h_int, h_const, e_const
-		real(rkind)		:: var
+		real(dp)		:: eps, residual, old_residual, cp, cv, e_int, h_int, h_const, e_const
+		real(sp)		:: var
         
         
 		species_number          = size(concentrations)
         temp = temperature
-        if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+        if(temperature >= 4200.0_dp) temp = 4200.0_dp
 
         max_iter	= 1000
 		eps			= 1e-08
@@ -513,22 +513,22 @@ contains
     
 	recursive pure function calculate_temperature_Pconst(this,temperature,h_s,concentrations)
 
-		real(dkind)             :: calculate_temperature_Pconst
+		real(dp)             :: calculate_temperature_Pconst
 
 		class(thermophysical_properties)    ,intent(in) :: this
-		real(dkind)                         ,intent(in) :: temperature, h_s
-		real(dkind) ,dimension(:)           ,intent(in) :: concentrations
+		real(dp)                         ,intent(in) :: temperature, h_s
+		real(dp) ,dimension(:)           ,intent(in) :: concentrations
 		!!$OMP threadprivate (calculate_temperature)
 
-		real(dkind) :: temp		
+		real(dp) :: temp		
 		integer :: species_number
 		integer :: i, specie_number
 		integer	:: iter, max_iter
-		real(dkind)	:: eps, residual
+		real(dp)	:: eps, residual
 
 		species_number          = size(concentrations)
         temp = temperature
-        if(temperature >= 4200.0_dkind) temp = 4200.0_dkind
+        if(temperature >= 4200.0_dp) temp = 4200.0_dp
 
 		calculate_temperature_Pconst   = temp
 		
@@ -546,7 +546,7 @@ contains
 		character(len=10)   ,intent(in)     :: specie_name
 		integer             ,intent(in)     :: thermo_data_file_unit
 
-		real(dkind)         ,dimension(7,2) :: a_coeffs
+		real(dp)         ,dimension(7,2) :: a_coeffs
 
 
 		integer             :: i,i1,i2, indx, prev, beginning, string_len, string_end, spec_num, num
@@ -554,7 +554,7 @@ contains
 
 		integer             :: error
 
-		a_coeffs = 0.0_dkind
+		a_coeffs = 0.0_dp
 
 		do
 			read(thermo_data_file_unit,*,iostat = error)    string
@@ -635,12 +635,12 @@ contains
 
 		character(len=100)  :: string
 
-		real(dkind) :: molar_mass
+		real(dp) :: molar_mass
 
-		real(dkind) :: molar_mass_in_file
+		real(dp) :: molar_mass_in_file
 		integer     :: error
 
-		molar_mass = 0.0_dkind
+		molar_mass = 0.0_dp
 
 		do
 			read(molar_masses_data_file_unit,*,iostat = error) string, molar_mass_in_file
@@ -660,18 +660,18 @@ contains
 	end function
 
 	subroutine get_transport_properties(potential_well_depth, collision_diameter, specie_name, transport_data_file_unit)
-		real(dkind)         ,intent(inout)  :: potential_well_depth, collision_diameter
+		real(dp)         ,intent(inout)  :: potential_well_depth, collision_diameter
 		character(len=10)   ,intent(in)     :: specie_name
 		integer             ,intent(in)     :: transport_data_file_unit
 
 		character(len=100)  :: string
-		real(dkind) :: potential_well_depth_in_file, collision_diameter_in_file
+		real(dp) :: potential_well_depth_in_file, collision_diameter_in_file
 
 		integer     :: dummy
 		integer     :: error
 
-		potential_well_depth    = 0.0_dkind
-		collision_diameter      = 0.0_dkind
+		potential_well_depth    = 0.0_dp
+		collision_diameter      = 0.0_dp
 
 		read(transport_data_file_unit,*,iostat=error) string
 
@@ -690,7 +690,7 @@ contains
 			end if
 		end do
 
-		collision_diameter = collision_diameter * 0.1_dkind		! Angstrem -> nanometer
+		collision_diameter = collision_diameter * 0.1_dp		! Angstrem -> nanometer
 
 		rewind(transport_data_file_unit)
 
@@ -700,7 +700,7 @@ contains
 		class(thermophysical_properties)    ,intent(in) 	:: this
 		type(field_vector_cons)				,intent(inout)	:: Y
 
-		real(dkind)	:: mass_summ
+		real(dp)	:: mass_summ
 
 		integer	,dimension(3,2)		:: loop
 		integer						:: species_number
@@ -716,7 +716,7 @@ contains
 		do k = loop(3,1),loop(3,2)
 		do j = loop(2,1),loop(2,2)
 		do i = loop(1,1),loop(1,2)
-			mass_summ = 0.0_dkind
+			mass_summ = 0.0_dp
 			do specie_number = 1,species_number
 				mass_summ = mass_summ + Y%pr(specie_number)%cells(i,j,k) * this%molar_masses(specie_number)
 			end do
@@ -732,16 +732,16 @@ contains
 	
 	subroutine change_cell_units_mole_to_dimless(this,Y)
 		class(thermophysical_properties)    ,intent(in) 	:: this
-		real(dkind)	,dimension(:)			,intent(inout)	:: Y
+		real(dp)	,dimension(:)			,intent(inout)	:: Y
 
-		real(dkind)	:: mass_summ
+		real(dp)	:: mass_summ
 
 		integer						:: species_number
 		integer						:: specie_number
 
 		species_number	= size(Y)
 
-		mass_summ = 0.0_dkind
+		mass_summ = 0.0_dp
 		do specie_number = 1,species_number
 			mass_summ = mass_summ + Y(specie_number) * this%molar_masses(specie_number)
 		end do

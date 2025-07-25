@@ -16,13 +16,13 @@ module post_processor_class
 	type post_processor
 		private
 		type(post_processor_operation)			,dimension(:)	,allocatable	:: post_processor_operations
-		real(dkind)								,dimension(:)	,allocatable	:: values
+		real(dp)								,dimension(:)	,allocatable	:: values
 		type(computational_domain)			:: domain
 		type(boundary_conditions_pointer)	:: boundaries
 		character(len=30)		:: post_processor_output_file
-		real(rkind)             :: save_time
+		real(sp)             :: save_time
 		character(len=20)       :: save_time_units
-		real(rkind)             :: save_time_coefficient
+		real(sp)             :: save_time_coefficient
 		character(len=10)       :: save_time_units_abbreviation
 		integer					:: operations_number
 		integer					:: operation_counter
@@ -53,7 +53,7 @@ contains
 		type(data_manager)	,intent(in)	:: manager
 		character(len=*)	,intent(in)	:: post_processor_output_file
 		integer				,intent(in)	:: operations_number
-		real(dkind)			,intent(in)	:: save_time
+		real(dp)			,intent(in)	:: save_time
 		character(len=*)	,intent(in)	:: save_time_units
 		character(len=*)	,intent(in)	:: post_processor_data_file_name
 
@@ -62,7 +62,7 @@ contains
 		
 		call constructor%set_properties(manager,post_processor_output_file,operations_number,save_time,save_time_units,output_counter)
 
-		open(newunit = io_unit, file = post_processor_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = post_processor_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)	
 	end function
@@ -92,7 +92,7 @@ contains
 		
 		character(len=30)	:: post_processor_output_file
 		integer				:: operations_number
-		real(dkind)			:: save_time
+		real(dp)			:: save_time
 		character(len=20)	:: save_time_units
 
 		integer				:: output_counter
@@ -115,7 +115,7 @@ contains
 		
 		character(len=30)	:: post_processor_output_file
 		integer				:: operations_number
-		real(dkind)			:: save_time
+		real(dp)			:: save_time
 		character(len=20)	:: save_time_units
 		
 		namelist /pproc_parameters/ post_processor_output_file, operations_number, save_time, save_time_units
@@ -133,7 +133,7 @@ contains
 		character(len=30)		,intent(in)	:: post_processor_output_file
 		type(data_manager)		,intent(in)	:: manager
 		integer					,intent(in)	:: operations_number
-		real(dkind)				,intent(in)	:: save_time
+		real(dp)				,intent(in)	:: save_time
 		character(len=*)		,intent(in)	:: save_time_units	
 		integer					,intent(in)	:: output_counter
 		
@@ -155,13 +155,13 @@ contains
 		select case(this%save_time_units)
 			 case('milliseconds')
 				  this%save_time_units_abbreviation = 'ms'
-				  this%save_time_coefficient        = 1e+03_dkind
+				  this%save_time_coefficient        = 1e+03_dp
 			 case('microseconds')
 				  this%save_time_units_abbreviation = 'us'
-				  this%save_time_coefficient        = 1e+06_dkind
+				  this%save_time_coefficient        = 1e+06_dp
 			 case('nanoseconds')
 				  this%save_time_units_abbreviation = 'ns'
-				  this%save_time_coefficient        = 1e+09_dkind
+				  this%save_time_coefficient        = 1e+09_dp
 				  
 		end select	
 	end subroutine
@@ -230,7 +230,7 @@ contains
 			stop
 		end if
 		
-		open(newunit = io_unit, file = post_processor_data_file_name, status = 'old', form = 'formatted', position = 'append')
+		open(newunit = io_unit, file = post_processor_data_file_name, status = 'old', form = 'formatted', position = 'append', delim = 'quote')
 		
 		this%post_processor_operations(this%operation_counter)	= post_processor_operation_c	(manager					= manager			, &
 																								field_name					= field_name		, &
@@ -244,7 +244,7 @@ contains
 	
 	subroutine process_data(this,time)
 		class(post_processor)		,intent(inout)		:: this
-		real(dkind)					,intent(in)			:: time	
+		real(dp)					,intent(in)			:: time	
 		integer						:: output_file_unit		
 		integer	,dimension(3)		:: leading_point_indexes, point_indexes
 		

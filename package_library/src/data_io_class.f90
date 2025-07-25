@@ -37,20 +37,20 @@ module data_io_class
 		character(len=35)			,dimension(:)		,allocatable	:: scalar_flow_io_fields_names
 		character(len=35)			,dimension(:)		,allocatable	:: vector_flow_io_fields_names		
 
-		real(dkind)					,dimension(:,:,:)	,allocatable	:: io_cons_buffer
-		real(dkind)					,dimension(:,:,:)	,allocatable	:: io_flow_buffer
+		real(dp)					,dimension(:,:,:)	,allocatable	:: io_cons_buffer
+		real(dp)					,dimension(:,:,:)	,allocatable	:: io_flow_buffer
 
 		integer	,dimension(3,2)	:: io_cons_loop, io_cons_loop_max, io_flow_loop, io_flow_loop_max
 		integer	,dimension(3,2)	:: io_cons_buffer_bounds
 		integer	,dimension(3)	:: io_cons_buffer_size
 		
-		real(dkind)			:: check_time
+		real(dp)			:: check_time
 		character(len=20)	:: check_time_units		
 		character(len=10)   :: check_time_units_abbreviation
-		real(rkind)         :: check_time_coefficient		
+		real(sp)         :: check_time_coefficient		
 		
-		real(dkind)			:: start_time
-		real(dkind)			:: output_time
+		real(dp)			:: start_time
+		real(dp)			:: output_time
 		
 		integer				:: load_counter
 		character(len=20)	:: data_output_folder
@@ -113,9 +113,9 @@ contains
 
 	type(data_io)	function constructor(manager,check_time,check_time_units,output_time,data_output_folder,io_fields_names)
 		type(data_manager)					,intent(in)	:: manager
-		real(dkind)							,intent(in)	:: check_time
+		real(dp)							,intent(in)	:: check_time
 		character(len=*)					,intent(in)	:: check_time_units
-		real(dkind)							,intent(in)	:: output_time
+		real(dp)							,intent(in)	:: output_time
 		character(len=*)					,intent(in)	:: data_output_folder
 		character(len=35)	,dimension(:)	,intent(in)	,optional	:: io_fields_names
 					
@@ -139,7 +139,7 @@ contains
 	
 	type(data_io) function constructor_file(manager,calculation_time)
 		type(data_manager)			,intent(in)		:: manager
-		real(dkind)					,intent(out)	:: calculation_time
+		real(dp)					,intent(out)	:: calculation_time
 		
 		integer	:: io_unit
 		
@@ -153,13 +153,13 @@ contains
 		class(data_io)		,intent(inout)	:: this
 		type(data_manager)	,intent(in)		:: manager
 		integer				,intent(in)		:: data_io_file_unit
-		real(dkind)			,intent(out)	:: calculation_time
+		real(dp)			,intent(out)	:: calculation_time
 		character(len=35)	,dimension(:)	,allocatable	:: io_fields_names
 		
 		integer				:: io_fields_number
-		real(dkind)			:: check_time
+		real(dp)			:: check_time
 		character(len=20)	:: check_time_units
-		real(dkind)			:: output_time
+		real(dp)			:: output_time
 		character(len=20)	:: data_output_folder		
 		integer				:: load_counter	
 		integer				:: ierr
@@ -174,7 +174,7 @@ contains
 		read(unit = data_io_file_unit, nml = data_io_load_counter, iostat = ierr)
 		if(ierr /= 0) then
 			load_counter = 0
-			calculation_time = 0.0_dkind
+			calculation_time = 0.0_dp
 		end if
 		
 		call this%set_properties(manager,check_time,check_time_units,output_time,data_output_folder,load_counter,io_fields_names)	
@@ -188,12 +188,12 @@ contains
 		character(len=35)	,dimension(:)	,allocatable	:: io_fields_names
 		
 		integer				:: io_fields_number
-		real(dkind)			:: check_time
+		real(dp)			:: check_time
 		character(len=20)	:: check_time_units		
-		real(rkind)			:: output_time
+		real(sp)			:: output_time
 		character(len=20)	:: data_output_folder		
 		integer				:: load_counter	
-		real(dkind)			:: calculation_time = 0.0_dkind
+		real(dp)			:: calculation_time = 0.0_dp
 		
 		namelist /data_io_parameters/ io_fields_number, check_time,check_time_units, output_time, data_output_folder	
 		namelist /io_fields/ io_fields_names
@@ -215,9 +215,9 @@ contains
 	subroutine set_properties(this,manager,check_time,check_time_units,output_time,data_output_folder,load_counter,io_fields_names)
 		class(data_io)		,intent(inout)	:: this
 		type(data_manager)	,intent(in)		:: manager
-		real(dkind)			,intent(in)		:: check_time
+		real(dp)			,intent(in)		:: check_time
 		character(len=*)	,intent(in)		:: check_time_units
-		real(dkind)			,intent(in)		:: output_time
+		real(dp)			,intent(in)		:: output_time
 		character(len=*)	,intent(in)		:: data_output_folder		
 		integer				,intent(in)		:: load_counter	
 
@@ -267,13 +267,13 @@ contains
 		select case(this%check_time_units)
 			 case('milliseconds')
 				  this%check_time_units_abbreviation = 'ms'
-				  this%check_time_coefficient        = 1e+03_dkind
+				  this%check_time_coefficient        = 1e+03_dp
 			 case('microseconds')
 				  this%check_time_units_abbreviation = 'us'
-				  this%check_time_coefficient        = 1e+06_dkind
+				  this%check_time_coefficient        = 1e+06_dp
 			 case('nanoseconds')
 				  this%check_time_units_abbreviation = 'ns'
-				  this%check_time_coefficient        = 1e+09_dkind
+				  this%check_time_coefficient        = 1e+09_dp
 		end select									
 									
 		if(present(io_fields_names)) then
@@ -443,7 +443,7 @@ contains
 	
 	subroutine write_load_counter(this,calculation_time)
 		class(data_io)	,intent(in)	:: this
-		real(dkind)		,intent(in)	:: calculation_time
+		real(dp)		,intent(in)	:: calculation_time
 		
 		integer	:: load_counter
 		
@@ -466,7 +466,7 @@ contains
 	
 	subroutine output_all_data(this,time,stop_flag,make_output)
 		class(data_io)	,intent(inout)				:: this
-		real(dkind)		,intent(in)					:: time
+		real(dp)		,intent(in)					:: time
 		logical			,intent(in)		,optional	:: make_output		
 		logical			,intent(out)				:: stop_flag
 
@@ -475,7 +475,7 @@ contains
 		character(len=100)	:: system_command
 		integer		,save	:: check_counter = 0
 		logical		:: make_flag
-		real(dkind)	:: current_time, output_time
+		real(dp)	:: current_time, output_time
 		integer		:: c(8)
 		integer		:: day,h,m,s,t
 	
@@ -504,6 +504,7 @@ contains
 			current_time = ((day*24+h)*60+m)
 			
 			if (processor_rank == 0) then
+                print *, 'Current time = ', day, h, m, s, t
 				print *, 'Time left = ', this%start_time + this%output_time - current_time, ' min'
 			end if
 
@@ -592,7 +593,7 @@ contains
 #else
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 #endif
-			open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+			open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 			this%io_cons_buffer = this%scalar_io_fields(fields_counter)%s_ptr%cells(:,:,:)
 			write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
 															j = utter_loop(2,1),utter_loop(2,2)), &
@@ -611,7 +612,7 @@ contains
 #else
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%vector_io_fields_names(fields_counter)) , trim(data_io_data_format)
 #endif
-			open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+			open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 			vector_projections_number = this%vector_io_fields(fields_counter)%v_ptr%get_projections_number()
 			do dim = 1, vector_projections_number
 				this%io_cons_buffer = this%vector_io_fields(fields_counter)%v_ptr%pr(dim)%cells(:,:,:)
@@ -633,7 +634,7 @@ contains
 #else	
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%tensor_io_fields_names(fields_counter)) , trim(data_io_data_format)
 #endif
-			open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+			open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 			tensor_projections_number = this%tensor_io_fields(fields_counter)%t_ptr%get_projections_number()
 			do dim1 = 1, tensor_projections_number(1)
 			do dim2 = 1, tensor_projections_number(2)
@@ -658,7 +659,7 @@ contains
 #else			
 				write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_flow_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 #endif				
-				open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+				open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 				
 				do dim = 1,dimensions
 					this%io_flow_buffer = this%scalar_flow_io_fields(fields_counter)%s_ptr%cells(dim,:,:,:)
@@ -683,7 +684,7 @@ contains
 #else			
 				write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%vector_flow_io_fields_names(fields_counter)) , trim(data_io_data_format)
 #endif					
-				open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+				open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 
 				vector_projections_number = this%vector_flow_io_fields(fields_counter)%v_ptr%get_projections_number_flow()
 				
@@ -735,7 +736,7 @@ contains
 #else	
 		write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , 'mesh' , trim(data_io_data_format)
 #endif		
-		open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+		open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 		do dim = 1, dimensions
 			this%io_cons_buffer = this%mesh%mesh_ptr%mesh(dim,:,:,:)
 			write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
@@ -774,7 +775,7 @@ contains
 #else
 		write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , 'bc' , trim(data_io_data_format)
 #endif		
-		open(newunit = io_unit, file = file_name, status = 'replace', form = 'binary')
+		open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 		this%io_cons_buffer = this%boundaries%bc_ptr%bc_markers(:,:,:)
 		write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
 														j = utter_loop(2,1),utter_loop(2,2)), &
@@ -831,7 +832,7 @@ contains
 		
 		do fields_counter = 1,size(this%scalar_io_fields)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_io_fields_names(fields_counter)) , trim(data_io_data_format)		
-			open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+			open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 			read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2))	, &
 															j = utter_loop(2,1),utter_loop(2,2)), &
 															k = utter_loop(3,1),utter_loop(3,2))
@@ -841,7 +842,7 @@ contains
 		
 		do fields_counter = 1,size(this%vector_io_fields)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%vector_io_fields_names(fields_counter)) , trim(data_io_data_format)
-			open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+			open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 			vector_projections_number = this%vector_io_fields(fields_counter)%v_ptr%get_projections_number()
 			do dim = 1, vector_projections_number
 				read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
@@ -854,7 +855,7 @@ contains
 	
 		do fields_counter = 1,size(this%tensor_io_fields)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%tensor_io_fields_names(fields_counter)) , trim(data_io_data_format)
-			open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+			open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 			tensor_projections_number = this%tensor_io_fields(fields_counter)%t_ptr%get_projections_number()
 			do dim1 = 1, tensor_projections_number(1)
 			do dim2 = 1, tensor_projections_number(2)
@@ -870,7 +871,7 @@ contains
 		if (allocated(this%scalar_flow_io_fields)) then
 			do fields_counter = 1,size(this%scalar_flow_io_fields)	
 				write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_flow_io_fields_names(fields_counter)) , trim(data_io_data_format)		
-				open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+				open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 				
 				do dim = 1,dimensions
 					read(io_unit) (((this%io_flow_buffer(i,j,k),	i = inner_loop(1,1),inner_loop(1,2)), &
@@ -885,7 +886,7 @@ contains
 		if (allocated(this%vector_flow_io_fields)) then
 			do fields_counter = 1,size(this%vector_flow_io_fields)
 				write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%vector_flow_io_fields_names(fields_counter)) , trim(data_io_data_format)
-				open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+				open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 
 				vector_projections_number = this%vector_flow_io_fields(fields_counter)%v_ptr%get_projections_number_flow()
 				
@@ -919,7 +920,7 @@ contains
 		utter_loop	= this%domain%get_local_utter_cells_bounds()
 
 		write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , 'mesh' , trim(data_io_data_format)
-		open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+		open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 		do dim = 1, dimensions
 			read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
 															j = utter_loop(2,1),utter_loop(2,2)), &
@@ -942,7 +943,7 @@ contains
 		utter_loop	= this%domain%get_local_utter_cells_bounds()
 
 		write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , 'bc' , trim(data_io_data_format)
-		open(newunit = io_unit, file = file_name, status = 'old', form = 'binary')
+		open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 		read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
 														j = utter_loop(2,1),utter_loop(2,2)), &
 														k = utter_loop(3,1),utter_loop(3,2))
@@ -1018,7 +1019,7 @@ subroutine input_fields_mpi(this)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 			call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_io_unit, error) 
 
-			this%io_cons_buffer	= 0.0_dkind
+			this%io_cons_buffer	= 0.0_dp
 			do k = this%io_cons_loop_max(3,1),this%io_cons_loop_max(3,2) 
 			do j = this%io_cons_loop_max(2,1),this%io_cons_loop_max(2,2) 
 
@@ -1048,7 +1049,7 @@ subroutine input_fields_mpi(this)
 			vector_projections_number = this%vector_io_fields(fields_counter)%v_ptr%get_projections_number()
 
 			do dim = 1, vector_projections_number
-				this%io_cons_buffer = 0.0_dkind
+				this%io_cons_buffer = 0.0_dp
 				do k = this%io_cons_loop_max(3,1),this%io_cons_loop_max(3,2) 
 				do j = this%io_cons_loop_max(2,1),this%io_cons_loop_max(2,2) 
 
@@ -1083,7 +1084,7 @@ subroutine input_fields_mpi(this)
 
 			do dim1 = 1, tensor_projections_number(1)
 			do dim2 = 1, tensor_projections_number(2)
-				this%io_cons_buffer = 0.0_dkind
+				this%io_cons_buffer = 0.0_dp
 				do k = this%io_cons_loop_max(3,1),this%io_cons_loop_max(3,2) 
 				do j = this%io_cons_loop_max(2,1),this%io_cons_loop_max(2,2) 
 
@@ -1127,7 +1128,7 @@ subroutine input_fields_mpi(this)
 
 				do dim = 1,dimensions
 
-					this%io_flow_buffer = 0.0_dkind 
+					this%io_flow_buffer = 0.0_dp 
 					do k = inner_loop_max(3,1),inner_loop_max(3,2) 
 					do j = inner_loop_max(2,1),inner_loop_max(2,2) 
 
@@ -1166,7 +1167,7 @@ subroutine input_fields_mpi(this)
 				
 				do dim1 = 1, vector_projections_number
 				do dim2 = 1, dimensions
-					this%io_flow_buffer = 0.0_dkind 
+					this%io_flow_buffer = 0.0_dp 
 					do k = inner_loop_max(3,1),inner_loop_max(3,2) 
 					do j = inner_loop_max(2,1),inner_loop_max(2,2) 
 
@@ -1231,7 +1232,7 @@ subroutine input_fields_mpi(this)
 		call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_io_unit, error) 
 
 		do dim = 1, dimensions
-			this%io_cons_buffer = 0.0_dkind
+			this%io_cons_buffer = 0.0_dp
 			do k = this%io_cons_loop_max(3,1),this%io_cons_loop_max(3,2) 
 			do j = this%io_cons_loop_max(2,1),this%io_cons_loop_max(2,2) 
 
@@ -1290,7 +1291,7 @@ subroutine input_fields_mpi(this)
 		call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_io_unit, error) 
 
 		do dim = 1, dimensions
-			this%io_cons_buffer = 0.0_dkind
+			this%io_cons_buffer = 0.0_dp
 			do k = this%io_cons_loop_max(3,1),this%io_cons_loop_max(3,2) 
 			do j = this%io_cons_loop_max(2,1),this%io_cons_loop_max(2,2) 
 

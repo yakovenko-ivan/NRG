@@ -11,6 +11,8 @@ module data_manager_class
 	use field_scalar_class
 	use field_vector_class
 
+    use benchmarking
+ 
 	implicit none
 
 	private
@@ -32,6 +34,8 @@ module data_manager_class
 		type(field_scalar_flow_pointer)	,dimension(100)	:: scalar_field_flow_pointers
 		type(field_vector_flow_pointer)	,dimension(100)	:: vector_field_flow_pointers
 		
+        type(timer_pointer)             ,dimension(100) :: timers
+ 
 		integer		:: number_of_cons_scalar_fields
 		integer		:: number_of_cons_vector_fields
 		integer		:: number_of_cons_tensor_fields
@@ -39,6 +43,8 @@ module data_manager_class
 		integer		:: number_of_flow_scalar_fields
 		integer		:: number_of_flow_vector_fields
 		
+        integer     :: number_of_timers
+        
 	contains
 	
 		procedure	:: create_boundary_conditions
@@ -46,6 +52,7 @@ module data_manager_class
 		procedure	:: create_scalar_field
 		procedure	:: create_vector_field
 		procedure	:: create_tensor_field
+        procedure   :: create_timer
 
 		! Getters
 		procedure	:: get_cons_field_pointer_by_name
@@ -59,6 +66,7 @@ module data_manager_class
 		procedure	:: get_number_of_flow_scalar_fields
 		procedure	:: get_number_of_flow_vector_fields
 
+        procedure   :: print_all_clocks
 	end type data_manager
 
 	interface data_manager_c
@@ -72,8 +80,6 @@ contains
 		type(mpi_communications)		,intent(in)				:: mpi_support
 		type(chemical_properties)		,intent(in)	,target		:: chemistry
 		type(thermophysical_properties)	,intent(in)	,target		:: thermophysics
-
-		integer	:: field_number
 
 		constructor%domain						= domain
 		constructor%mpi_communications			= mpi_support
@@ -177,6 +183,51 @@ contains
 		this%tensor_field_cons_pointers(this%number_of_cons_tensor_fields)%t_ptr => field_instance
 	end subroutine
 
+    subroutine create_timer(this,timer_instance,description,short_description)
+        class(data_manager)         ,intent(inout)  :: this
+        type(timer)     ,target     ,intent(inout)  :: timer_instance
+        character(len=*)            ,intent(in)       :: description
+        character(len=*)            ,intent(in)       :: short_description
+        
+        this%number_of_timers = this%number_of_timers + 1
+        
+        timer_instance = timer(description, short_description)
+        
+        this%timers(this%number_of_timers)%timer_ptr => timer_instance
+    end subroutine
+    
+    subroutine print_all_clocks(this,num_threads,lun,new_io)
+        class(data_manager) ,intent(inout)          :: this
+        
+        integer(i4)         ,intent(in)             :: num_threads
+        integer(i4)         ,intent(in),optional    :: lun
+        logical             ,intent(in),optional    :: new_io
+        
+        integer              :: timer
+        character(len=1000)  :: header 
+        
+        header = ''
+        if(present(lun)) then
+            if (present(new_io)) then
+                if(new_io) then
+                    header = 'num_threads'
+                    do timer = 1, this%number_of_timers
+                        header = trim(header) // '   ' // this%timers(timer)%timer_ptr%get_header()                        
+                    end do
+                    write(lun,'(A)') trim(header)
+                end if
+            end if
+            write(lun,'(I2.2)',advance='no') num_threads
+        end if
+        
+        do timer = 1, this%number_of_timers
+            if(present(lun)) then
+                call this%timers(timer)%timer_ptr%print(lun)
+            else
+                call this%timers(timer)%timer_ptr%print()
+            end if
+        end do
+    end subroutine
 ! ************** Getters ***************
 
 	subroutine get_cons_field_pointer_by_name(this,scal_ptr,vect_ptr,tens_ptr,field_name)
@@ -233,8 +284,6 @@ contains
 		character(len=*)			,intent(in)		:: field_type
 		integer						,intent(in)		:: field_number
 
-		integer	:: field_counter, dim, dim1, dim2
-
 		scal_ptr%s_ptr => NULL()
 		vect_ptr%v_ptr => NULL()
 		tens_ptr%t_ptr => NULL()
@@ -255,7 +304,7 @@ contains
 		class(data_manager)			,intent(in)		:: this
 		character(len=*)			,intent(in)		:: field_name
 
-		integer	:: field_counter, dim, dim1, dim2
+		integer	:: field_counter, dim
 
 		scal_ptr%s_ptr => NULL()
 		vect_ptr%v_ptr => NULL()
@@ -286,8 +335,6 @@ contains
 		class(data_manager)			,intent(in)		:: this
 		character(len=*)			,intent(in)		:: field_type
 		integer						,intent(in)		:: field_number
-
-		integer	:: field_counter, dim, dim1, dim2
 
 		scal_ptr%s_ptr => NULL()
 		vect_ptr%v_ptr => NULL()

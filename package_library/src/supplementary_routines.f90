@@ -7,18 +7,18 @@ module supplementary_routines
     contains 
    
     function lagrange_poly(x,x_0,y,dx)
-        real(dkind),    dimension(:)	,intent(in)		:: y
-		real(dkind),    intent(in)						:: x_0   
-        real(dkind),    intent(in)						:: x
-        real(dkind),    intent(in)						:: dx
+        real(dp),    dimension(:)	,intent(in)		:: y
+		real(dp),    intent(in)						:: x_0   
+        real(dp),    intent(in)						:: x
+        real(dp),    intent(in)						:: dx
         
-        real(dkind)		:: lagrange_poly
-        real(dkind)		:: k
+        real(dp)		:: lagrange_poly
+        real(dp)		:: k
         
-        real(dkind)	:: a, b, c, d, e, f, g
-        real(dkind),    dimension(:), allocatable :: P
-        real(dkind),    dimension(:), allocatable :: x_arr
-        real(dkind) :: factorial, l
+        real(dp)	:: a, b, c, d, e, f, g
+        real(dp),    dimension(:), allocatable :: P
+        real(dp),    dimension(:), allocatable :: x_arr
+        real(dp) :: factorial, l
         integer     :: i, j, order
         
         allocate(P(0:size(y)-1))
@@ -66,18 +66,18 @@ module supplementary_routines
     end function
 
     function dlagrange_poly(x,x_0,y,dx)
-        real(dkind),    dimension(0:6)	,intent(in)		:: y
-		real(dkind),    intent(in)						:: x_0   
-        real(dkind),    intent(in)						:: x
-        real(dkind),    intent(in)						:: dx
+        real(dp),    dimension(0:6)	,intent(in)		:: y
+		real(dp),    intent(in)						:: x_0   
+        real(dp),    intent(in)						:: x
+        real(dp),    intent(in)						:: dx
         
-        real(dkind)		:: dlagrange_poly
-        real(dkind)		:: k
+        real(dp)		:: dlagrange_poly
+        real(dp)		:: k
         
-        real(dkind)	:: a, b, c, d, e, f, g
-        real(dkind),    dimension(0:6) :: P
-        real(dkind),    dimension(0:6) :: x_arr, summ
-        real(dkind) :: factorial, prod
+        real(dp)	:: a, b, c, d, e, f, g
+        real(dp),    dimension(0:6) :: P
+        real(dp),    dimension(0:6) :: x_arr, summ
+        real(dp) :: factorial, prod
         integer     :: i, j, l, order
         
         P = y
@@ -92,7 +92,7 @@ module supplementary_routines
 
         do i = 0, order-1
             do j = 0, order-1
-                prod = 1.0_dkind
+                prod = 1.0_dp
                 do l = 0, order-1
                     if ((l /= i).and.(l /= j)) then
                         prod = prod * (x - x_arr(l))
@@ -107,7 +107,7 @@ module supplementary_routines
         do i = 0, order-1
             P(i) = summ(i)
             factorial   = factorial*(i+1)
-            prod = 1.0_dkind
+            prod = 1.0_dp
             do j = 0, order-1
                 if(j /= i) then
                     P(i) = P(i) / (x_arr(i) - x_arr(j))
@@ -132,18 +132,18 @@ module supplementary_routines
     
     
     function d2lagrange_poly(x,x_0,y,dx)
-        real(dkind),    dimension(0:6)	,intent(in)		:: y
-		real(dkind),    intent(in)						:: x_0   
-        real(dkind),    intent(in)						:: x
-        real(dkind),    intent(in)						:: dx
+        real(dp),    dimension(0:6)	,intent(in)		:: y
+		real(dp),    intent(in)						:: x_0   
+        real(dp),    intent(in)						:: x
+        real(dp),    intent(in)						:: dx
         
-        real(dkind)		:: d2lagrange_poly
-        real(dkind)		:: k
+        real(dp)		:: d2lagrange_poly
+        real(dp)		:: k
         
-        real(dkind)	:: a, b, c, d, e, f, g
-        real(dkind),    dimension(0:6) :: P
-        real(dkind),    dimension(0:6) :: x_arr, summ2
-        real(dkind) :: factorial, prod, summ1
+        real(dp)	:: a, b, c, d, e, f, g
+        real(dp),    dimension(0:6) :: P
+        real(dp),    dimension(0:6) :: x_arr, summ2
+        real(dp) :: factorial, prod, summ1
         integer     :: i, j, l, m,  order
         
         P = y
@@ -158,22 +158,22 @@ module supplementary_routines
         end do
 
         do i = 0, order-1
-            summ2(i) = 0.0_dkind
+            summ2(i) = 0.0_dp
             do j = 0, order-1
-                summ1 = 0.0_dkind
+                summ1 = 0.0_dp
                 do l = 0, order-1
-                    prod = 1.0_dkind
+                    prod = 1.0_dp
                     do m = 0, order-1 
                         if ((m /= i).and.(m /= j).and.(m /= l)) then
                             prod = prod * (x - x_arr(m)) / (x_arr(i) - x_arr(m))
                         end if
                     end do
                     if ((l /= i).and.(l /= j)) then
-                        summ1 = summ1 + 1.0_dkind / (x_arr(i) - x_arr(l)) * prod
+                        summ1 = summ1 + 1.0_dp / (x_arr(i) - x_arr(l)) * prod
                     end if     
                 end do
                 if ( j /= i ) then
-                    summ2(i) = summ2(i)  + 1.0_dkind / (x_arr(i) - x_arr(j)) * summ1
+                    summ2(i) = summ2(i)  + 1.0_dp / (x_arr(i) - x_arr(j)) * summ1
                 end if
             end do
         end do        
@@ -198,15 +198,15 @@ module supplementary_routines
     end function    
     
     function five_point_poly(x,x_0,y,dx)
-        real(dkind),    dimension(0:4)	,intent(in)		:: y
-		real(dkind),    intent(in)						:: x_0   
-        real(dkind),    intent(in)						:: x
-        real(dkind),    intent(in)						:: dx
+        real(dp),    dimension(0:4)	,intent(in)		:: y
+		real(dp),    intent(in)						:: x_0   
+        real(dp),    intent(in)						:: x
+        real(dp),    intent(in)						:: dx
         
-        real(dkind)		:: five_point_poly
-        real(dkind)		:: k
+        real(dp)		:: five_point_poly
+        real(dp)		:: k
         
-        real(dkind)	:: a, b, c, d, e
+        real(dp)	:: a, b, c, d, e
         
 		a =  (1.0/24.0)*(y(0)-4.0*y(1)+6.0*y(2)-4.0*y(3)+y(4))/dx**4
 		b = -(1.0/12.0)*(dx*y(0)-2.0*dx*y(1)+2.0*dx*y(3)-dx*y(4)+2.0*x_0*y(0)-8.0*x_0*y(1)+12.0*x_0*y(2)-8.0*x_0*y(3)+2.0*x_0*y(4))/dx**4
@@ -221,14 +221,14 @@ module supplementary_routines
     end function
         
 	function dfive_point_poly(x,x_0,y,dx)
-        real(dkind),    dimension(0:4)	,intent(in)		:: y
-		real(dkind),    intent(in)						:: x_0   
-        real(dkind),    intent(in)						:: x
-        real(dkind),    intent(in)						:: dx
+        real(dp),    dimension(0:4)	,intent(in)		:: y
+		real(dp),    intent(in)						:: x_0   
+        real(dp),    intent(in)						:: x
+        real(dp),    intent(in)						:: dx
         
-        real(dkind)		:: dfive_point_poly
+        real(dp)		:: dfive_point_poly
         
-        real(dkind)	:: a, b, c, d, e
+        real(dp)	:: a, b, c, d, e
         
 		a =  (1.0/24.0)*(y(0)-4.0*y(1)+6*y(2)-4.0*y(3)+y(4))/dx**4
 		b = -(1.0/12.0)*(dx*y(0)-2.0*dx*y(1)+2.0*dx*y(3)-dx*y(4)+2.0*x_0*y(0)-8.0*x_0*y(1)+12.0*x_0*y(2)-8.0*x_0*y(3)+2.0*x_0*y(4))/dx**4
@@ -240,14 +240,14 @@ module supplementary_routines
     end function   
     
     function Newton(x_0,y,dx,tol)
-        real(dkind),    dimension(0:6)	        		:: y
-		real(dkind),    intent(in)						:: x_0   
-        real(dkind),    intent(in)						:: dx
-        real(dkind),	intent(in)	                    :: tol
+        real(dp),    dimension(0:6)	        		:: y
+		real(dp),    intent(in)						:: x_0   
+        real(dp),    intent(in)						:: dx
+        real(dp),	intent(in)	                    :: tol
         
-		real(dkind)		:: Newton
+		real(dp)		:: Newton
         
-        real(dkind)		:: f, df, x, xn
+        real(dp)		:: f, df, x, xn
         integer			:: n
         
         xn = x_0

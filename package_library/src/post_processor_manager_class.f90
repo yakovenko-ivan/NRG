@@ -50,7 +50,7 @@ contains
 		
 		call constructor%set_properties(manager,number_post_processors)
 		
-		open(newunit = io_unit, file = post_processor_manager_data_file_name, status = 'replace', form = 'formatted')
+		open(newunit = io_unit, file = post_processor_manager_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
 		close(io_unit)	
 	end function
@@ -151,7 +151,7 @@ contains
 		class(post_processor_manager)	,intent(inout)	:: this
 		type(data_manager)				,intent(in)	:: manager
 		integer							,intent(in)	:: operations_number
-		real(dkind)						,intent(in)	:: save_time
+		real(dp)						,intent(in)	:: save_time
 		character(len=*)				,intent(in)	:: save_time_units
 		character(len=*)				,intent(in)	:: post_processor_name
 		
@@ -202,7 +202,7 @@ contains
 	
 	subroutine process_data(this,time,stop_flag)
 		class(post_processor_manager)	,intent(inout)	:: this
-		real(dkind)						,intent(in)		:: time
+		real(dp)						,intent(in)		:: time
 		logical							,intent(in)		:: stop_flag
 		integer	:: number_post_processors
 		logical	:: file_exists

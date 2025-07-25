@@ -97,7 +97,7 @@ contains
 		
 		namelist /pproc_operation/ field_name, operation_type, operation_area, operation_area_distance, grad_projection
 		
-		field_name					= "'" // trim(this%field_name) // "'"
+        field_name                  = trim(this%field_name)
 		operation_type				= this%operation_type
 		operation_area				= this%operation_area
 		operation_area_distance		= this%operation_area_distance
@@ -178,17 +178,17 @@ contains
 	
 		class(post_processor_operation)		,intent(in)		:: this
 		type(boundary_conditions_pointer)	,intent(in)		:: bc_ptr
-		real(dkind)							,intent(out)	:: value
+		real(dp)							,intent(out)	:: value
 		integer		,dimension(3)			,intent(out)	:: point_indexes
 		
 		
 		integer		,dimension(:)	,allocatable	,save	:: point_indexes_array
-		real(dkind)	,dimension(:)	,allocatable	,save	:: values_array
+		real(dp)	,dimension(:)	,allocatable	,save	:: values_array
 		
-		real(dkind)					:: interm_value(1)
+		real(dp)					:: interm_value(1)
 		integer						:: interm_point_indexes(3)
 		
-		real(dkind)					:: min_value, max_value
+		real(dp)					:: min_value, max_value
 		
 		integer		,dimension(3)	:: transducer_cell
 		integer		,dimension(3,2)	:: global_inner_cells_bounds
@@ -233,7 +233,7 @@ contains
 						interm_value(1) = this%operation_field_scal%s_ptr%cells(transducer_cell(1),transducer_cell(2),transducer_cell(3))
 					else
 						interm_point_indexes	= (/0,0,0/)
-						interm_value(1)			= 0.0_dkind
+						interm_value(1)			= 0.0_dp
 					end if
 				case('max_grad')
 					call this%operation_field_scal%s_ptr%get_field_max_grad(bc_ptr,this%operation_area,interm_value(1),this%grad_projection,interm_point_indexes)
@@ -244,7 +244,7 @@ contains
 					!	call this%operation_field_scal%s_ptr%get_field_max_grad(bc_ptr,local_operation_area,interm_value(1),this%grad_projection,interm_point_indexes)
 					!else
 					!	interm_point_indexes	= (/0,0,0/)
-					!	interm_value(1)			= 0.0_dkind
+					!	interm_value(1)			= 0.0_dp
 					!end if
 				case('min_grad')
 					call this%operation_field_scal%s_ptr%get_field_min_grad(bc_ptr,this%operation_area,interm_value(1),this%grad_projection,interm_point_indexes)
@@ -257,7 +257,7 @@ contains
 						interm_point_indexes	= (/0,0,0/)
 					else
 						interm_point_indexes	= (/0,0,0/)
-						interm_value(1)			= 0.0_dkind
+						interm_value(1)			= 0.0_dp
 					end if					
 				case('mean')
 					call this%operation_field_scal%s_ptr%get_field_mean(bc_ptr,this%operation_area,interm_value(1))
@@ -334,7 +334,7 @@ contains
 					end do						
 					
 				case('sum')
-					value = 0.0_dkind
+					value = 0.0_dp
 					do proc = 0, processor_number - 1
 						value			= value + values_array(proc+1)
 						point_indexes	= (/0,0,0/)
@@ -342,7 +342,7 @@ contains
 			end select
 		else
 			point_indexes	= (/0,0,0/)
-			value			= 0.0_dkind	
+			value			= 0.0_dp	
 		end if
 
 	end subroutine

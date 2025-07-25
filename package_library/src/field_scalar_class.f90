@@ -16,7 +16,7 @@ module field_scalar_class
 	end type field_scalar
 
 	type, extends(field_scalar)	:: field_scalar_cons
-		real(dkind)		,dimension(:,:,:)	,allocatable	:: cells
+		real(dp)		,dimension(:,:,:)	,allocatable	:: cells
 		integer												:: dimensions
 	contains
 
@@ -30,7 +30,7 @@ module field_scalar_class
 	end type
 	
 	type, extends(field_scalar)	:: field_scalar_flow
-		real(dkind)		,dimension(:,:,:,:)	,allocatable	:: cells
+		real(dp)		,dimension(:,:,:,:)	,allocatable	:: cells
 	end type
 
 	interface field_scalar_flow_c
@@ -72,7 +72,7 @@ contains
 											allocation_bounds(2,1):allocation_bounds(2,2)	, &
 											allocation_bounds(3,1):allocation_bounds(3,2)))
 
-		constructor_cons%cells		= 0.0_dkind
+		constructor_cons%cells		= 0.0_dp
 		constructor_cons%dimensions	= dimensions	
 	end function
 
@@ -94,7 +94,7 @@ contains
 											allocation_bounds(2,1):allocation_bounds(2,2)	, &
 											allocation_bounds(3,1):allocation_bounds(3,2)))
 
-		constructor_flow%cells		= 0.0_dkind
+		constructor_flow%cells		= 0.0_dp
 
 	end function	
 	
@@ -102,7 +102,7 @@ contains
 		class(field_scalar_cons)			,intent(in)					:: this
 		type(boundary_conditions_pointer)	,intent(in)					:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)		,optional	:: bound
-		real(dkind)							,intent(out)				:: max_value
+		real(dp)							,intent(out)				:: max_value
 		integer	,dimension(3)				,intent(out)	,optional	:: max_indexes
 		
 		integer	,dimension(3,2)	:: bound_sl
@@ -148,7 +148,7 @@ contains
 		class(field_scalar_cons)			,intent(in)					:: this
 		type(boundary_conditions_pointer)	,intent(in)					:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)		,optional	:: bound
-		real(dkind)							,intent(out)				:: min_value
+		real(dp)							,intent(out)				:: min_value
 		integer	,dimension(3)				,intent(out)	,optional	:: min_indexes
 		integer	,dimension(3,2)	:: bound_sl
 
@@ -186,9 +186,9 @@ contains
 		class(field_scalar_cons)			,intent(in)			:: this
 		type(boundary_conditions_pointer)	,intent(in)			:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)			:: bound
-		real(dkind)							,intent(out)		:: field_mean_value
+		real(dp)							,intent(out)		:: field_mean_value
 		
-		real(dkind)				:: mean_value
+		real(dp)				:: mean_value
 		integer	,dimension(3,2)	:: bound_sl
 
 		integer		:: i,j,k, dim, cells_number
@@ -200,7 +200,7 @@ contains
 
 		!$omp parallel default(none)  private(i,j,k) , &
 		!$omp& shared(this,bc_ptr,bound_sl,mean_value,cells_number)
-			mean_value = 0.0_dkind
+			mean_value = 0.0_dp
 			cells_number = 0	
 		!$omp do collapse(3) schedule(static) reduction(+:mean_value,cells_number)
 
@@ -225,18 +225,18 @@ contains
 		class(field_scalar_cons)			,intent(in)		:: this
 		type(boundary_conditions_pointer)	,intent(in)		:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)		:: bound
-		real(dkind)							,intent(out)	:: max_grad_value
+		real(dp)							,intent(out)	:: max_grad_value
 		integer	,dimension(3)				,intent(out)	:: max_grad_indexes		
 		integer								,intent(in)		,optional	:: grad_proj
 
 		integer	,dimension(3,2)	:: bound_sl
 
-		real(dkind)	:: grad, field_u, field_l, max_grad_interm
+		real(dp)	:: grad, field_u, field_l, max_grad_interm
 		integer		:: i,j,k, dim
 
-		max_grad_value	= 0.0_dkind
-		max_grad_interm = 0.0_dkind
-		grad			= 0.0_dkind
+		max_grad_value	= 0.0_dp
+		max_grad_interm = 0.0_dp
+		grad			= 0.0_dp
 
 		bound_sl(this%dimensions:,:) = 1
 		
@@ -309,18 +309,18 @@ contains
 		class(field_scalar_cons)			,intent(in)					:: this
 		type(boundary_conditions_pointer)	,intent(in)					:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)					:: bound
-		real(dkind)							,intent(out)				:: min_grad_value
+		real(dp)							,intent(out)				:: min_grad_value
 		integer	,dimension(3)				,intent(out)				:: min_grad_indexes		
 		integer								,intent(in)		,optional	:: grad_proj		
 
 		integer	,dimension(3,2)	:: bound_sl
 
-		real(dkind)	:: grad, field_u, field_l, min_grad_interm
+		real(dp)	:: grad, field_u, field_l, min_grad_interm
 		integer		:: i,j,k, dim
 
-		min_grad_value		= 0.0_dkind
-		min_grad_interm		= 0.0_dkind
-		grad				= 0.0_dkind
+		min_grad_value		= 0.0_dp
+		min_grad_interm		= 0.0_dp
+		grad				= 0.0_dp
 
 		bound_sl(this%dimensions:,:) = 1
 		
@@ -393,12 +393,12 @@ contains
 		class(field_scalar_cons)			,intent(in)		:: this
 		type(boundary_conditions_pointer)	,intent(in)		:: bc_ptr
 		integer	,dimension(3,2)				,intent(in)		:: bound
-		real(dkind)							,intent(out)	:: sum_value
+		real(dp)							,intent(out)	:: sum_value
 		integer	,dimension(3,2)	:: bound_sl
 
 		integer		:: i,j,k, dim
 
-		sum_value = 0.0_dkind
+		sum_value = 0.0_dp
 
 		bound_sl(this%dimensions:,:) = 1
 		
