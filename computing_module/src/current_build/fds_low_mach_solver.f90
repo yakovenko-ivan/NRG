@@ -4333,13 +4333,18 @@ contains
 		character(len=20)		:: boundary_type_name
 		
 		integer	:: dimensions
-		real(dp)	:: factor
+		integer	:: factor
 		integer	:: plus, sign, bound_number
-		integer	:: i,j,k,dim,dim1,dim2
+		integer	:: i,j,k,n,dim,dim1,dim2
 		integer	:: ilb, irb, ilt, irt, jlb, jrb, jlt, jrt
+        integer	:: ilbr, ilbf, irbr, irbf, iltr, iltf, irtr, irtf
+        integer	:: jlbr, jlbf, jrbr, jrbf, jltr, jltf, jrtr, jrtf
         integer	:: lb, rb, lt, rt, ind
-        real(dp),	dimension(4)	:: coef
-        integer,		dimension(2,4)	:: indexes
+
+		integer										:: neighbours
+        integer,        dimension(:,:),	allocatable	:: neighbours_indexes
+        integer,        dimension(:),	allocatable	:: neighbours_coeffs
+        integer										:: resid
 		
 		cons_utter_loop	= this%domain%get_local_utter_cells_bounds()	
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
@@ -4350,6 +4355,9 @@ contains
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+
+		neighbours = 2**dimensions
+        allocate(neighbours_indexes(neighbours,dimensions), neighbours_coeffs(neighbours))
         
 		factor		= 2**mesh_iter
 		
@@ -4569,12 +4577,24 @@ contains
 				
                 if (sub_bc(mesh_iter+1)%cells(i,j,k) == 0) then
                 
+				!** Piecewise linear restriction (CR)  
 					if (dimensions == 1) then
 						sub_F(mesh_iter+1)%cells(i,j,k) = 0.5_dp*(sub_R(mesh_iter)%cells(offset(1),offset(2),offset(3)) + sub_R(mesh_iter)%cells(offset(1)+1,offset(2),offset(3)))
 					end if				
 
 					if (dimensions == 2) then
 						sub_F(mesh_iter+1)%cells(i,j,k) = 0.25_dp * (sub_R(mesh_iter)%cells(offset(1),offset(2),offset(3)) + sub_R(mesh_iter)%cells(offset(1)+1,offset(2),offset(3)) + sub_R(mesh_iter)%cells(offset(1),offset(2)+1,offset(3)) + sub_R(mesh_iter)%cells(offset(1)+1,offset(2)+1,offset(3)))
+                    end if
+
+                    if (dimensions == 3) then
+                    	sub_F(mesh_iter+1)%cells(i,j,k) = 0.0625_dp * (	sub_R(mesh_iter)%cells(offset(1),offset(2),offset(3))	+ &
+																		sub_R(mesh_iter)%cells(offset(1)+1,offset(2),offset(3)) + &
+																		sub_R(mesh_iter)%cells(offset(1),offset(2)+1,offset(3)) + &
+																		sub_R(mesh_iter)%cells(offset(1),offset(2),offset(3)+1) + &
+																		sub_R(mesh_iter)%cells(offset(1)+1,offset(2)+1,offset(3))	+ &
+																		sub_R(mesh_iter)%cells(offset(1)+1,offset(2),offset(3)+1)	+ &
+																		sub_R(mesh_iter)%cells(offset(1),offset(2)+1,offset(3)+1)	+ &
+																		sub_R(mesh_iter)%cells(offset(1)+1,offset(2)+1,offset(3)+1))
 					end if
 
                 	select case(coordinate_system)
@@ -4634,7 +4654,7 @@ contains
                 sub_bc			=> this%sub_bc				, &
                 sub_mesh		=> this%sub_mesh)
 
-			!$omp parallel default(shared)  private(i,j,k,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs,ilb, irb, ilt, irt, jlb, jrb, jlt, jrt, lb, rb, lt, rt, coef, indexes, ind) !,			&
+			!$omp parallel default(shared)  private(i,j,k,n,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs,neighbours_indexes,neighbours_coeffs,resid) !,			&
 			!!$omp& firstprivate(this)
             !!$omp& shared(a_norm,beta,factor,nu_2,mesh_iter,coordinate_system,					&
 			!!$omp& cons_inner_loop,cons_utter_loop,subgrid_cons_inner_loop,subgrid_cons_utter_loop,subgrid_cons_inner_loop_higher,dimensions,cell_size,converged,predictor,time_step,farfield_velocity_array,poisson_iteration)
@@ -4644,139 +4664,139 @@ contains
 			do j = subgrid_cons_inner_loop(2,1),subgrid_cons_inner_loop(2,2)
 			do i = subgrid_cons_inner_loop(1,1),subgrid_cons_inner_loop(1,2)
 
-				if (dimensions == 1) then
+				!if (dimensions == 1) then
+				!
+				!	ilb = int(i/2)
+				!	irb = int(i/2)+1
+				!	
+				!	if (mod(i,2) == 0) then
+				!		sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.25_dp*(3.0_dp*sub_E(mesh_iter+1)%cells(ilb,j,k) + sub_E(mesh_iter+1)%cells(irb,j,k))  
+				!	end if			
+				!	if (mod(i,2) /= 0) then
+				!		sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.25_dp*(sub_E(mesh_iter+1)%cells(ilb,j,k) + 3.0_dp*sub_E(mesh_iter+1)%cells(irb,j,k))  
+				!	end if	
+				!end if				
+				!
+				!if (dimensions == 2) then
+				!
+				!	ilb = int(i/2)
+				!	jlb = int(j/2)
+				!		
+				!	irb = int(i/2)+1
+				!	jrb = int(j/2)
+				!		
+				!	ilt = int(i/2)
+				!	jlt = int(j/2)+1
+				!		
+				!	irt = int(i/2)+1
+				!	jrt = int(j/2)+1
+    !
+    !                sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)
+    !                
+    !                if ((mod(i,2) == 0).and.(mod(j,2) /= 0)) then
+    !                    lt = 2
+    !                    lb = 1
+    !                    rt = 1
+    !                    rb = 0
+    !                end if
+    !                
+    !                if ((mod(i,2) /= 0).and.(mod(j,2) == 0)) then
+    !                    lt = 0
+    !                    lb = 1
+    !                    rt = 1
+    !                    rb = 2
+    !                end if
+    !                             
+    !                if ((mod(i,2) == 0).and.(mod(j,2) == 0)) then
+    !                    lt = 1
+    !                    lb = 2
+    !                    rt = 0
+    !                    rb = 1
+    !                end if
+    !                
+    !                if ((mod(i,2) /= 0).and.(mod(j,2) /= 0)) then
+    !                    lt = 1
+    !                    lb = 0
+    !                    rt = 2
+    !                    rb = 1
+    !                end if 
+    !                
+    !                coef	= (/lt, lb, rt, rb/)
+    !                indexes = reshape((/ilt, jlt, ilb, jlb, irt, jrt, irb, jrb/), shape(indexes))
+    !                
+    !                do ind = 1, 4
+				!		bound_number	= sub_bc(mesh_iter+1)%cells(indexes(1,ind),indexes(2,ind),k)
+				!		if (( bound_number /= 0 ).and.(abs(coef(ind)) > 1.0e-05)) then
+				!			coef(ind) = 0
+				!			boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+				!			select case(boundary_type_name)
+				!			case('wall')
+				!				coef(maxloc(coef)) = coef(maxloc(coef)) + 1	!# Neumann
+				!			case('outlet')
+				!				coef(maxloc(coef)) = coef(maxloc(coef)) - 1	!# Dirichlet
+				!			end select
+    !                    end if
+    !                    
+    !                end do
+    !                
+    !                coef = coef * 0.25_dp
+    !       
+    !                do ind = 1, 4
+    !                    sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) 	+ coef(ind) * sub_E(mesh_iter+1)%cells(indexes(1,ind),indexes(2,ind),k)
+    !                end do    
+				!end if				
 				
-					ilb = int(i/2)
-					irb = int(i/2)+1
-					
-					if (mod(i,2) == 0) then
-						sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.25_dp*(3.0_dp*sub_E(mesh_iter+1)%cells(ilb,j,k) + sub_E(mesh_iter+1)%cells(irb,j,k))  
-					end if			
-					if (mod(i,2) /= 0) then
-						sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.25_dp*(sub_E(mesh_iter+1)%cells(ilb,j,k) + 3.0_dp*sub_E(mesh_iter+1)%cells(irb,j,k))  
-					end if	
-				end if				
-				
-				if (dimensions == 2) then
-				
-					ilb = int(i/2)
-					jlb = int(j/2)
-						
-					irb = int(i/2)+1
-					jrb = int(j/2)
-						
-					ilt = int(i/2)
-					jlt = int(j/2)+1
-						
-					irt = int(i/2)+1
-					jrt = int(j/2)+1
-
-                ! Injection
-                    
-                    
-                    
-				! Bilinear
-					!if ((mod(i,2) == 0).and.(mod(j,2) /= 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.0625_dp * (9.0_dp*sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(ilb,jlb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(irt,jrt,k)) 
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!end if
-					!if ((mod(i,2) /= 0).and.(mod(j,2) == 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.0625_dp * (9.0_dp*sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(ilb,jlb,k)) 
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(irt,jrt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!end if
-					!if ((mod(i,2) == 0).and.(mod(j,2) == 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.0625_dp * (9.0_dp*sub_E(mesh_iter+1)%cells(ilb,jlb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (sub_E(mesh_iter+1)%cells(irt,jrt,k))
-					!end if			
-					!if ((mod(i,2) /= 0).and.(mod(j,2) /= 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.0625_dp * (9.0_dp*sub_E(mesh_iter+1)%cells(irt,jrt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (3.0_dp*sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) + 0.0625_dp * (sub_E(mesh_iter+1)%cells(ilb,jlb,k))
-					!end if	
-
-				! Kwak
-					!if ((mod(i,2) == 0).and.(mod(j,2) /= 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) 		+ 0.25_dp * (2.0_dp*sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(ilb,jlb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(irt,jrt,k)) 
-					!end if
-					!if ((mod(i,2) /= 0).and.(mod(j,2) == 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) =  sub_E(mesh_iter)%cells(i,j,k)		+ 0.25_dp * (2.0_dp*sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(ilb,jlb,k)) 
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(irt,jrt,k))
-					!end if
-					!if ((mod(i,2) == 0).and.(mod(j,2) == 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)		+ 0.25_dp * (2.0_dp*sub_E(mesh_iter+1)%cells(ilb,jlb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!end if			
-					!if ((mod(i,2) /= 0).and.(mod(j,2) /= 0)) then
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)		+ 0.25_dp *(2.0_dp*sub_E(mesh_iter+1)%cells(irt,jrt,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(irb,jrb,k))
-					!	sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k)	+ 0.25_dp * (sub_E(mesh_iter+1)%cells(ilt,jlt,k))
-					!end if	
+!				if (dimensions == 3) then
                     
                     sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)
                     
-                    if ((mod(i,2) == 0).and.(mod(j,2) /= 0)) then
-                        lt = 2
-                        lb = 1
-                        rt = 1
-                        rb = 0
-                    end if
-                    
-                    if ((mod(i,2) /= 0).and.(mod(j,2) == 0)) then
-                        lt = 0
-                        lb = 1
-                        rt = 1
-                        rb = 2
-                    end if
-                                 
-                    if ((mod(i,2) == 0).and.(mod(j,2) == 0)) then
-                        lt = 1
-                        lb = 2
-                        rt = 0
-                        rb = 1
-                    end if
-                    
-                    if ((mod(i,2) /= 0).and.(mod(j,2) /= 0)) then
-                        lt = 1
-                        lb = 0
-                        rt = 2
-                        rb = 1
-                    end if 
-                    
-                    coef	= (/lt, lb, rt, rb/)
-                    indexes = reshape((/ilt, jlt, ilb, jlb, irt, jrt, irb, jrb/), shape(indexes))
-                    
-                    do ind = 1, 4
-						bound_number	= sub_bc(mesh_iter+1)%cells(indexes(1,ind),indexes(2,ind),k)
-						if (( bound_number /= 0 ).and.(abs(coef(ind)) > 1.0e-05)) then
-							coef(ind) = 0
-							boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-							select case(boundary_type_name)
-							case('wall')
-								coef(maxloc(coef)) = coef(maxloc(coef)) + 1	!# Neumann
-							case('outlet')
-								coef(maxloc(coef)) = coef(maxloc(coef)) - 1	!# Dirichlet
-							end select
-                        end if
-                        
+                    !** translate neighbours into binary number 1 -> (0,0,0); 2 -> (0,0,1); etc
+                    neighbours_indexes	= 0
+                    neighbours_coeffs    = 0 
+                    do n = 1, neighbours
+                        resid = n - 1
+						do dim = dimensions, 1, -1
+							neighbours_indexes(n,dim) = int(resid / 2**(dim-1)) + int(i/2)*I_m(dim,1) + int(j/2)*I_m(dim,2) + int(k/2)*I_m(dim,3)
+                            resid = mod(resid, 2**(dim-1))
+                            
+                            if (( ((i/2) + mod(i,2))*I_m(dim,1) + ((j/2) + mod(j,2))*I_m(dim,2) + ((k/2) + mod(k,2))*I_m(dim,3)) == neighbours_indexes(n,dim)) then
+								neighbours_coeffs(n) = neighbours_coeffs(n) + 1
+                            end if
+						end do
                     end do
                     
-                    coef = coef * 0.25_dp
+                    do n = 1, neighbours
+                        !** Piecewise linear prolongation (CP)
+                        if (neighbours_coeffs(n) == dimensions) then
+                            neighbours_coeffs(n) = 1
+                        else
+                            neighbours_coeffs(n) = 0
+                        end if
+                    end do
+                    
+                    continue
+
+                    do n = 1, neighbours
+                        sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) 	+ neighbours_coeffs(n) * sub_E(mesh_iter+1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
+                    end do
+                    
+      !              do n = 1, neighbours
+						!
+      !                  
+      !                  bound_number	= sub_bc(mesh_iter+1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
+						!if (( bound_number /= 0 ).and.(abs(coef_2d(ind)) > 1.0e-05)) then
+						!	coef_2d(ind) = 0
+						!	boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+						!	select case(boundary_type_name)
+						!	case('wall')
+						!		coef_2d(maxloc(coef_2d)) = coef_2d(maxloc(coef_2d)) + 1	!# Neumann
+						!	case('outlet')
+						!		coef_2d(maxloc(coef_2d)) = coef_2d(maxloc(coef_2d)) - 1	!# Dirichlet
+						!	end select
+      !                  end if
+      !              end do
            
-                    do ind = 1, 4
-                        sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) 	+ coef(ind) * sub_E(mesh_iter+1)%cells(indexes(1,ind),indexes(2,ind),k)
-                    end do    
-				end if				
+!                end if
 				
 			end do
 			end do

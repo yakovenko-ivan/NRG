@@ -18,6 +18,8 @@ set(LIBRARY_SRC
 	${SRC_LIB}/src/post_processor_manager_class.f90
 	${SRC_LIB}/src/post_processor_operation_class.f90
 	${SRC_LIB}/src/solver_options_class.f90
+	${SRC_LIB}/src/supplementary_routines.f90
+	${SRC_LIB}/src/benchmarking_module.f90
 	${SRC_LIB}/src/thermophysical_properties_class.f90
 )
 
