@@ -29,7 +29,7 @@ module implicit_fourier_heat_transfer_solver_class
 
 	type	:: implicit_heat_transfer_solver
 		
-		real(dkind)		:: time, time_step, initial_time_step
+		real(dp)		:: time, time_step, initial_time_step
 	
 		type(field_scalar_cons_pointer)				:: T, kappa, rho, Q, T_gas, kappa_gas
 		type(computational_domain)					:: domain
@@ -39,15 +39,15 @@ module implicit_fourier_heat_transfer_solver_class
 		type(thermophysical_properties_pointer)		:: thermo
 		type(chemical_properties_pointer)			:: chem
 
-		real(dkind) ,dimension(:)		,allocatable    :: thermal_c_coeff_constant
+		real(dp) ,dimension(:)		,allocatable    :: thermal_c_coeff_constant
 		
-		real(dkind) ,dimension(:,:,:)	,allocatable    :: B, K, C, E, V, F	
-		real(dkind) ,dimension(:,:,:)	,allocatable    :: alpha, beta, gamma, delta
-		real(dkind) ,dimension(:,:,:)	,allocatable    :: alpha_, beta_, gamma_, delta_
+		real(dp) ,dimension(:,:,:)	,allocatable    :: B, K, C, E, V, F	
+		real(dp) ,dimension(:,:,:)	,allocatable    :: alpha, beta, gamma, delta
+		real(dp) ,dimension(:,:,:)	,allocatable    :: alpha_, beta_, gamma_, delta_
 		! NOTE Variables names correspond to those used Volochinskaya J. Comp. Math & Math phys 17(2) 1977 where the description of \alpha-\beta iterative algorithm was originally given. 
 		
-		real(dkind)	:: phi_isoth	= 0.0_dkind, psi_isoth	= 300.0_dkind	! Uniform isothermal boundary conditions
-		real(dkind)	:: phi_adiab	= 1.0_dkind, psi_adiab	= 0.0_dkind		! Symmetry plane, adiabatic boundary
+		real(dp)	:: phi_isoth	= 0.0_dp, psi_isoth	= 300.0_dp	! Uniform isothermal boundary conditions
+		real(dp)	:: phi_adiab	= 1.0_dp, psi_adiab	= 0.0_dp		! Symmetry plane, adiabatic boundary
 		
 		integer		:: mean_T_unit, energy_flux_unit
 	contains
@@ -72,7 +72,7 @@ contains
 
 		type(data_manager)		,intent(inout)	:: manager
 		
-		real(dkind)	:: calculation_time
+		real(dp)	:: calculation_time
 		
 		type(field_scalar_cons_pointer)	:: scal_ptr
 		type(field_vector_cons_pointer)	:: vect_ptr
@@ -146,27 +146,27 @@ contains
 									cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 									cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 								
-		constructor%B	= 0.0_dkind
-		constructor%K	= 0.0_dkind
-		constructor%C	= 0.0_dkind
-		constructor%E	= 0.0_dkind
-		constructor%V	= 0.0_dkind
-		constructor%F	= 0.0_dkind		
+		constructor%B	= 0.0_dp
+		constructor%K	= 0.0_dp
+		constructor%C	= 0.0_dp
+		constructor%E	= 0.0_dp
+		constructor%V	= 0.0_dp
+		constructor%F	= 0.0_dp		
 		
-		constructor%alpha	= 0.0_dkind
-		constructor%beta	= 0.0_dkind
-		constructor%gamma	= 0.0_dkind
-		constructor%delta	= 0.0_dkind
+		constructor%alpha	= 0.0_dp
+		constructor%beta	= 0.0_dp
+		constructor%gamma	= 0.0_dp
+		constructor%delta	= 0.0_dp
 										
-		constructor%alpha_	= 0.0_dkind
-		constructor%beta_	= 0.0_dkind
-		constructor%gamma_	= 0.0_dkind
-		constructor%delta_	= 0.0_dkind
+		constructor%alpha_	= 0.0_dp
+		constructor%beta_	= 0.0_dp
+		constructor%gamma_	= 0.0_dp
+		constructor%delta_	= 0.0_dp
 		
 		
-		constructor%kappa%s_ptr%cells		= 0.0_dkind
-		constructor%rho%s_ptr%cells			= 0.0_dkind
-		constructor%T%s_ptr%cells			= 0.0_dkind		
+		constructor%kappa%s_ptr%cells		= 0.0_dp
+		constructor%rho%s_ptr%cells			= 0.0_dp
+		constructor%T%s_ptr%cells			= 0.0_dp		
 		
 		constructor%time		=	calculation_time
 
@@ -194,18 +194,18 @@ contains
 		
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 		
-		this%kappa%s_ptr%cells		= 28.0_dkind
+		this%kappa%s_ptr%cells		= 28.0_dp
 		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(this%boundary%bc_ptr%bc_markers(i,j,k) == 1) then
 		
-				this%kappa%s_ptr%cells(i,j,k)		= 28.0_dkind
-				this%rho%s_ptr%cells(i,j,k)			= 19050.0_dkind
-				this%T%s_ptr%cells(i,j,k)			= 300.0_dkind
-				this%Q%s_ptr%cells(i,j,k)			= this%Q%s_ptr%cells(i,j,k)*1e-03_dkind
-			!	if(j<8) this%T%s_ptr%cells(i,j,k)	= 5000.0_dkind 
+				this%kappa%s_ptr%cells(i,j,k)		= 28.0_dp
+				this%rho%s_ptr%cells(i,j,k)			= 19050.0_dp
+				this%T%s_ptr%cells(i,j,k)			= 300.0_dp
+				this%Q%s_ptr%cells(i,j,k)			= this%Q%s_ptr%cells(i,j,k)*1e-03_dp
+			!	if(j<8) this%T%s_ptr%cells(i,j,k)	= 5000.0_dp 
 					
 			end if
 		end do
@@ -216,7 +216,7 @@ contains
 	
 	subroutine	solve_problem(this,time_step)
 		class(implicit_heat_transfer_solver) ,intent(inout)	:: this	
-		real(dkind)					,intent(in)		:: time_step
+		real(dp)					,intent(in)		:: time_step
 		integer	,save	:: iteration
 
 		this%time_step = time_step
@@ -240,15 +240,15 @@ contains
 
 		class(implicit_heat_transfer_solver) ,intent(inout)	:: this
 
-		real(dkind)	:: div_thermo_flux, thermo_flux1, thermo_flux2
-		real(dkind)	:: energy_prod_summ
-		real(dkind)	:: psi, phi, wall_temperature
+		real(dp)	:: div_thermo_flux, thermo_flux1, thermo_flux2
+		real(dp)	:: energy_prod_summ
+		real(dp)	:: psi, phi, wall_temperature
 		
-		real(dkind), dimension (3,3)	:: lame_coeffs		
+		real(dp), dimension (3,3)	:: lame_coeffs		
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
 		character(len=20)		:: boundary_type_name	
 		
@@ -300,21 +300,21 @@ contains
 								
 								if (bound_number == 0) then
 									psi = T_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-									phi = 0.0_dkind
+									phi = 0.0_dp
 								end if
 											
 								if ((dim == 1).and.(sign == -1)) then
-									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%delta(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dkind - phi*this%gamma(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%delta(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dp - phi*this%gamma(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 								end if
 								if ((dim == 2).and.(sign == -1))	then
-									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%delta_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dkind - phi*this%gamma_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%delta_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dp - phi*this%gamma_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 								end if							
 							
 								if ((dim == 1).and.(sign == 1)) then
-									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%beta(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dkind - phi*this%alpha(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%beta(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dp - phi*this%alpha(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 								end if
 								if ((dim == 2).and.(sign == 1))	then
-									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%beta_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dkind - phi*this%alpha_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+									T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = (phi * this%beta_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) + psi)/(1.0_dp - phi*this%alpha_(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 								end if								
 							end if
 						end do
@@ -340,13 +340,13 @@ contains
 	subroutine	calculate_difference_scheme_coefficients(this,time_step)
 
 		class(implicit_heat_transfer_solver) ,intent(inout)	:: this
-		real(dkind)					,intent(in)		:: time_step
+		real(dp)					,intent(in)		:: time_step
 		
-		real(dkind)                 :: cp, kappa_eff
+		real(dp)                 :: cp, kappa_eff
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim
@@ -374,8 +374,8 @@ contains
 						sign			= (-1)**plus
 						bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 						if (bound_number == 0) then
-							kappa_eff	= 2.0_dkind * kappa%cells(i,j,k) * kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))/(kappa%cells(i,j,k) + kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
-							kappa%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 2.0_dkind * kappa_eff - kappa%cells(i,j,k)
+							kappa_eff	= 2.0_dp * kappa%cells(i,j,k) * kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))/(kappa%cells(i,j,k) + kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+							kappa%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 2.0_dp * kappa_eff - kappa%cells(i,j,k)
 						end if						
 					end do
 				end do
@@ -390,31 +390,31 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 1) then
 
-				cp				= 116.3_dkind	!	this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k))
+				cp				= 116.3_dp	!	this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k))
 						
-				!this%B(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i,j-1,k))/cell_size(2)/cell_size(2)	- 0.5_dkind*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k) 
+				!this%B(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i,j-1,k))/cell_size(2)/cell_size(2)	- 0.5_dp*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k) 
 				!
-				!this%K(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)
+				!this%K(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)
 				!
-				!this%C(i,j,k)	= 0.5_dkind*(kappa%cells(i+1,j,k) + 2.0_dkind*kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)	+ 0.5_dkind*(kappa%cells(i,j+1,k) + 2.0_dkind*kappa%cells(i,j,k) + kappa%cells(i,j-1,k))/cell_size(2)/cell_size(2) + (rho%cells(i,j,k) * cp)/time_step 
+				!this%C(i,j,k)	= 0.5_dp*(kappa%cells(i+1,j,k) + 2.0_dp*kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)	+ 0.5_dp*(kappa%cells(i,j+1,k) + 2.0_dp*kappa%cells(i,j,k) + kappa%cells(i,j-1,k))/cell_size(2)/cell_size(2) + (rho%cells(i,j,k) * cp)/time_step 
 				!
-				!this%E(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i+1,j,k))/cell_size(1)/cell_size(1)
+				!this%E(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i+1,j,k))/cell_size(1)/cell_size(1)
 				!
-				!this%V(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i,j+1,k))/cell_size(2)/cell_size(2)	+ 0.5_dkind*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k)   
+				!this%V(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i,j+1,k))/cell_size(2)/cell_size(2)	+ 0.5_dp*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k)   
 				!
 				!this%F(i,j,k)	= (rho%cells(i,j,k) * cp * T%cells(i,j,k))/time_step	+ Q%cells(i,j,k)
 				
 				
 				
-				this%B(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i,j-1,k)) * ( mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(2))/cell_size(2)/cell_size(2)/ mesh%mesh(2,i,j,k)	!- 0.5_dkind*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k) 
+				this%B(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i,j-1,k)) * ( mesh%mesh(2,i,j,k) - 0.5_dp*cell_size(2))/cell_size(2)/cell_size(2)/ mesh%mesh(2,i,j,k)	!- 0.5_dp*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k) 
 				
-				this%K(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)
+				this%K(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)
 				
-				this%C(i,j,k)	= 0.5_dkind*(kappa%cells(i+1,j,k) + 2.0_dkind*kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)	+ 0.5_dkind*(kappa%cells(i,j+1,k)*(mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(2)) + 2.0_dkind*kappa%cells(i,j,k)*mesh%mesh(2,i,j,k) + kappa%cells(i,j-1,k)*(mesh%mesh(2,i,j,k) - 0.5_dkind*cell_size(2)))/cell_size(2)/cell_size(2)/mesh%mesh(2,i,j,k) + (rho%cells(i,j,k) * cp)/time_step 
+				this%C(i,j,k)	= 0.5_dp*(kappa%cells(i+1,j,k) + 2.0_dp*kappa%cells(i,j,k) + kappa%cells(i-1,j,k))/cell_size(1)/cell_size(1)	+ 0.5_dp*(kappa%cells(i,j+1,k)*(mesh%mesh(2,i,j,k) + 0.5_dp*cell_size(2)) + 2.0_dp*kappa%cells(i,j,k)*mesh%mesh(2,i,j,k) + kappa%cells(i,j-1,k)*(mesh%mesh(2,i,j,k) - 0.5_dp*cell_size(2)))/cell_size(2)/cell_size(2)/mesh%mesh(2,i,j,k) + (rho%cells(i,j,k) * cp)/time_step 
 				
-				this%E(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i+1,j,k))/cell_size(1)/cell_size(1)
+				this%E(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i+1,j,k))/cell_size(1)/cell_size(1)
 				
-				this%V(i,j,k)	= 0.5_dkind*(kappa%cells(i,j,k) + kappa%cells(i,j+1,k)) * ( mesh%mesh(2,i,j,k) + 0.5_dkind*cell_size(2))/cell_size(2)/cell_size(2)/ mesh%mesh(2,i,j,k)	!+ 0.5_dkind*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k)   
+				this%V(i,j,k)	= 0.5_dp*(kappa%cells(i,j,k) + kappa%cells(i,j+1,k)) * ( mesh%mesh(2,i,j,k) + 0.5_dp*cell_size(2))/cell_size(2)/cell_size(2)/ mesh%mesh(2,i,j,k)	!+ 0.5_dp*kappa%cells(i,j,k)/cell_size(2)/mesh%mesh(2,i,j,k)   
 				
 				this%F(i,j,k)	= (rho%cells(i,j,k) * cp * T%cells(i,j,k))/time_step	+ Q%cells(i,j,k)				
 				
@@ -431,11 +431,11 @@ contains
 
 		class(implicit_heat_transfer_solver) ,intent(inout)	:: this
 		
-		real(dkind)	:: phi, psi, wall_temperature
+		real(dp)	:: phi, psi, wall_temperature
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
 		character(len=20)		:: boundary_type_name
 		
@@ -491,7 +491,7 @@ contains
 
 							if (bound_number == 0) then
 								psi = T_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-								phi = 0.0_dkind
+								phi = 0.0_dp
 							end if							
 							
 							if ((dim == 1).and.(sign == -1)) then
@@ -622,16 +622,16 @@ contains
 	
 		class(implicit_heat_transfer_solver) ,intent(inout)	:: this
 		
-		real(dkind)	:: phi, psi
+		real(dp)	:: phi, psi
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
-		real(dkind)	:: energy_input
-		real(dkind)	:: energy_outflow
-		real(dkind)	:: wall_temperature
-		real(dkind)	:: kappa_eff
+		real(dp)	:: energy_input
+		real(dp)	:: energy_outflow
+		real(dp)	:: wall_temperature
+		real(dp)	:: kappa_eff
 		
 		character(len=20)		:: boundary_type_name
 
@@ -656,15 +656,15 @@ contains
 				
 		! Set boundary conditions 
 					
-		energy_input	= 0.0_dkind			
-		energy_outflow	= 0.0_dkind
+		energy_input	= 0.0_dp			
+		energy_outflow	= 0.0_dp
 		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 1) then
 			
-				energy_input = energy_input + 2.0_dkind * pi * mesh%mesh(2,i,j,k) * cell_size(1) * cell_size(1) * Q%cells(i,j,k)	! Q_ij * 2*pi*r*dr*dz
+				energy_input = energy_input + 2.0_dp * pi * mesh%mesh(2,i,j,k) * cell_size(1) * cell_size(1) * Q%cells(i,j,k)	! Q_ij * 2*pi*r*dr*dz
 			
 				do dim = 1,dimensions
 					do plus = 1,2
@@ -677,23 +677,23 @@ contains
 									if(bc%boundary_types(bound_number)%is_conductive()) then											
 										wall_temperature = bc%boundary_types(bound_number)%get_wall_temperature()
 										if (dim == 1) then
-											energy_outflow = energy_outflow + 2.0_dkind * pi * mesh%mesh(2,i,j,k) * kappa%cells(i,j,k) * (T%cells(i,j,k) - wall_temperature)
+											energy_outflow = energy_outflow + 2.0_dp * pi * mesh%mesh(2,i,j,k) * kappa%cells(i,j,k) * (T%cells(i,j,k) - wall_temperature)
 										end if
 										if (dim == 2) then
-											energy_outflow = energy_outflow + 2.0_dkind * pi * mesh%mesh(2,i,j,k) * kappa%cells(i,j,k) * (T%cells(i,j,k) - wall_temperature)
+											energy_outflow = energy_outflow + 2.0_dp * pi * mesh%mesh(2,i,j,k) * kappa%cells(i,j,k) * (T%cells(i,j,k) - wall_temperature)
 										end if			
 									end if
 							end select	
 						end if
 						if(( bound_number == 0 )) then
-							kappa_eff		= 2.0_dkind * kappa%cells(i,j,k) * kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))/(kappa%cells(i,j,k) + kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+							kappa_eff		= 2.0_dp * kappa%cells(i,j,k) * kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))/(kappa%cells(i,j,k) + kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 						!	print *, kappa_eff, kappa%cells(i,j,k), kappa_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 							if (dim == 1) then
-								energy_outflow = energy_outflow + 2.0_dkind * pi * mesh%mesh(2,i,j,k) * kappa_eff * (T%cells(i,j,k) - T_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+								energy_outflow = energy_outflow + 2.0_dp * pi * mesh%mesh(2,i,j,k) * kappa_eff * (T%cells(i,j,k) - T_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 								continue
 							end if
 							if (dim == 2) then
-								energy_outflow = energy_outflow + 2.0_dkind * pi * mesh%mesh(2,i,j,k) * kappa_eff * (T%cells(i,j,k) - T_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
+								energy_outflow = energy_outflow + 2.0_dp * pi * mesh%mesh(2,i,j,k) * kappa_eff * (T%cells(i,j,k) - T_gas%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
 								continue
 							end if							
 						end if
@@ -720,15 +720,15 @@ contains
 	
 		class(implicit_heat_transfer_solver) ,intent(inout)	:: this
 		
-		real(dkind)	:: phi, psi
-		real(dkind)	:: radius, height
+		real(dp)	:: phi, psi
+		real(dp)	:: radius, height
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
-		real(dkind)	:: mean_T_radius
-		real(dkind)	:: mean_T_volume
+		real(dp)	:: mean_T_radius
+		real(dp)	:: mean_T_volume
 		
 		character(len=20)		:: boundary_type_name
 
@@ -751,11 +751,11 @@ contains
 				
 		! Set boundary conditions 
 					
-		mean_T_radius	= 0.0_dkind	
-		mean_T_volume	= 0.0_dkind
+		mean_T_radius	= 0.0_dp	
+		mean_T_volume	= 0.0_dp
 		
-		radius = 12.0_dkind * cell_size(1)
-		height = 16.0_dkind * cell_size(1) 
+		radius = 12.0_dp * cell_size(1)
+		height = 16.0_dp * cell_size(1) 
 		
 	!	do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = 1,12
@@ -763,7 +763,7 @@ contains
 			if(bc%bc_markers(i,1,1) == 1) then
 			
 				mean_T_radius = mean_T_radius + cell_size(1) * T%cells(i,j,1) * cell_size(1) / (radius * height)
-				mean_T_volume = mean_T_volume + (mesh%mesh(2,i,j,1)) * T%cells(i,j,1)* cell_size(1) * cell_size(1)  * (2.0_dkind/radius**2/height) 	! T_ij * r*dr*dz * (2/R**2/H)	!
+				mean_T_volume = mean_T_volume + (mesh%mesh(2,i,j,1)) * T%cells(i,j,1)* cell_size(1) * cell_size(1)  * (2.0_dp/radius**2/height) 	! T_ij * r*dr*dz * (2/R**2/H)	!
 			
 			end if
 							
@@ -778,14 +778,14 @@ contains
 	end subroutine	
 	
 	pure function get_time_step(this)
-		real(dkind)						:: get_time_step
+		real(dp)						:: get_time_step
 		class(implicit_heat_transfer_solver)	,intent(in)		:: this
 
 		get_time_step = this%time_step
 	end function
 
 	pure function get_time(this)
-		real(dkind)						:: get_time
+		real(dp)						:: get_time
 		class(implicit_heat_transfer_solver)	,intent(in)		:: this
 
 		get_time = this%time

@@ -39,7 +39,7 @@ module droplets_solver_class
 		
 		type(liquid_droplets_phase)			:: droplets_params
 
-		real(dkind)							:: droplet_mass
+		real(dp)							:: droplet_mass
         
         integer                             :: phase_number
 	contains
@@ -216,10 +216,10 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)	
 			if(bc%bc_markers(i,j,k) == 0) then
-                mass_d%cells(i,j,k)     = Pi*droplet%diameter**3 / 6.0_dkind * droplet%material_density
+                mass_d%cells(i,j,k)     = Pi*droplet%diameter**3 / 6.0_dp * droplet%material_density
                 numdens_d%cells(i,j,k)  = rho_d%cells(i,j,k)/mass_d%cells(i,j,k)
-				T_d%cells(i,j,k)	    = 300.0_dkind 
-                Esurf%cells(i,j,k)      = 0.03_dkind * 4.0 * Pi * 0.0001_dkind * 0.0001_dkind * numdens_d%cells(i,j,k) 
+				T_d%cells(i,j,k)	    = 300.0_dp 
+                Esurf%cells(i,j,k)      = 0.03_dp * 4.0 * Pi * 0.0001_dp * 0.0001_dp * numdens_d%cells(i,j,k) 
 			end if
 		end do
 		end do
@@ -232,12 +232,12 @@ contains
 	subroutine droplets_euler_step_v_E(this,time_step)
 
 		class(droplets_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
-		real(dkind)								:: F_stokes, Q_stokes, Nusselt
+		real(dp)				,intent(in)		:: time_step
+		real(dp)								:: F_stokes, Q_stokes, Nusselt
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
-		real(dkind)                 :: local_diameter, evaporation_rate, local_Esurf, source_Esurf, p_0, T_0, velocity_2, marker1, specie_enthalpy, velabs, temp_cr
+		real(dp)	,dimension(3)	:: cell_size
+		real(dp)                 :: local_diameter, evaporation_rate, local_Esurf, source_Esurf, p_0, T_0, velocity_2, marker1, specie_enthalpy, velabs, temp_cr
         
         
 		integer	:: dimensions
@@ -252,7 +252,7 @@ contains
 
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
-		Nusselt			= 2.0_dkind
+		Nusselt			= 2.0_dp
 		
 		H2O_index		= this%chem%chem_ptr%get_chemical_specie_index('H2O')
 		C7H16_index		= this%chem%chem_ptr%get_chemical_specie_index('C7H16')	
@@ -282,9 +282,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,dim,F_stokes,Q_stokes,local_diameter,evaporation_rate,velabs,temp_cr) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(T,T_d,T_d_int,E_f_prod,rho,rho_d,mass_d,numdens_d,v_d,v_d_int,v,v_prod,Y_prod,nu,kappa,foam_marker,time_boil,droplet,Nusselt,H2O_index,C7H16_index,time_step,mesh,bc,cons_inner_loop,dimensions,marker1,specie_enthalpy)
+		!$omp parallel default(shared)  private(i,j,k,dim,F_stokes,Q_stokes,local_diameter,evaporation_rate,velabs,temp_cr) !, &
+		!!$omp& shared(this,Nusselt,H2O_index,C7H16_index,time_step,cons_inner_loop,dimensions,marker1,specie_enthalpy)
+
 		!$omp do collapse(3) schedule(guided)					
 					
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -292,13 +292,13 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
                 
-                local_diameter = 6.0_dkind * mass_d%cells(i,j,k) / Pi / droplet%material_density 
-                local_diameter = local_diameter ** 0.3333333_dkind
+                local_diameter = 6.0_dp * mass_d%cells(i,j,k) / Pi / droplet%material_density 
+                local_diameter = local_diameter ** 0.3333333_dp
 
-				F_stokes = 0.0_dkind
+				F_stokes = 0.0_dp
 				
 				do dim = 1,dimensions
-					F_stokes			= 3.0_dkind * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ! [m/s^2]
+					F_stokes			= 3.0_dp * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ! [m/s^2]
 			
 					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_d%cells(i,j,k) / rho%cells(i,j,k)					! [m/s^2]
 					v_d_int%pr(dim)%cells(i,j,k)	= v_d%pr(dim)%cells(i,j,k) + F_stokes * time_step						
@@ -306,12 +306,12 @@ contains
 					E_f_prod%cells(i,j,k)			= - F_stokes * v%pr(dim)%cells(i,j,k) * rho_d%cells(i,j,k)				! [J/m^3/s]
 				end do		
 					
-				Q_stokes					= 3.0_dkind * kappa%cells(i,j,k) * Nusselt / (0.5_dkind * local_diameter ** 2 * droplet%material_heat_capacity * droplet%material_density) * (T%cells(i,j,k) - T_d%cells(i,j,k))
+				Q_stokes					= 3.0_dp * kappa%cells(i,j,k) * Nusselt / (0.5_dp * local_diameter ** 2 * droplet%material_heat_capacity * droplet%material_density) * (T%cells(i,j,k) - T_d%cells(i,j,k))
 
 				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_d%cells(i,j,k) * droplet%material_heat_capacity ! [J/m^3/s]
 				T_d_int%cells(i,j,k)		= T_d%cells(i,j,k) + Q_stokes * time_step
 
-                if (droplet%combustible == .false.) then
+                if (droplet%combustible .eqv. .false.) then
 					temp_cr = 373.15
                 else
 					temp_cr = 371.55    
@@ -320,29 +320,29 @@ contains
 				if (T_d_int%cells(i,j,k) > temp_cr) T_d_int%cells(i,j,k) = temp_cr
                 
                 if (T%cells(i,j,k) >= temp_cr) then
-                    evaporation_rate = 2.0_dkind * local_diameter * Pi * kappa%cells(i,j,k)/droplet%material_heat_capacity  &
-                                     * log(1.0_dkind+droplet%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/droplet%material_latent_heat)/mass_d%cells(i,j,k)	! [1/s]
+                    evaporation_rate = 2.0_dp * local_diameter * Pi * kappa%cells(i,j,k)/droplet%material_heat_capacity  &
+                                     * log(1.0_dp+droplet%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/droplet%material_latent_heat)/mass_d%cells(i,j,k)	! [1/s]
                     
-                    if (j > cons_inner_loop(2,2) - 2)  evaporation_rate = 0.0_dkind
+                    if (j > cons_inner_loop(2,2) - 2)  evaporation_rate = 0.0_dp
                     
-					if (mass_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step) >= 0.0_dkind) then
-						mass_d%cells(i,j,k) =	mass_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step)
+					if (mass_d%cells(i,j,k)*(1.0_dp - evaporation_rate*time_step) >= 0.0_dp) then
+						mass_d%cells(i,j,k) =	mass_d%cells(i,j,k)*(1.0_dp - evaporation_rate*time_step)
                         
-						if(mass_d%cells(i,j,k) <= 1.0E-15_dkind) then
-							mass_d%cells(i,j,k) = 1.0E-15_dkind
-							evaporation_rate = 0.0_dkind
+						if(mass_d%cells(i,j,k) <= 1.0E-15_dp) then
+							mass_d%cells(i,j,k) = 1.0E-15_dp
+							evaporation_rate = 0.0_dp
 						end if
                         
-						rho_d%cells(i,j,k)  =   rho_d%cells(i,j,k)*(1.0_dkind - evaporation_rate*time_step)
+						rho_d%cells(i,j,k)  =   rho_d%cells(i,j,k)*(1.0_dp - evaporation_rate*time_step)
 
-						if(rho_d%cells(i,j,k) <= 1.0E-16_dkind) then
-							rho_d%cells(i,j,k) = 1.0E-16_dkind
-							evaporation_rate = 0.0_dkind
+						if(rho_d%cells(i,j,k) <= 1.0E-16_dp) then
+							rho_d%cells(i,j,k) = 1.0E-16_dp
+							evaporation_rate = 0.0_dp
 						end if
 
 !						rho%cells(i,j,k)    =   rho%cells(i,j,k) + evaporation_rate*rho_d%cells(i,j,k)*time_step
                         
-						if (droplet%combustible == .false.) then
+						if (droplet%combustible .eqv. .false.) then
 							Y_prod%pr(H2O_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)	! [kg/m^3/s]
 						else
 							Y_prod%pr(C7H16_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)
@@ -355,7 +355,7 @@ contains
 						E_f_prod%cells(i,j,k)			    = E_f_prod%cells(i,j,k) - evaporation_rate*droplet%material_latent_heat*rho_d%cells(i,j,k)		! [J/m^3/s]
                         
 					else
-						evaporation_rate    = 0.0_dkind
+						evaporation_rate    = 0.0_dp
 					end if 
                 end if
 			end if
@@ -373,9 +373,9 @@ contains
 	subroutine droplets_lagrange_step(this,time_step)
  
 		class(droplets_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
  
-		real(dkind)	:: av_velocity, dif_velocity
+		real(dp)	:: av_velocity, dif_velocity
 		
 		integer		,dimension(3,2)	:: flow_inner_loop, cons_inner_loop
 		
@@ -383,7 +383,7 @@ contains
  
         character(len=20)	:: boundary_type_name
         
-		real(dkind)	,dimension(3)	:: cell_size	, cell_surface_area	
+		real(dp)	,dimension(3)	:: cell_size	, cell_surface_area	
 		integer	:: dimensions
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim
@@ -405,9 +405,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 					
-		!$omp parallel default(none)  private(i,j,k,dim,plus,sign,bound_number,boundary_type_name,av_velocity,dif_velocity,cell_surface_area) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,mesh,m_flux_d,numdens_flux_d,mass_d,rho_d,v_d_int,dimensions,cell_size,time_step,flow_inner_loop,cons_inner_loop,coordinate_system)
+		!$omp parallel default(shared)  private(i,j,k,dim,plus,sign,bound_number,boundary_type_name,av_velocity,dif_velocity,cell_surface_area) !, &
+		!!$omp& shared(this,dimensions,cell_size,time_step,flow_inner_loop,cons_inner_loop,coordinate_system)
+        
 		!$omp do collapse(3) schedule(guided)
 					
 		do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
@@ -424,28 +424,28 @@ contains
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
 							! x -> r, y -> z
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))									
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))									
 							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		
 						case ('spherical')
 							! x -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2	
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2	
 					end select				
 		
-                    av_velocity     = 0.5_dkind *(v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_d_int%pr(dim)%cells(i,j,k))
+                    av_velocity     = 0.5_dp *(v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_d_int%pr(dim)%cells(i,j,k))
                     dif_velocity    = time_step *(v_d_int%pr(dim)%cells(i,j,k) - v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(dim)
                     if( av_velocity >= 0 ) then
-                        m_flux_d%cells(dim,i,j,k)       = rho_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dkind + dif_velocity)
-                        if (mass_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) /= 0.0_dkind) then 
+                        m_flux_d%cells(dim,i,j,k)       = rho_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
+                        if (mass_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) /= 0.0_dp) then 
                             numdens_flux_d%cells(dim,i,j,k) = m_flux_d%cells(dim,i,j,k) / mass_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
                         else
-                            numdens_flux_d%cells(dim,i,j,k) = 0.0_dkind
+                            numdens_flux_d%cells(dim,i,j,k) = 0.0_dp
                         end if
                     else
-                        m_flux_d%cells(dim,i,j,k)       = rho_d%cells(i,j,k)									* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dkind + dif_velocity)
-                        if (mass_d%cells(i,j,k) /= 0.0_dkind) then
+                        m_flux_d%cells(dim,i,j,k)       = rho_d%cells(i,j,k)									* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
+                        if (mass_d%cells(i,j,k) /= 0.0_dp) then
                             numdens_flux_d%cells(dim,i,j,k) = m_flux_d%cells(dim,i,j,k) / mass_d%cells(i,j,k)
                         else
-                            numdens_flux_d%cells(dim,i,j,k) = 0.0_dkind
+                            numdens_flux_d%cells(dim,i,j,k) = 0.0_dp
                         end if
                     end if
                     if((bc%bc_markers(i,j,k) == 0).and.(i <= cons_inner_loop(1,2)).and.(j <= cons_inner_loop(2,2)-2).and.(k <= cons_inner_loop(3,2))) then
@@ -457,7 +457,7 @@ contains
 								select case(boundary_type_name)
 									case ('wall')		! Particles stay near top wall
 										if ((dim == 2).and.(sign == 1)) then
-											m_flux_d%cells(dim,i,j,k) = max(0.0_dkind,m_flux_d%cells(dim,i,j,k))							
+											m_flux_d%cells(dim,i,j,k) = max(0.0_dp,m_flux_d%cells(dim,i,j,k))							
 										end if
 								end select
 							end if					
@@ -473,23 +473,21 @@ contains
  
 		!$omp end do nowait
 		!$omp end parallel
-		
-		continue
-		
 		end associate
  
+		continue 
 	end subroutine
 
 	subroutine droplets_final_step(this,time_step)
  
 		class(droplets_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
  
-		real(dkind)	:: D11, D12, D21, D22, rho_d_old, av_velocity1, av_velocity2
+		real(dp)	:: D11, D12, D21, D22, rho_d_old, av_velocity1, av_velocity2
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
-		real(dkind)					:: cell_volume
+		real(dp)	,dimension(3)	:: cell_size
+		real(dp)					:: cell_volume
 		integer	:: dimensions, species_number
 		character(len=20)	:: coordinate_system
 		integer	:: sign
@@ -515,9 +513,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
  
-		!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,spec,rho_d_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,mesh,m_flux_d,rho_d,T_d_int,T_d,v_d,v_d_int,numdens_d,numdens_flux_d,mass_d,dimensions,cons_inner_loop,coordinate_system)
+		!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,spec,rho_d_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) !, &
+		!!$omp& shared(this,dimensions,cons_inner_loop,coordinate_system)
+        
 		!$omp do collapse(3) schedule(guided)
 					
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -554,10 +552,10 @@ contains
 
  
                 do dim2 = 1,dimensions
-                    D11 = 0.0_dkind
-					D12 = 0.0_dkind
-					D21 = 0.0_dkind
-					D22 = 0.0_dkind
+                    D11 = 0.0_dp
+					D12 = 0.0_dp
+					D21 = 0.0_dp
+					D22 = 0.0_dp
  
 					i_ind1 = i - I_m(dim2,1)
 					i_ind2 = i + I_m(dim2,1)
@@ -570,14 +568,14 @@ contains
                     av_velocity2 = v_d_int%pr(dim2)%cells(i_ind2,j_ind2,k_ind2) + v_d_int%pr(dim2)%cells(i,j,k)
  
                     if(av_velocity1 > 0.0) then
-						D11 = 1.0_dkind
+						D11 = 1.0_dp
 					else
-						D12 = 1.0_dkind
+						D12 = 1.0_dp
 					end if
                     if(av_velocity2 < 0.0) then
-						D21 = 1.0_dkind
+						D21 = 1.0_dp
 					else
-						D22 = 1.0_dkind
+						D22 = 1.0_dp
 					end if
  
  
@@ -625,9 +623,9 @@ contains
 					bc				=> this%boundary%bc_ptr	, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(v_d_int,bc,cons_inner_loop,dimensions)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) !, &
+		!!$omp& shared(this,cons_inner_loop,dimensions)
+        
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -678,11 +676,11 @@ contains
 	subroutine apply_boundary_conditions_main(this, time)
 
 		class(droplets_solver)		,intent(inout)		:: this
-		real(dkind)					,intent(in)			:: time
+		real(dp)					,intent(in)			:: time
 
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, farfield_rhod, wall_temperature
-		real(dkind)				:: delay
+		real(dp)				:: farfield_density, farfield_pressure, farfield_rhod, wall_temperature
+		real(dp)				:: delay
 		
 		
 		integer					:: dimensions
@@ -695,8 +693,8 @@ contains
 			
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
 		
-		delay = 0.2_dkind
-		farfield_rhod = 1.0e-02_dkind
+		delay = 0.2_dp
+		farfield_rhod = 1.0e-02_dp
 
 		associate(  T_d				=> this%T_d%s_ptr			, &
 					rho_d			=> this%rho_d%s_ptr			, &
@@ -706,9 +704,9 @@ contains
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name,wall_temperature) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(T_d,rho_d,v_d,mass_d,droplet,mesh,bc,cons_inner_loop,dimensions,time, farfield_rhod, delay)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name,wall_temperature) !, &
+		!!$omp& shared(this,cons_inner_loop,dimensions,time, farfield_rhod, delay)
+        
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -743,23 +741,23 @@ contains
 										if(.not.bc%boundary_types(bound_number)%is_slip()) then
 											do dim1 = 1, dimensions
 												if (dim1 /= dim) then	
-													v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
+													v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
 												end if
 											end do
 										end if
 									case('inlet')
 									
 										if (time > 0.2) then
-											rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_rhod * (time - 0.2) / delay + 1.0e-05_dkind
+											rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_rhod * (time - 0.2) / delay + 1.0e-05_dp
 											if (time > 0.2 + delay) then
 												rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_rhod
 											end if
 										else
-											rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 1.0e-05_dkind
+											rho_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 1.0e-05_dp
 										end if
 										
-										T_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= 300.0_dkind
-										mass_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))     = Pi*droplet%diameter**3 / 6.0_dkind * droplet%material_density
+										T_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= 300.0_dp
+										mass_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))     = Pi*droplet%diameter**3 / 6.0_dp * droplet%material_density
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
 												v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)

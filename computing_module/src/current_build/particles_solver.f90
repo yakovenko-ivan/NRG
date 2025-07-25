@@ -38,7 +38,7 @@ module particles_solver_class
 		
 		type(solid_particles_phase)			:: particles_params
 
-		real(dkind)							:: particle_mass
+		real(dp)							:: particle_mass
 	contains
 		procedure				::  set_initial_distributions
 		procedure				::	particles_euler_step_v_E
@@ -175,8 +175,8 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)	
 			if(bc%bc_markers(i,j,k) == 0) then
 				rho_p%cells(i,j,k)	= alpha_p%cells(i,j,k) * particle%material_density
-				T_p%cells(i,j,k)	= 300.0_dkind !T%cells(i,j,k)
-				this%particle_mass	= 1.0_dkind/6.0_dkind*particle%diameter**3 * particle%material_density
+				T_p%cells(i,j,k)	= 300.0_dp !T%cells(i,j,k)
+				this%particle_mass	= 1.0_dp/6.0_dp*particle%diameter**3 * particle%material_density
 			end if
 		end do
 		end do
@@ -189,11 +189,11 @@ contains
 	subroutine particles_euler_step_v_E(this,time_step)
 
 		class(particles_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
-		real(dkind)								:: F_stokes, Q_stokes, Nusselt
+		real(dp)				,intent(in)		:: time_step
+		real(dp)								:: F_stokes, Q_stokes, Nusselt
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
 		integer	:: dimensions
 		integer	:: sign
@@ -205,7 +205,7 @@ contains
 
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
-		Nusselt			= 2.0_dkind
+		Nusselt			= 2.0_dp
 		
 		associate(  T			=> this%T%s_ptr			, &
 					T_p			=> this%T_p%s_ptr		, &	
@@ -223,9 +223,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,dim,F_stokes,Q_stokes) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(T,T_p,T_p_int,E_f_prod,rho,rho_p,v_p,v_p_int,v,v_prod,nu,kappa,particle,Nusselt,time_step,mesh,bc,cons_inner_loop,dimensions)
+		!$omp parallel default(shared)  private(i,j,k,dim,F_stokes,Q_stokes) !, &
+		!!$omp& shared(this,Nusselt,time_step,cons_inner_loop,dimensions)
+            
 		!$omp do collapse(3) schedule(guided)					
 					
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -233,14 +233,14 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				do dim = 1,dimensions
-					F_stokes						= 3.0_dkind * Pi * particle%diameter * nu%cells(i,j,k) / this%particle_mass * ( v%pr(dim)%cells(i,j,k) - v_p%pr(dim)%cells(i,j,k))
+					F_stokes						= 3.0_dp * Pi * particle%diameter * nu%cells(i,j,k) / this%particle_mass * ( v%pr(dim)%cells(i,j,k) - v_p%pr(dim)%cells(i,j,k))
 					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_p%cells(i,j,k) / rho%cells(i,j,k) * time_step
 					v_p_int%pr(dim)%cells(i,j,k)	= v_p%pr(dim)%cells(i,j,k) + F_stokes * time_step
 
 					E_f_prod%cells(i,j,k)			= - F_stokes * v%pr(dim)%cells(i,j,k) * rho_p%cells(i,j,k) / rho%cells(i,j,k) * time_step
 				end do		
 					
-				Q_stokes					= 6.0_dkind * kappa%cells(i,j,k) * Nusselt / (particle%diameter ** 2 * particle%material_heat_capacity * particle%material_density) * (T%cells(i,j,k) - T_p%cells(i,j,k))
+				Q_stokes					= 6.0_dp * kappa%cells(i,j,k) * Nusselt / (particle%diameter ** 2 * particle%material_heat_capacity * particle%material_density) * (T%cells(i,j,k) - T_p%cells(i,j,k))
 				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_p%cells(i,j,k) / rho%cells(i,j,k) * particle%material_heat_capacity * time_step
 				T_p_int%cells(i,j,k)		= T_p%cells(i,j,k) + Q_stokes * time_step
 			end if
@@ -258,9 +258,9 @@ contains
 	subroutine particles_lagrange_step(this,time_step)
  
 		class(particles_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
  
-		real(dkind)	:: av_velocity, dif_velocity
+		real(dp)	:: av_velocity, dif_velocity
 		
 		integer		,dimension(3,2)	:: flow_inner_loop, cons_inner_loop
 		
@@ -268,7 +268,7 @@ contains
  
 		character(len=20)	:: boundary_type_name		
 		
-		real(dkind)	,dimension(3)	:: cell_size	, cell_surface_area	
+		real(dp)	,dimension(3)	:: cell_size	, cell_surface_area	
 		integer	:: dimensions
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim
@@ -281,18 +281,22 @@ contains
 		flow_inner_loop	= this%domain%get_local_inner_faces_bounds()
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 		
+        associate(  rho_p		=> this%rho_p%s_ptr		, &
+			        v_p_int		=> this%v_p_int%v_ptr)
+            
+		call this%mpi_support%exchange_conservative_vector_field(v_p_int)
+		call this%mpi_support%exchange_conservative_scalar_field(rho_p)
+        end associate
+		            
 		associate(  m_flux_p	=> this%m_flux_p%s_ptr	, &
 					rho_p		=> this%rho_p%s_ptr		, &
 					v_p_int		=> this%v_p_int%v_ptr	, &
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 					
-		call this%mpi_support%exchange_conservative_vector_field(v_p_int)
-		call this%mpi_support%exchange_conservative_scalar_field(rho_p)					
-					
-		!$omp parallel default(none)  private(i,j,k,dim,plus,sign,bound_number,boundary_type_name,av_velocity,dif_velocity,cell_surface_area) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,mesh,m_flux_p,rho_p,v_p_int,dimensions,cell_size,time_step,flow_inner_loop,cons_inner_loop,coordinate_system)
+		!$omp parallel default(shared)  private(i,j,k,dim,plus,sign,bound_number,boundary_type_name,av_velocity,dif_velocity,cell_surface_area) !, &
+		!!$omp& shared(this,dimensions,cell_size,time_step,flow_inner_loop,cons_inner_loop,coordinate_system)
+        
 		!$omp do collapse(3) schedule(guided)
 					
 		do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
@@ -309,19 +313,19 @@ contains
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
 							! x -> r, y -> z
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))									
-							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		! - 0.5_dkind*cell_size(1)
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))									
+							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		! - 0.5_dp*cell_size(1)
 						case ('spherical')
 							! x -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))**2	! - 0.5_dkind*cell_size(1)
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))**2	! - 0.5_dp*cell_size(1)
 					end select				
 		
-                    av_velocity     = 0.5_dkind *(v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_p_int%pr(dim)%cells(i,j,k))
+                    av_velocity     = 0.5_dp *(v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_p_int%pr(dim)%cells(i,j,k))
                     dif_velocity    = time_step *(v_p_int%pr(dim)%cells(i,j,k) - v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(dim)
                     if( av_velocity >= 0 ) then
-                        m_flux_p%cells(dim,i,j,k) = rho_p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dkind + dif_velocity)
+                        m_flux_p%cells(dim,i,j,k) = rho_p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
                     else
-                        m_flux_p%cells(dim,i,j,k) = rho_p%cells(i,j,k)										* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dkind + dif_velocity)
+                        m_flux_p%cells(dim,i,j,k) = rho_p%cells(i,j,k)										* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
                     end if
 					
 					if((bc%bc_markers(i,j,k) == 0).and.(i <= cons_inner_loop(1,2)).and.(j <= cons_inner_loop(2,2)).and.(k <= cons_inner_loop(3,2))) then
@@ -333,7 +337,7 @@ contains
 								select case(boundary_type_name)
 									case ('wall')		! Particles stay near top wall
 										if ((dim == 2).and.(sign == 1)) then
-											m_flux_p%cells(dim,i,j,k) = max(0.0_dkind,m_flux_p%cells(dim,i,j,k))							
+											m_flux_p%cells(dim,i,j,k) = max(0.0_dp,m_flux_p%cells(dim,i,j,k))							
 										end if
 								end select
 							end if					
@@ -348,22 +352,24 @@ contains
 		!$omp end do nowait
 		!$omp end parallel
 		
+        end associate
+   
 		continue
 		
-		end associate
  
+
 	end subroutine
 
 	subroutine particles_final_step(this,time_step)
  
 		class(particles_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
  
-		real(dkind)	:: D11, D12, D21, D22, rho_p_old, av_velocity1, av_velocity2
+		real(dp)	:: D11, D12, D21, D22, rho_p_old, av_velocity1, av_velocity2
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
-		real(dkind)					:: cell_volume
+		real(dp)	,dimension(3)	:: cell_size
+		real(dp)					:: cell_volume
 		integer	:: dimensions, species_number
 		character(len=20)	:: coordinate_system
 		integer	:: sign
@@ -377,6 +383,13 @@ contains
 	
 		cell_size			= this%mesh%mesh_ptr%get_cell_edges_length()
 		
+        associate(  m_flux_p	=> this%m_flux_p%s_ptr	, &
+                    T_p_int		=> this%T_p_int%s_ptr)
+		    call this%mpi_support%exchange_conservative_scalar_field(T_p_int)
+		    call this%mpi_support%exchange_flow_scalar_field(m_flux_p)
+        end associate
+					
+                    
 		associate(  m_flux_p	=> this%m_flux_p%s_ptr	, &
 					rho_p		=> this%rho_p%s_ptr		, &
 					alpha_p		=> this%alpha_p%s_ptr	, &
@@ -387,13 +400,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
  
-		call this%mpi_support%exchange_conservative_scalar_field(T_p_int)
-
-		call this%mpi_support%exchange_flow_scalar_field(m_flux_p)					
-					
-		!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,spec,rho_p_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,mesh,m_flux_p,rho_p,T_p_int,T_p,v_p,v_p_int,alpha_p,dimensions,cons_inner_loop,coordinate_system)
+		!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,spec,rho_p_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) !, &
+		!!$omp& shared(this,dimensions,cons_inner_loop,coordinate_system)
+        
 		!$omp do collapse(3) schedule(guided)
 					
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -423,10 +432,10 @@ contains
 
  
                 do dim2 = 1,dimensions
-                    D11 = 0.0_dkind
-					D12 = 0.0_dkind
-					D21 = 0.0_dkind
-					D22 = 0.0_dkind
+                    D11 = 0.0_dp
+					D12 = 0.0_dp
+					D21 = 0.0_dp
+					D22 = 0.0_dp
  
 					i_ind1 = i - I_m(dim2,1)
 					i_ind2 = i + I_m(dim2,1)
@@ -439,14 +448,14 @@ contains
                     av_velocity2 = v_p_int%pr(dim2)%cells(i_ind2,j_ind2,k_ind2) + v_p_int%pr(dim2)%cells(i,j,k)
  
                     if(av_velocity1 > 0.0) then
-						D11 = 1.0_dkind
+						D11 = 1.0_dp
 					else
-						D12 = 1.0_dkind
+						D12 = 1.0_dp
 					end if
                     if(av_velocity2 < 0.0) then
-						D21 = 1.0_dkind
+						D21 = 1.0_dp
 					else
-						D22 = 1.0_dkind
+						D22 = 1.0_dp
 					end if
  
  
@@ -496,9 +505,9 @@ contains
 					bc				=> this%boundary%bc_ptr	, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(v_p_int,bc,cons_inner_loop,dimensions)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) !, &
+		!!$omp& shared(this,cons_inner_loop,dimensions)
+        
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -529,8 +538,8 @@ contains
 									case ('wall')		! Particles stay near top wall
 										if ((dim == 2).and.(sign == 1)) then
 											do dim1 = 1, dimensions
-												v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
-												v_p_int%pr(dim1)%cells(i,j,k)	= 0.0_dkind
+												v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
+												v_p_int%pr(dim1)%cells(i,j,k)	= 0.0_dp
 											end do										
 										end if
 								end select
@@ -555,7 +564,7 @@ contains
 		class(particles_solver)		,intent(inout)		:: this
 
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
+		real(dp)				:: farfield_density, farfield_pressure, wall_temperature
 		
 		integer					:: dimensions
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -573,9 +582,9 @@ contains
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name,wall_temperature) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(T_p,rho_p,v_p,mesh,bc,cons_inner_loop,dimensions)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name,wall_temperature) !, &
+		!!$omp& shared(this,cons_inner_loop,dimensions)
+            
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -609,14 +618,14 @@ contains
 										if(.not.bc%boundary_types(bound_number)%is_slip()) then
 											do dim1 = 1, dimensions
 												if (dim1 /= dim) then	
-													v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
+													v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
 												end if
 											end do
 										end if
 										if ((dim == 2).and.(sign == 1)) then
 											do dim1 = 1, dimensions
-												v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
-												v_p%pr(dim1)%cells(i,j,k) = 0.0_dkind
+												v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
+												v_p%pr(dim1)%cells(i,j,k) = 0.0_dp
 											end do										
 										end if
 								end select

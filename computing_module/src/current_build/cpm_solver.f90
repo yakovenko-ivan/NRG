@@ -26,6 +26,7 @@ module cpm_solver_class
     
 	use mpi_communications_class
 
+    use benchmarking    
 	use solver_options_class
 	
 	implicit none
@@ -40,13 +41,21 @@ module cpm_solver_class
 	type(field_scalar_cons)	,target	:: E_f_int
 	type(field_vector_cons)	,target	:: v_int, Y_int
 	
-    real(dkind)	,dimension(:)	,allocatable	:: flame_front_coords
+    real(dp)	,dimension(:)	,allocatable	:: flame_front_coords
     integer	:: flame_loc_unit    
 
+    type(timer)     :: cpm_timer
+    type(timer)     :: cpm_gas_dynamics_timer
+    type(timer)     :: cpm_eos_timer
+    type(timer)     :: cpm_chemistry_timer
+    type(timer)     :: cpm_diffusion_timer
+    type(timer)     :: cpm_heattransfer_timer
+    type(timer)     :: cpm_viscosity_timer
+    
 	type cpm_solver
 		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, perturbed_velocity, hydrodynamics_flag, multiphase_flag, CFL_condition_flag
-		real(dkind)		:: courant_fraction
-		real(dkind)		:: time, time_step, initial_time_step
+		real(dp)		:: courant_fraction
+		real(dp)		:: time, time_step, initial_time_step
 		integer			:: additional_particles_phases_number, additional_droplets_phases_number
 		
 		type(viscosity_solver)				:: visc_solver
@@ -110,7 +119,7 @@ contains
 		type(data_io)							,intent(inout)	:: problem_data_io
 		type(solver_options)					,intent(in)		:: problem_solver_options
 
-		real(dkind)	:: calculation_time
+		real(dp)	:: calculation_time
 		
 		type(field_scalar_cons_pointer)	:: scal_ptr
 		type(field_vector_cons_pointer)	:: vect_ptr
@@ -315,6 +324,14 @@ contains
         
         open(newunit = flame_loc_unit, file = 'av_flame_data.dat', status = 'replace', form = 'formatted')
         
+    call manager%create_timer(cpm_timer                 ,'CPM solver time'                  , 'sol_t')
+    call manager%create_timer(cpm_gas_dynamics_timer    ,'CPM gas dynamics time'            , 'gd_t')
+    call manager%create_timer(cpm_eos_timer             ,'CPM eos solver time'              , 'eos_t')
+    call manager%create_timer(cpm_chemistry_timer       ,'CPM chemistry solver time'        , 'chem_t')
+    call manager%create_timer(cpm_diffusion_timer       ,'CPM diffusion solver time'        , 'diff_t')
+    call manager%create_timer(cpm_heattransfer_timer    ,'CPM heattransfer solver time'     , 'ht_t')
+    call manager%create_timer(cpm_viscosity_timer       ,'CPM viscosity solver time'        , 'visc_t')
+        
 	end function
 
 	subroutine solve_problem(this)
@@ -325,6 +342,8 @@ contains
         
         logical	:: stabilized
 
+        call cpm_timer%tic()
+ 
 		this%time = this%time + this%time_step		
 		
 		call this%apply_boundary_conditions_main()
@@ -339,10 +358,23 @@ contains
 			end do	            
 		end if
         
+        call cpm_viscosity_timer%tic()
 		if (this%viscosity_flag)		call this%visc_solver%solve_viscosity(this%time_step)
+		call cpm_viscosity_timer%toc(new_iter=.true.)
+        
+        call cpm_heattransfer_timer%tic()
 		if (this%heat_trans_flag)		call this%heat_trans_solver%solve_heat_transfer(this%time_step)
+		call cpm_heattransfer_timer%toc(new_iter=.true.)
+        
+        call cpm_diffusion_timer%tic()
 		if (this%diffusion_flag)		call this%diff_solver%solve_diffusion(this%time_step)
+		call cpm_diffusion_timer%toc(new_iter=.true.)
+        
+        call cpm_chemistry_timer%tic()
 		if (this%reactive_flag)			call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
+		call cpm_chemistry_timer%toc(new_iter=.true.)
+        
+        
 		!call this%sources%calculate_sources(this%time,this%time_step)
 		if (this%perturbed_velocity)	call this%gas_dynamics_solver%perturb_velocity_field(this%time_step)
         
@@ -357,7 +389,9 @@ contains
 			end do		
 		end if 		
 		
+        call cpm_gas_dynamics_timer%tic()
 		call this%gas_dynamics_solver%euler_step_v(this%time_step)
+        call cpm_gas_dynamics_timer%toc()
         
 		if(this%additional_particles_phases_number /= 0) then
 			do particles_phase_counter = 1, this%additional_particles_phases_number
@@ -369,6 +403,7 @@ contains
 			end do		
         end if
 
+        call cpm_gas_dynamics_timer%tic()
 		call this%calculate_interm_v(this%time_step)
 		call this%apply_boundary_conditions_interm_v()
 
@@ -378,13 +413,18 @@ contains
 		
 		call this%gas_dynamics_solver%lagrange_step(this%time_step)
 		call this%gas_dynamics_solver%final_step(this%time_step)
+        call cpm_gas_dynamics_timer%toc(new_iter=.true.)
 
+        call cpm_eos_timer%tic()
 		call this%state_eq%apply_state_equation()
+        call cpm_eos_timer%toc(new_iter=.true.)
 
 		if (this%CFL_condition_flag) then
 			call this%calculate_time_step()
 		end if		
 		
+        call cpm_timer%toc(new_iter=.true.)
+
         !call this%if_stabilized(this%time, stabilized)
         !if (stabilized) stop       
         
@@ -394,7 +434,7 @@ contains
 
 	subroutine calculate_interm_v(this,time_step)
 		class(cpm_solver)	,intent(inout)	:: this
-		real(dkind)			,intent(in)		:: time_step
+		real(dp)			,intent(in)		:: time_step
 
 		integer	:: particles_phase_counter, droplets_phase_counter
 		integer	:: dimensions
@@ -407,6 +447,10 @@ contains
 		
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
+
+		!$omp parallel default(shared)  private(i,j,k,dim,particles_phase_counter) , &
+		!$omp& shared(this,cons_inner_loop,dimensions,time_step)
+        
 		associate (	rho					=> this%rho%s_ptr			, &
 					v					=> this%v%v_ptr				, &
 					v_int				=> this%v_int%v_ptr			, &
@@ -417,9 +461,6 @@ contains
                     v_prod_droplets		=> this%v_prod_droplets		, &
 					bc					=> this%boundary%bc_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,dim,particles_phase_counter) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(rho,v,v_int,v_prod_gd,v_prod_visc,v_prod_sources,v_prod_particles,bc,cons_inner_loop,dimensions,time_step)
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -438,7 +479,7 @@ contains
 						if (this%additional_droplets_phases_number /= 0) then
 							do droplets_phase_counter = 1, this%additional_droplets_phases_number
 								v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) * time_step																		!# Continuum droplets solver
-!								v_int%pr(dim)%cells(i,j,k) =  v_int%pr(dim)%cells(i,j,k)	!+ 0.5_dkind*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k) &
+!								v_int%pr(dim)%cells(i,j,k) =  v_int%pr(dim)%cells(i,j,k)	!+ 0.5_dp*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k) &
 																							!			+ v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * time_step		!# Lagrangian droplets solver
 							end do		
 						end if						
@@ -446,7 +487,7 @@ contains
 						if (this%additional_particles_phases_number /= 0) then
 							do particles_phase_counter = 1, this%additional_particles_phases_number
 !								v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k)																		!# Continuum particles solver
-								v_int%pr(dim)%cells(i,j,k) =  v_int%pr(dim)%cells(i,j,k)	!+ 0.5_dkind*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k) & 
+								v_int%pr(dim)%cells(i,j,k) =  v_int%pr(dim)%cells(i,j,k)	!+ 0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k) & 
 																							!			+ v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * time_step	!# Lagrangian particles solver
 							end do		
                         end if
@@ -456,16 +497,19 @@ contains
 			end do
 			end do
 		!$omp end do nowait
-		!$omp end parallel
 			
 		end associate
+
+		!$omp end parallel
+			
+
 
 	end subroutine
 	
 	
 	subroutine calculate_interm_E_Y(this,time_step)
 		class(cpm_solver)	,intent(inout)	:: this
-		real(dkind)			,intent(in)		:: time_step
+		real(dp)			,intent(in)		:: time_step
 		
 		integer	:: particles_phase_counter, droplets_phase_counter
 		integer	:: dimensions, species_number
@@ -474,9 +518,9 @@ contains
 		integer	:: bound_number
 		integer :: i,j,k,dim,spec
 
-		real(dkind)		:: spec_summ
-		real(dkind)		:: energy_source = 397500000.0_dkind
-		real(dkind)	,save	:: energy_output = 0.0_dkind
+		real(dp)		:: spec_summ
+		real(dp)		:: energy_source = 397500000.0_dp
+		real(dp)	,save	:: energy_output = 0.0_dp
 				
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -502,9 +546,9 @@ contains
 					T				=> this%T%s_ptr				, &
 					bc				=> this%boundary%bc_ptr)
 					
-		!$omp parallel default(none)  private(i,j,k,dim,particles_phase_counter,spec,spec_summ,energy_output) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(rho,E_f,E_f_int,E_f_prod_chem,E_f_prod_heat,E_f_prod_gd,E_f_prod_visc,E_f_prod_diff,E_f_prod_particles,Y,Y_int,Y_prod_diff,Y_prod_chem,dimensions,species_number,bc,cons_inner_loop,energy_source,time_step)
+		!$omp parallel default(shared)  private(i,j,k,dim,particles_phase_counter,spec,spec_summ,energy_output) !, &
+		!!$omp& shared(this,dimensions,species_number,cons_inner_loop,energy_source,time_step)
+		
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -535,11 +579,11 @@ contains
 					end if	                    
                     
 					! ************************* Energy release ******************
-					!if(this%time <= 1.0E-07_dkind) then
+					!if(this%time <= 1.0E-07_dp) then
 					!	if(i <= 80) then
 					!		if (this%sources_flag)	then
-					!			E_f_int%cells(i,j,k)	= E_f_int%cells(i,j,k)	+ energy_source * this%time_step * 1.0E06_dkind 
-					!			energy_output			= energy_output			+ energy_source * this%time_step * 1.0E06_dkind *  rho%cells(i,1,1)
+					!			E_f_int%cells(i,j,k)	= E_f_int%cells(i,j,k)	+ energy_source * this%time_step * 1.0E06_dp 
+					!			energy_output			= energy_output			+ energy_source * this%time_step * 1.0E06_dp *  rho%cells(i,1,1)
 					!		end if
 					!	end if
 					!end if
@@ -559,14 +603,14 @@ contains
 							end do		
 						end if
 							
-						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dkind) then
-							spec_summ = spec_summ + max(Y_int%pr(spec)%cells(i,j,k), 0.0_dkind)
+						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dp) then
+							spec_summ = spec_summ + max(Y_int%pr(spec)%cells(i,j,k), 0.0_dp)
 						end if
 					end do
 					
 					do spec = 1,species_number
-						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dkind) then
-					!		Y_int%pr(spec)%cells(i,j,k) = max(Y_int%pr(spec)%cells(i,j,k), 0.0_dkind) / spec_summ
+						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dp) then
+					!		Y_int%pr(spec)%cells(i,j,k) = max(Y_int%pr(spec)%cells(i,j,k), 0.0_dp) / spec_summ
 						end if
 					end do					
 				
@@ -578,11 +622,12 @@ contains
 		!$omp end do nowait
 		!$omp end parallel
 			
-		!if((this%time <= 1.0E-06_dkind).and.(this%sources_flag)) then		
+        end associate
+
+		!if((this%time <= 1.0E-06_dp).and.(this%sources_flag)) then		
 		!	print *, energy_output
 		!end if				
-			
-		end associate
+
 
 	end subroutine
 
@@ -592,7 +637,7 @@ contains
 		class(cpm_solver)		,intent(inout)		:: this
 
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, farfield_velocity, wall_temperature
+		real(dp)				:: farfield_density, farfield_pressure, farfield_velocity, wall_temperature
 		
 		integer					:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -614,9 +659,9 @@ contains
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name,farfield_pressure,farfield_density,farfield_velocity,wall_temperature) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(T,p,rho,v,mol_mix_conc,Y,mesh,bc,cons_inner_loop,dimensions,species_number)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name,farfield_pressure,farfield_density,farfield_velocity,wall_temperature) !, &
+		!!$omp& shared(this,cons_inner_loop,dimensions,species_number)
+
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -657,9 +702,9 @@ contains
 										if(.not.bc%boundary_types(bound_number)%is_slip()) then
 											do dim1 = 1, dimensions
 												if (dim1 /= dim) then	
-													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind !v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dkind * v%pr(dim1)%cells(i,j,k)
-												!	v%pr(dim1)%cells(i,j,k) = 0.0_dkind
-												!	v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
+													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp !v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dp * v%pr(dim1)%cells(i,j,k)
+												!	v%pr(dim1)%cells(i,j,k) = 0.0_dp
+												!	v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
 												end if
 											end do
 										end if
@@ -691,8 +736,8 @@ contains
 									case ('inlet')
 
 										!**** Relaxing inlet ****
-								!		farfield_pressure	= 101325.0_dkind + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dkind) * min(this%time/10e-06_dkind,1.0_dkind)
-								!		farfield_density	= 1.17195723916649_dkind + (bc%boundary_types(bound_number)%get_farfield_density() - 1.17195723916649_dkind) * min(this%time/10e-06_dkind,1.0_dkind)
+								!		farfield_pressure	= 101325.0_dp + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dp) * min(this%time/10e-06_dp,1.0_dp)
+								!		farfield_density	= 1.17195723916649_dp + (bc%boundary_types(bound_number)%get_farfield_density() - 1.17195723916649_dp) * min(this%time/10e-06_dp,1.0_dp)
                                        
 								!		farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
 								!		farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()	
@@ -744,9 +789,9 @@ contains
 					bc				=> this%boundary%bc_ptr	, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(E_f,E_f_int,Y,Y_int,bc,cons_inner_loop,species_number,dimensions)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name) !, &
+		!!$omp& shared(this,cons_inner_loop,species_number,dimensions)
+            
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -810,9 +855,9 @@ contains
 					bc				=> this%boundary%bc_ptr	, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(v,v_int,bc,cons_inner_loop,dimensions)
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) !, &
+    	!!$omp& shared(this,cons_inner_loop,dimensions)
+        
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -846,9 +891,9 @@ contains
 										end do	
 										
 										!if (sign == 1) then
-										!	v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = max(0.0_dkind,v_int%pr(dim)%cells(i,j,k))
+										!	v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = max(0.0_dp,v_int%pr(dim)%cells(i,j,k))
 										!else
-										!	v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = min(0.0_dkind,v_int%pr(dim)%cells(i,j,k))
+										!	v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = min(0.0_dp,v_int%pr(dim)%cells(i,j,k))
 										!end if
 									case ('inlet')
 										v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
@@ -877,14 +922,14 @@ contains
 
 		class(cpm_solver)	,intent(inout)	:: this
 		
-		real(dkind)	:: delta_t_interm, time_step(1), velocity_value
-		real(dkind)	,dimension(:)	,allocatable	,save	:: time_step_array
+		real(dp)	:: delta_t_interm, time_step(1), velocity_value
+		real(dp)	,dimension(:)	,allocatable	,save	:: time_step_array
 
 		integer						:: dimensions
 		integer						:: processor_rank, processor_number, mpi_communicator
 
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		integer	:: sign
 		integer :: i,j,k,dim,error
 
@@ -896,7 +941,7 @@ contains
 			allocate(time_step_array(processor_number))
 		end if
 
-		time_step(1)	= 10.0_dkind !this%initial_time_step 
+		time_step(1)	= 10.0_dp !this%initial_time_step 
 
 		associate(  v				=> this%v%v_ptr		, &
 					v_s				=> this%v_s%s_ptr		, &
@@ -916,11 +961,11 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
-				velocity_value		= 0.0_dkind
+				velocity_value		= 0.0_dp
 				do dim = 1,dimensions
 					velocity_value = velocity_value + v%pr(dim)%cells(i,j,k)*v%pr(dim)%cells(i,j,k)
 				end do
-				delta_t_interm = minval(cell_size,cell_size > 0.0_dkind) / (sqrt(velocity_value) + v_s%cells(i,j,k)) !
+				delta_t_interm = minval(cell_size,cell_size > 0.0_dp) / (sqrt(velocity_value) + v_s%cells(i,j,k)) !
 				if (delta_t_interm < time_step(1)) then
 					time_step(1) = delta_t_interm
 				end if
@@ -952,11 +997,11 @@ contains
 		
 		!# Implantation
 		!if(this%time_step < 3.0e-08) then
-		!	this%time_step = 0.025_dkind*this%time_step
+		!	this%time_step = 0.025_dp*this%time_step
 		!end if
   !
 		!if(this%time_step < 6.5e-10) then
-		!	this%time_step = 0.5_dkind*this%time_step
+		!	this%time_step = 0.5_dp*this%time_step
 		!end if
 		
 
@@ -966,28 +1011,28 @@ contains
 		
 	subroutine set_CFL_coefficient(this,coefficient)
 		class(cpm_solver)	,intent(inout)		:: this
-		real(dkind)				,intent(in)		:: coefficient
+		real(dp)				,intent(in)		:: coefficient
 	
 		this%courant_fraction = coefficient
 		
 	end subroutine
 	
 	pure function get_CFL_coefficient(this)
-		real(dkind)						:: get_CFL_coefficient
+		real(dp)						:: get_CFL_coefficient
 		class(cpm_solver)	,intent(in)		:: this
 
 		get_CFL_coefficient = this%courant_fraction
 	end function	
 	
 	pure function get_time_step(this)
-		real(dkind)						:: get_time_step
+		real(dp)						:: get_time_step
 		class(cpm_solver)	,intent(in)		:: this
 
 		get_time_step = this%time_step
 	end function
 
 	pure function get_time(this)
-		real(dkind)						:: get_time
+		real(dp)						:: get_time
 		class(cpm_solver)	,intent(in)		:: this
 
 		get_time = this%time
@@ -995,20 +1040,20 @@ contains
 
     subroutine if_stabilized(this,time,stabilized)
 		class(cpm_solver)	,intent(inout)	:: this
-		real(dkind)			,intent(in)     :: time    
+		real(dp)			,intent(in)     :: time    
 
 		logical				,intent(out)	:: stabilized
 		
         logical						:: boundary 
-		real(dkind)	,dimension(3)	:: cell_size		
+		real(dp)	,dimension(3)	:: cell_size		
 		
-		real(dkind)					:: max_val, left_val, right_val, flame_velocity, flame_surface_length, surface_factor
-		real(dkind)					:: a, b 
-		real(dkind)					:: time_diff, time_delay, time_stabilization
-		real(dkind), save			:: previous_flame_location = 0.0_dkind, current_flame_location = 0.0_dkind, farfield_velocity = 0.0_dkind
-		real(dkind), save			:: previous_time = 0.0_dkind, current_time = 0.0_dkind
-        real(dkind), save			:: av_flame_velocity = 0.0_dkind, previous_av_flame_velocity = 0.0_dkind
-		real(dkind), dimension(20),	save	:: flame_velocity_array = 0.0_dkind
+		real(dp)					:: max_val, left_val, right_val, flame_velocity, flame_surface_length, surface_factor
+		real(dp)					:: a, b 
+		real(dp)					:: time_diff, time_delay, time_stabilization
+		real(dp), save			:: previous_flame_location = 0.0_dp, current_flame_location = 0.0_dp, farfield_velocity = 0.0_dp
+		real(dp), save			:: previous_time = 0.0_dp, current_time = 0.0_dp
+        real(dp), save			:: av_flame_velocity = 0.0_dp, previous_av_flame_velocity = 0.0_dp
+		real(dp), dimension(20),	save	:: flame_velocity_array = 0.0_dp
 		integer		,save			:: correction = 0, counter = 0
 		integer						:: flame_front_index
 		character(len=200)			:: file_name
@@ -1017,7 +1062,7 @@ contains
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
 
-		real(dkind)				:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
+		real(dp)				:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
 		integer					:: lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2 
 		
 		integer :: CO_index, H2O2_index, HO2_index
@@ -1045,13 +1090,13 @@ contains
 					Y				=> this%Y%v_ptr				, &
 					bc				=> this%boundary%bc_ptr)
 
-	!	time_delay			= 1e-04_dkind			
-	!	time_diff			= 5e-05_dkind
-	!	time_stabilization	= 5e-04_dkind			
+	!	time_delay			= 1e-04_dp			
+	!	time_diff			= 5e-05_dp
+	!	time_stabilization	= 5e-04_dp			
 					
-		time_delay			= 1e-05_dkind			
-		time_diff			= 1e-04_dkind
-		time_stabilization	= 5e-06_dkind			
+		time_delay			= 1e-05_dp			
+		time_diff			= 1e-04_dp
+		time_stabilization	= 5e-06_dp			
 		
 		if ( time > (correction+1)*(time_diff) + time_delay) then			
 					
@@ -1060,28 +1105,28 @@ contains
 			!# 1D front tracer
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-				max_val = 0.0_dkind
+				max_val = 0.0_dp
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
 					if(bc%bc_markers(i,j,k) == 0) then	
 					
 						!! Grad temp
 						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
 						!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+						!	flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
 						!	flame_front_index = i
 						!end if
 					
 						! max H
 						if (abs(Y%pr(HO2_index)%cells(i,j,k)) > max_val) then
 							max_val = Y%pr(HO2_index)%cells(i,j,k)
-							flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+							flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
 							flame_front_index = i
 						end if					
 					
 						! max CO
 						!if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_val) then
 						!	max_val = Y%pr(CO_index)%cells(i,j,k)
-						!	flame_front_coords(j) = (i - 0.5_dkind)*cell_size(1) 
+						!	flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
 						!	flame_front_index = i
 						!end if
 				
@@ -1099,10 +1144,10 @@ contains
 			left_val	= Y%pr(HO2_index)%cells(flame_front_index-1,1,1)
 			right_val	= Y%pr(HO2_index)%cells(flame_front_index+1,1,1)				 
 			
-			a = (right_val + left_val - 2.0_dkind * max_val)/2.0_dkind/cell_size(1)**2
-			b = (max_val - left_val)/cell_size(1) - a*(2.0_dkind*flame_front_coords(1) - cell_size(1))
+			a = (right_val + left_val - 2.0_dp * max_val)/2.0_dp/cell_size(1)**2
+			b = (max_val - left_val)/cell_size(1) - a*(2.0_dp*flame_front_coords(1) - cell_size(1))
 			
-			current_flame_location = -b/2.0_dkind/a
+			current_flame_location = -b/2.0_dp/a
 
 			if(correction == 0) then
 				previous_flame_location = current_flame_location

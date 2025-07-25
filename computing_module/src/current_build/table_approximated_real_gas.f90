@@ -13,6 +13,7 @@ module table_approximated_real_gas_class
 	use thermophysical_properties_class
 	use computational_mesh_class
     	use riemann_solver_class
+    use benchmarking
 
 	implicit none
 
@@ -26,7 +27,7 @@ module table_approximated_real_gas_class
 	type(field_scalar_cons)			,target	:: v_s, gamma, h_s, c_v_old, e_i_old, dp_stat_dt, mixture_cp, h_full
 	type(field_scalar_flow)			,target	:: gamma_f, c_v_f_old, e_i_f_old
 
-	real(dkind)	,dimension(:)	,allocatable	:: concs
+	real(dp)	,dimension(:)	,allocatable	:: concs
 	!$omp threadprivate(concs)
     
     type(riemann_solver)						:: riemann
@@ -43,8 +44,8 @@ module table_approximated_real_gas_class
 		type(computational_mesh_pointer)			:: mesh
 		type(boundary_conditions_pointer)			:: boundary
 
-		real(dkind)									:: total_energy, total_mass
-		real(dkind)	,dimension(:)	,allocatable	:: total_species
+		real(dp)									:: total_energy, total_mass
+		real(dp)	,dimension(:)	,allocatable	:: total_species
 		
 	contains
 		procedure				:: apply_state_equation
@@ -146,13 +147,13 @@ contains
         
 		species_number = manager%chemistry%chem_ptr%species_number
 		allocate(constructor%total_species(species_number))
-		constructor%total_energy	= 0.0_dkind
-		constructor%total_mass		= 0.0_dkind
-		constructor%total_species	= 0.0_dkind
+		constructor%total_energy	= 0.0_dp
+		constructor%total_mass		= 0.0_dp
+		constructor%total_species	= 0.0_dp
 		
 		!$omp parallel
 		allocate(concs(species_number))
-		concs = 0.0_dkind
+		concs = 0.0_dp
 		!$omp end parallel
 
 	end function
@@ -161,11 +162,11 @@ contains
 
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)                     :: cp, cv
+		real(dp)                     :: cp, cv
 
-		real(dkind) ,dimension(this%chem%chem_ptr%species_number)    :: concs
-		real(dkind)	:: average_molar_mass
-		real(dkind)	:: farfield_mol_mix_conc
+		real(dp) ,dimension(this%chem%chem_ptr%species_number)    :: concs
+		real(dp)	:: average_molar_mass
+		real(dp)	:: farfield_mol_mix_conc
 
 		integer	:: bound_number
 		integer	:: species_number
@@ -173,9 +174,9 @@ contains
 		integer	:: dimensions
 		integer	,dimension(3,2)	:: utter_loop, inner_loop
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure
+		real(dp)				:: farfield_density, farfield_pressure
         
-        real(dkind)				:: h_s_Tref, e_i_Tref
+        real(dp)				:: h_s_Tref, e_i_Tref
 
 		integer	:: specie_number
 		integer	:: sign
@@ -206,19 +207,19 @@ contains
 
 			if(this%boundary%bc_ptr%bc_markers(i,j,k) == 0) then
 			
-				average_molar_mass = 0.0_dkind
+				average_molar_mass = 0.0_dp
 				do specie_number = 1,species_number
-					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dkind) then
+					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dp) then
 						average_molar_mass = average_molar_mass + Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 					end if
 				end do
 				
-				average_molar_mass =  1.0_dkind / average_molar_mass
+				average_molar_mass =  1.0_dp / average_molar_mass
 				mol_mix_conc%cells(i,j,k)	= average_molar_mass
 				
-				concs = 0.0_dkind
+				concs = 0.0_dp
 				do specie_number = 1,species_number
-					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dkind) then
+					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dp) then
 						concs(specie_number)		=	Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
 					end if
 				end do
@@ -248,7 +249,7 @@ contains
                	!E_f%cells(i,j,k)		= h_s%cells(i,j,k)
 
 				do dim = 1,dimensions
-					E_f%cells(i,j,k)	= E_f%cells(i,j,k) + 0.5_dkind * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
+					E_f%cells(i,j,k)	= E_f%cells(i,j,k) + 0.5_dp * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
 				end do
 
 				v_s%cells(i,j,k)		= sqrt(gamma%cells(i,j,k)*p%cells(i,j,k)/rho%cells(i,j,k))				
@@ -276,11 +277,11 @@ contains
 
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mol_mix_conc, cp, cv, gamma
-		real(dkind)	:: average_molar_mass
-		real(dkind)	:: rho_Y
+		real(dp)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mol_mix_conc, cp, cv, gamma
+		real(dp)	:: average_molar_mass
+		real(dp)	:: rho_Y
 		
-		real(dkind)	:: old_Mach
+		real(dp)	:: old_Mach
 		
 		integer	:: species_number
 		integer	:: dimensions
@@ -305,9 +306,9 @@ contains
 					gamma_f	=> this%gamma_f%s_ptr	, &
 					bc		=> this%boundary%bc_ptr)
 
-	!$omp parallel default(none) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,cp,cv,h_s) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(T_f,p_f,rho_f,e_i_f,e_i_f_old,v_s_f,E_f_f,v_f,Y_f,c_v_f_old,gamma_f,flow_inner_loop,dimensions,species_number,bc)
+	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,cp,cv,h_s), &
+    !$omp& firstprivate(this)
+	!!$omp& shared(e_i_f_old,c_v_f_old,flow_inner_loop,dimensions,species_number)
 	
 		do dim = 1, dimensions
 
@@ -317,19 +318,19 @@ contains
 				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))	
 			end do		
 
-		!$omp do collapse(3) schedule(guided)
+		!$omp do collapse(3) schedule(static)
 
 			do k = loop(3,1),loop(3,2)
 			do j = loop(2,1),loop(2,2)
 			do i = loop(1,1),loop(1,2)
 				if ((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
 
-					average_molar_mass = 0.0_dkind
+					average_molar_mass = 0.0_dp
 					do specie_number = 1,species_number
 						average_molar_mass = average_molar_mass + Y_f%pr(specie_number)%cells(dim,i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 					end do
 				
-					average_molar_mass =  1.0_dkind / average_molar_mass		
+					average_molar_mass =  1.0_dp / average_molar_mass		
 					
 					do specie_number = 1,species_number
 						concs(specie_number)				= Y_f%pr(specie_number)%cells(dim,i,j,k) * average_molar_mass / this%thermo%thermo_ptr%molar_masses(specie_number)
@@ -351,7 +352,7 @@ contains
 					E_f_f%cells(dim,i,j,k) = e_i_f%cells(dim,i,j,k) / average_molar_mass
 
 					do dim1 = 1, dimensions
-						E_f_f%cells(dim,i,j,k) = E_f_f%cells(dim,i,j,k) + 0.5_dkind*v_f%pr(dim1)%cells(dim,i,j,k)*v_f%pr(dim1)%cells(dim,i,j,k)
+						E_f_f%cells(dim,i,j,k) = E_f_f%cells(dim,i,j,k) + 0.5_dp*v_f%pr(dim1)%cells(dim,i,j,k)*v_f%pr(dim1)%cells(dim,i,j,k)
 					end do
 				end if	
 			end do
@@ -363,17 +364,17 @@ contains
 			
 		!$omp end parallel
 
-		continue
-
 		end associate
+
+		continue	
 
 	end subroutine	
 
 	subroutine apply_state_equation(this)
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)	:: velocity, t_initial, t_final, e_internal, cp, cv, h_s_Tref
-		real(dkind)	:: average_molar_mass
+		real(dp)	:: velocity, t_initial, t_final, e_internal, cp, cv, h_s_Tref
+		real(dp)	:: average_molar_mass
 
 		integer	:: species_number
 		integer	:: dimensions
@@ -399,38 +400,39 @@ contains
 					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
 					v				=> this%v%v_ptr			   , &
 					Y				=> this%Y%v_ptr				, &
+                    bc	    		=> this%boundary%bc_ptr , &
 					mesh			=> this%mesh%mesh_ptr)
 
-	!$omp parallel default(none) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,h_s_Tref, average_molar_mass,T_iter) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,mixture_cp,p,rho,e_i,h_s,h_full,gamma,v_s,mol_mix_conc,E_f,v,Y,dimensions,cons_inner_loop,species_number)
-
-	!$omp do collapse(3) schedule(guided)
+	!$omp parallel default(shared) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,h_s_Tref, average_molar_mass,T_iter) , &
+    !$omp& firstprivate(this)
+	!!$omp& shared(this,gamma,dimensions,cons_inner_loop,species_number)
+        
+	!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 
-			if(this%boundary%bc_ptr%bc_markers(i,j,k) == 0) then
+			if(bc%bc_markers(i,j,k) == 0) then
 
 				e_i%cells(i,j,k) = E_f%cells(i,j,k)
 				
 				do dim = 1,dimensions
-					 e_i%cells(i,j,k) = e_i%cells(i,j,k) - 0.5_dkind * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
+					 e_i%cells(i,j,k) = e_i%cells(i,j,k) - 0.5_dp * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
 				end do
 
-				average_molar_mass = 0.0_dkind
+				average_molar_mass = 0.0_dp
 				do specie_number = 1,species_number
-					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dkind) then
+					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dp) then
 						average_molar_mass = average_molar_mass + Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 					end if
 				end do
 				
-				average_molar_mass =  1.0_dkind / average_molar_mass
+				average_molar_mass =  1.0_dp / average_molar_mass
 				mol_mix_conc%cells(i,j,k)	= average_molar_mass
 
-				concs = 0.0_dkind
+				concs = 0.0_dp
 				do specie_number = 1,species_number
-					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dkind) then
+					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dp) then
 						concs(specie_number)	= Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
 					end if
 				end do				
@@ -476,20 +478,20 @@ contains
 		end do
 
 	!$omp end do nowait
-	!$omp end parallel
 
-		continue
+	!$omp end parallel
 
 		end associate
 
 		continue
+
 	end subroutine
 
 	subroutine apply_state_equation_low_mach(this)
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)	:: velocity, t_initial, t_final, e_internal, cp, cv
-		real(dkind)	:: average_molar_mass
+		real(dp)	:: velocity, t_initial, t_final, e_internal, cp, cv
+		real(dp)	:: average_molar_mass
 
 		integer	:: species_number
 		integer	:: dimensions
@@ -515,9 +517,9 @@ contains
 					Y				=> this%Y%v_ptr			   , &
 					bc				=> this%boundary%bc_ptr)
 
-	!$omp parallel default(none) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,p,p_stat,rho,e_i,gamma,v_s,mol_mix_conc,E_f,v,Y,dimensions,cons_inner_loop,species_number,bc)
+	!$omp parallel default(shared) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass) , &
+    !$omp& firstprivate(this)
+	!!$omp& shared(this,gamma,dimensions,cons_inner_loop,species_number)
 
 	!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -528,12 +530,12 @@ contains
 
 				e_i%cells(i,j,k) = E_f%cells(i,j,k)
 			
-				average_molar_mass = 0.0_dkind
+				average_molar_mass = 0.0_dp
 				do specie_number = 1,species_number
 					average_molar_mass = average_molar_mass + Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 				end do
 				
-				average_molar_mass =  1.0_dkind / average_molar_mass
+				average_molar_mass =  1.0_dp / average_molar_mass
 				mol_mix_conc%cells(i,j,k)	= average_molar_mass
 
 				do specie_number = 1,species_number
@@ -547,10 +549,10 @@ contains
 
 				gamma%cells(i,j,k)	= cp / cv				
 				
-				T%cells(i,j,k)      = e_i%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dkind) / r_gase_J * mol_mix_conc%cells(i,j,k)
+				T%cells(i,j,k)      = e_i%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dp) / r_gase_J * mol_mix_conc%cells(i,j,k)
 				v_s%cells(i,j,k)	= sqrt(gamma%cells(i,j,k)*p_stat%cells(i,j,k)/rho%cells(i,j,k))
                 
-			    e_i%cells(i,j,k) = p_stat%cells(i,j,k) / rho%cells(i,j,k) / (gamma%cells(i,j,k) - 1.0_dkind)
+			    e_i%cells(i,j,k) = p_stat%cells(i,j,k) / rho%cells(i,j,k) / (gamma%cells(i,j,k) - 1.0_dp)
             end if
 
 		end do
@@ -558,22 +560,25 @@ contains
 		end do
 
 	!$omp end do nowait
+
 	!$omp end parallel
+
+        end associate
 
 		continue
 
-		end associate
+
 
 		continue
     end subroutine	
 
 	subroutine apply_state_equation_low_mach_fds(this,time_step,predictor)
 		class(table_approximated_real_gas) ,intent(inout) :: this
-		real(dkind)			,intent(in)		:: time_step
+		real(dp)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 		
-		real(dkind)	:: velocity,  e_internal, cp, cv
-		real(dkind)	:: average_molar_mass
+		real(dp)	:: velocity,  e_internal, cp, cv
+		real(dp)	:: average_molar_mass
 
 		integer	:: species_number
 		integer	:: dimensions
@@ -601,11 +606,12 @@ contains
 					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
 					v				=> this%v%v_ptr			   , &
 					Y				=> this%Y%v_ptr			   , &
+					gamma           => this%gamma%s_ptr         , &
 					bc				=> this%boundary%bc_ptr)
 
-	!$omp parallel default(none) private(i,j,k,dim,specie_number,cp,cv,average_molar_mass) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,p,h_s,p_stat,p_stat_old,dp_stat_dt,rho,e_i,gamma,v_s,mixture_cp,mol_mix_conc,E_f,v,Y,dimensions,cons_inner_loop,species_number,predictor,time_step,bc)
+	!$omp parallel default(shared) private(i,j,k,dim,specie_number,cp,cv,average_molar_mass) , &
+    !$omp& firstprivate(this)                    
+	!!$omp& shared(this,dimensions,cons_inner_loop,species_number,predictor,time_step)
 
 	!$omp do collapse(3) schedule(static)					
 					
@@ -617,12 +623,12 @@ contains
 			
 				e_i%cells(i,j,k) = E_f%cells(i,j,k)
 			
-				average_molar_mass = 0.0_dkind
+				average_molar_mass = 0.0_dp
 				do specie_number = 1,species_number
 					average_molar_mass = average_molar_mass + Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 				end do
 				
-				average_molar_mass =  1.0_dkind / average_molar_mass
+				average_molar_mass =  1.0_dp / average_molar_mass
 				mol_mix_conc%cells(i,j,k)	= average_molar_mass
 
 				do specie_number = 1,species_number
@@ -633,7 +639,7 @@ contains
 					p_stat_old%cells(i,j,k)	= p_stat%cells(i,j,k)
 					p_stat%cells(i,j,k)		= p_stat%cells(i,j,k) + dp_stat_dt%cells(i,j,k) * time_step
 				else 
-					p_stat%cells(i,j,k)	= 0.5_dkind * (p_stat%cells(i,j,k) + p_stat_old%cells(i,j,k) + dp_stat_dt%cells(i,j,k) * time_step)
+					p_stat%cells(i,j,k)	= 0.5_dp * (p_stat%cells(i,j,k) + p_stat_old%cells(i,j,k) + dp_stat_dt%cells(i,j,k) * time_step)
 				end if					
 
 				T%cells(i,j,k)      = p_stat%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)
@@ -651,10 +657,10 @@ contains
 				
 			!	print*, p_stat%cells(i,j,k), rho%cells(i,j,k), gamma%cells(i,j,k)
 				v_s%cells(i,j,k)	= sqrt(gamma%cells(i,j,k)*p_stat%cells(i,j,k)/rho%cells(i,j,k))
-			    e_i%cells(i,j,k)	= p_stat%cells(i,j,k) / rho%cells(i,j,k) / (gamma%cells(i,j,k) - 1.0_dkind)
+			    e_i%cells(i,j,k)	= p_stat%cells(i,j,k) / rho%cells(i,j,k) / (gamma%cells(i,j,k) - 1.0_dp)
 
 				do dim = 1,dimensions
-					 E_f%cells(i,j,k) = e_i%cells(i,j,k) + 0.5_dkind * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
+					 E_f%cells(i,j,k) = e_i%cells(i,j,k) + 0.5_dp * ( v%pr(dim)%cells(i,j,k) * v%pr(dim)%cells(i,j,k) )
 				end do
 				
 				
@@ -665,22 +671,25 @@ contains
 		end do
 
 	!$omp end do nowait
+
 	!$omp end parallel		
 		
+        end associate
+                            
 		continue
 		
-		end associate		
+				
     end subroutine	
 
 	subroutine apply_state_equation_flow_variables(this)
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mol_mix_conc, cp, cv, gamma
-        real(dkind)	:: rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r
-		real(dkind)	:: average_molar_mass
-		real(dkind)	:: rho_Y
+		real(dp)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mol_mix_conc, cp, cv, gamma
+        real(dp)	:: rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r
+		real(dp)	:: average_molar_mass
+		real(dp)	:: rho_Y
 		
-		real(dkind)	:: old_Mach
+		real(dp)	:: old_Mach
 		
 		integer	:: species_number
 		integer	:: dimensions
@@ -710,10 +719,12 @@ contains
 					mesh	=> this%mesh%mesh_ptr	, &
 					bc		=> this%boundary%bc_ptr)
 
-	!$omp parallel default(none) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,t_final,e_internal,cp,cv,h_s,T_old,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(T_f,p_f,rho_f,e_i_f,e_i_f_old,v_s_f,E_f_f,v_f,Y_f,c_v_f_old,gamma_f,p,rho,gamma,v,flow_inner_loop,dimensions,species_number,bc)
+	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,t_final,e_internal,cp,cv,h_s,T_old,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r) , &
+    !$omp& firstprivate(this)
+	!!$omp& shared(this,e_i_f_old,c_v_f_old,flow_inner_loop,dimensions,species_number)
 	
+        	
+
 		do dim = 1, dimensions
 
 			loop = flow_inner_loop
@@ -722,19 +733,19 @@ contains
 				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))	
 			end do		
 
-		!$omp do collapse(3) schedule(guided)
+		!$omp do collapse(3) schedule(static)
 
 			do k = loop(3,1),loop(3,2)
 			do j = loop(2,1),loop(2,2)
 			do i = loop(1,1),loop(1,2)
 				if ((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
 
-					average_molar_mass = 0.0_dkind
+					average_molar_mass = 0.0_dp
 					do specie_number = 1,species_number
 						average_molar_mass = average_molar_mass + Y_f%pr(specie_number)%cells(dim,i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 					end do
 				
-					average_molar_mass =  1.0_dkind / average_molar_mass		
+					average_molar_mass =  1.0_dp / average_molar_mass		
 					
 					do specie_number = 1,species_number
 						concs(specie_number)				= Y_f%pr(specie_number)%cells(dim,i,j,k) * average_molar_mass / this%thermo%thermo_ptr%molar_masses(specie_number)
@@ -804,7 +815,7 @@ contains
 					!e_i_f%cells(dim,i,j,k)	= (h_s - r_gase_J*T_f%cells(dim,i,j,k)) / average_molar_mass !p%cells(i,j,k)/rho%cells(i,j,k)
 					
 				!#  Old e = cv*T equation of state.	
-				!	e_i_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / (gamma_f%cells(dim,i,j,k) - 1.0_dkind) 
+				!	e_i_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / (gamma_f%cells(dim,i,j,k) - 1.0_dp) 
 					
 				!# New de = cv*dT equation of state		
 				!	e_i_f%cells(dim,i,j,k)	= (e_i_f_old%cells(dim,i,j,k) + (T_f%cells(dim,i,j,k) - T_old)*c_v_f_old%cells(dim,i,j,k)) /average_molar_mass 
@@ -814,7 +825,7 @@ contains
 					E_f_f%cells(dim,i,j,k)	= e_i_f%cells(dim,i,j,k) / average_molar_mass
 
 					do dim1 = 1, dimensions
-						E_f_f%cells(dim,i,j,k) = E_f_f%cells(dim,i,j,k) + 0.5_dkind*v_f%pr(dim1)%cells(dim,i,j,k)*v_f%pr(dim1)%cells(dim,i,j,k)
+						E_f_f%cells(dim,i,j,k) = E_f_f%cells(dim,i,j,k) + 0.5_dp*v_f%pr(dim1)%cells(dim,i,j,k)*v_f%pr(dim1)%cells(dim,i,j,k)
 					end do
 				end if	
 			end do
@@ -826,9 +837,10 @@ contains
 			
 		!$omp end parallel
 
+        end associate
 		continue
 
-		end associate
+		
 
 		continue
 	end subroutine	
@@ -836,8 +848,8 @@ contains
 	subroutine check_conservation_laws(this)
 		class(table_approximated_real_gas) ,intent(in) :: this
 
-		real(dkind)	:: total_mass_error, total_energy_error
-		real(dkind)	,dimension(:), allocatable	:: total_species_error
+		real(dp)	:: total_mass_error, total_energy_error
+		real(dp)	,dimension(:), allocatable	:: total_species_error
 		
 		integer		:: species_number
 		integer	:: dimensions
@@ -892,10 +904,10 @@ contains
 	subroutine apply_boundary_conditions_for_initial_conditions(this)
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dkind)                     :: cp, cv
+		real(dp)                     :: cp, cv
 
-		real(dkind) ,dimension(this%chem%chem_ptr%species_number)    :: concs
-		real(dkind)	:: average_molar_mass, mol_mix_conc
+		real(dp) ,dimension(this%chem%chem_ptr%species_number)    :: concs
+		real(dp)	:: average_molar_mass, mol_mix_conc
 
 		integer	:: bound_number
 		integer	:: species_number, specie_index
@@ -903,10 +915,10 @@ contains
 		integer	:: dimensions
 		integer	,dimension(3,2)	:: utter_loop, inner_loop
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: wall_temperature
-		real(dkind)				:: farfield_density, farfield_pressure, farfield_temperature, farfield_velocity     !		farfield_gamma, farfield_v_s, farfield_mol_mix_conc, farfield_E_f, farfield_e_i, farfield_v
-		real(dkind)				:: farfield_E_f, farfield_e_i, farfield_gamma, farfield_v_s
-		real(dkind)			,dimension(:)	,allocatable	:: farfield_concentrations
+		real(dp)				:: wall_temperature
+		real(dp)				:: farfield_density, farfield_pressure, farfield_temperature, farfield_velocity     !		farfield_gamma, farfield_v_s, farfield_mol_mix_conc, farfield_E_f, farfield_e_i, farfield_v
+		real(dp)				:: farfield_E_f, farfield_e_i, farfield_gamma, farfield_v_s
+		real(dp)			,dimension(:)	,allocatable	:: farfield_concentrations
 		character(len=10)	,dimension(:)	,allocatable	:: farfield_species_names
 
 		integer	:: specie_number
@@ -969,7 +981,7 @@ contains
 										call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
 										call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
 								
-										concs = 0.0_dkind
+										concs = 0.0_dp
 										do specie_number = 1, size(farfield_species_names)
 											specie_index		= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
 											concs(specie_index) = farfield_concentrations(specie_number)
@@ -978,7 +990,7 @@ contains
 										call this%thermo%thermo_ptr%change_cell_units_mole_to_dimless(concs)									
 
 										do specie_number = 1, size(concs)
-											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 0.0_dkind
+											Y%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= 0.0_dp
 										end do
 										
 										do specie_number = 1, size(farfield_species_names)
@@ -986,13 +998,13 @@ contains
 											Y%pr(specie_index)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	concs(specie_index)
 										end do
 
-										average_molar_mass = 0.0_dkind
+										average_molar_mass = 0.0_dp
 										do specie_number = 1,size(farfield_species_names)
 											specie_index		= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
 											average_molar_mass = average_molar_mass + concs(specie_index) / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 				
-										average_molar_mass	=  1.0_dkind / average_molar_mass
+										average_molar_mass	=  1.0_dp / average_molar_mass
 										mol_mix_conc		=  average_molar_mass
 				
 										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * mol_mix_conc
@@ -1013,8 +1025,8 @@ contains
 										
                                         !farfield_velocity	=  sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
                                         
-										!farfield_e_i	= farfield_pressure / farfield_density / (farfield_gamma - 1.0_dkind) 
-										farfield_E_f	= farfield_e_i + 0.5_dkind * ( farfield_velocity * farfield_velocity )
+										!farfield_e_i	= farfield_pressure / farfield_density / (farfield_gamma - 1.0_dp) 
+										farfield_E_f	= farfield_e_i + 0.5_dp * ( farfield_velocity * farfield_velocity )
 										farfield_v_s	= sqrt(farfield_gamma*farfield_pressure/farfield_density)	
 				
 										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=	farfield_pressure 

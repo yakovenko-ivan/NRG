@@ -10,6 +10,7 @@ module viscosity_solver_class
 	use thermophysical_properties_class
 	use chemical_properties_class
 	
+    use benchmarking
 	use mpi_communications_class
 
 	implicit none
@@ -38,9 +39,9 @@ module viscosity_solver_class
 		type(thermophysical_properties_pointer)		:: thermo
 		type(chemical_properties_pointer)			:: chem
 		
-		real(dkind) ,dimension(:)   ,allocatable    :: viscosity_coeff_constant
+		real(dp) ,dimension(:)   ,allocatable    :: viscosity_coeff_constant
 		
-		real(dkind) ,dimension(:,:,:)	,allocatable    :: sigma_theta_theta		
+		real(dp) ,dimension(:,:,:)	,allocatable    :: sigma_theta_theta		
 	contains
 		procedure	,private	::	calculate_viscosity_coeff_constant
 		procedure	,private	::	calculate_viscosity_coeff
@@ -107,11 +108,11 @@ contains
 		
 		dimensions = constructor%domain%get_domain_dimensions()
 		
-		constructor%E_f_prod%s_ptr%cells(:,:,:)		= 0.0_dkind
-        constructor%E_f_prod_FDS%s_ptr%cells(:,:,:)	= 0.0_dkind
+		constructor%E_f_prod%s_ptr%cells(:,:,:)		= 0.0_dp
+        constructor%E_f_prod_FDS%s_ptr%cells(:,:,:)	= 0.0_dp
         
 		do dim = 1, dimensions
-			constructor%v_prod%v_ptr%pr(dim)%cells(:,:,:) = 0.0_dkind
+			constructor%v_prod%v_ptr%pr(dim)%cells(:,:,:) = 0.0_dp
 		end do
 		
 		cons_allocation_bounds		= manager%domain%get_local_utter_cells_bounds()
@@ -121,7 +122,7 @@ contains
 				allocate(constructor%sigma_theta_theta(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 														cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 														cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
-				constructor%sigma_theta_theta			= 0.0_dkind
+				constructor%sigma_theta_theta			= 0.0_dp
 		end select			
 		
 		allocate(constructor%viscosity_coeff_constant(manager%chemistry%chem_ptr%species_number))
@@ -132,16 +133,16 @@ contains
 	subroutine	solve_viscosity(this,time_step)
 	
 		class(viscosity_solver) ,intent(inout) :: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
 		
-		real(dkind)	:: div_sigma, v_div_sigma, sigma_dv
+		real(dp)	:: div_sigma, v_div_sigma, sigma_dv
         
 		character(len=20)				:: coordinate_system
-		real(dkind), dimension (3,3)	:: lame_coeffs
+		real(dp), dimension (3,3)	:: lame_coeffs
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size			
+		real(dp)	,dimension(3)	:: cell_size			
 		
 		integer	:: sign
 		integer :: i,j,k,plus,dim1,dim2
@@ -157,6 +158,10 @@ contains
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
+        associate(  sigma			=> this%sigma%t_ptr)
+		    call this%mpi_support%exchange_conservative_tensor_field(sigma)
+        end associate
+        
 		associate(  v_prod			=> this%v_prod%v_ptr		, &
 					v				=> this%v%v_ptr				, &
 					E_f_prod		=> this%E_f_prod%s_ptr		, &
@@ -166,29 +171,28 @@ contains
 					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 
-		call this%mpi_support%exchange_conservative_tensor_field(sigma)
-				
-	!$omp parallel default(none)  private(i,j,k,dim1,dim2,plus,sign,v_div_sigma,div_sigma,sigma_dv,lame_coeffs) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,v_prod,v,rho,E_f_prod,E_f_prod_FDS,sigma,time_step,cons_inner_loop,dimensions,cell_size,coordinate_system) 
+	!$omp parallel default(shared)  private(i,j,k,dim1,dim2,plus,sign,v_div_sigma,div_sigma,sigma_dv,lame_coeffs) !, &
+    !!$omp& firstprivate(this)
+	!!$omp& shared(this,time_step,cons_inner_loop,dimensions,cell_size,coordinate_system) 
+        
 	!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 		
-			E_f_prod%cells(i,j,k)	= 0.0_dkind
-            E_f_prod_FDS%cells(i,j,k)	= 0.0_dkind
+			E_f_prod%cells(i,j,k)	= 0.0_dp
+            E_f_prod_FDS%cells(i,j,k)	= 0.0_dp
 		
 			if(bc%bc_markers(i,j,k) == 0) then
                 
-				v_div_sigma		= 0.0_dkind
-				sigma_dv		= 0.0_dkind
+				v_div_sigma		= 0.0_dp
+				sigma_dv		= 0.0_dp
                 
-				lame_coeffs		= 1.0_dkind				
+				lame_coeffs		= 1.0_dp				
 			
 				select case(coordinate_system)
 					case ('cartesian')	
-						lame_coeffs			= 1.0_dkind
+						lame_coeffs			= 1.0_dp
 					case ('cylindrical')
 						! x -> z, y -> r
 						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
@@ -204,14 +208,14 @@ contains
 				
 				
 				do dim1 = 1,dimensions
-					div_sigma	= 0.0_dkind
+					div_sigma	= 0.0_dp
 					
 					do dim2 = 1,dimensions
 							
 						div_sigma	= div_sigma + (	sigma%pr(dim1,dim2)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) &
-												-	sigma%pr(dim1,dim2)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3)))/(2.0_dkind * cell_size(dim2))
+												-	sigma%pr(dim1,dim2)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3)))/(2.0_dp * cell_size(dim2))
                         
-                        sigma_dv	= sigma_dv + sigma%pr(dim1,dim2)%cells(i,j,k) * (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dkind*cell_size(dim2))
+                        sigma_dv	= sigma_dv + sigma%pr(dim1,dim2)%cells(i,j,k) * (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dp*cell_size(dim2))
                     end do
                     
 					select case(coordinate_system)
@@ -219,7 +223,7 @@ contains
 						if(dim1==1) div_sigma = div_sigma + (sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
 						if(dim1==2) div_sigma = div_sigma + (sigma%pr(1,2)%cells(i,j,k))/mesh%mesh(1,i,j,k)
 					case ('spherical')
-						if(dim1==1) div_sigma = div_sigma + 2.0_dkind*(sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
+						if(dim1==1) div_sigma = div_sigma + 2.0_dp*(sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
                     end select			
 				
                     v_div_sigma	= v_div_sigma + div_sigma * v%pr(dim1)%cells(i,j,k)    
@@ -237,8 +241,14 @@ contains
 		end do
 		end do
 	!$omp end do nowait
+
 	!$omp end parallel
 
+        end associate
+                    
+        associate(  v_prod			=> this%v_prod%v_ptr		, &
+					E_f_prod		=> this%E_f_prod%s_ptr		, &
+					E_f_prod_FDS	=> this%E_f_prod_FDS%s_ptr)
 		call this%mpi_support%exchange_conservative_scalar_field(E_f_prod)
         call this%mpi_support%exchange_conservative_scalar_field(E_f_prod_FDS)
 		call this%mpi_support%exchange_conservative_vector_field(v_prod)		
@@ -251,14 +261,14 @@ contains
 		class(viscosity_solver)	,intent(inout)	::	this
 		
 		integer         :: i, j, k, dim1, dim2, dim3
-        real(dkind)     :: div_v, nu_node, dv1_dx2, dv2_dx1, v_face_h2, v_face_l2
+        real(dp)     :: div_v, nu_node, dv1_dx2, dv2_dx1, v_face_h2, v_face_l2
 
-		real(dkind), dimension (3,3)	:: lame_coeffs
+		real(dp), dimension (3,3)	:: lame_coeffs
 		character(len=20)				:: coordinate_system
 		
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: cons_inner_loop, flow_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size		
+		real(dp)	,dimension(3)	:: cell_size		
 		
 		call this%calculate_viscosity_coeff()
 		
@@ -272,17 +282,19 @@ contains
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
+        associate(	v		=> this%v%v_ptr)
+		call this%mpi_support%exchange_conservative_vector_field(v)					
+        end associate
+
 		associate(	v		=> this%v%v_ptr					, &
 					nu      => this%nu%s_ptr				, &
 					sigma   => this%sigma%t_ptr				, &
 					mesh    => this%mesh%mesh_ptr)
 
-		call this%mpi_support%exchange_conservative_vector_field(v)					
-					
+		!$omp parallel default(shared)  private(i,j,k,dim1,dim2,dim3,div_v,dv1_dx2,dv2_dx1,lame_coeffs) !, &
+        !!$omp& firstprivate(this)
+		!!$omp& shared(this,cons_inner_loop,flow_inner_loop,cell_size,dimensions,coordinate_system) 
 
-		!$omp parallel default(none)  private(i,j,k,dim1,dim2,dim3,div_v,dv1_dx2,dv2_dx1,lame_coeffs) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(mesh,sigma,v,nu,cons_inner_loop,flow_inner_loop,cell_size,dimensions,coordinate_system) 
 
 		!$omp do collapse(3) schedule(static)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -292,13 +304,13 @@ contains
             do dim1 = 1,dimensions
             do dim2 = 1,dimensions
   
-                div_v = 0.0_dkind
+                div_v = 0.0_dp
 			
-				lame_coeffs		= 1.0_dkind				
+				lame_coeffs		= 1.0_dp				
 			
 				select case(coordinate_system)
 					case ('cartesian')	
-						lame_coeffs			= 1.0_dkind
+						lame_coeffs			= 1.0_dp
 					case ('cylindrical')
 						! x -> r, y -> z
 						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
@@ -315,24 +327,24 @@ contains
                 if (dim1 <= dim2) then
                     if (dim1 == dim2) then
                         do dim3 = 1,dimensions
-                            div_v = div_v + (v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) * lame_coeffs(dim3,3) - v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) * lame_coeffs(dim3,1))/(2.0_dkind*cell_size(dim3)*lame_coeffs(dim3,2))
+                            div_v = div_v + (v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) * lame_coeffs(dim3,3) - v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) * lame_coeffs(dim3,1))/(2.0_dp*cell_size(dim3)*lame_coeffs(dim3,2))
                         end do
                     else
-                        div_v = 0.0_dkind
+                        div_v = 0.0_dp
                     end if
 
-                    dv1_dx2 = (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dkind*cell_size(dim2))
-                    dv2_dx1 = (v%pr(dim2)%cells(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) - v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / (2.0_dkind*cell_size(dim1))
+                    dv1_dx2 = (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dp*cell_size(dim2))
+                    dv2_dx1 = (v%pr(dim2)%cells(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) - v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / (2.0_dp*cell_size(dim1))
 
-                    sigma%pr(dim1,dim2)%cells(i,j,k) = nu%cells(i,j,k) * (dv1_dx2 + dv2_dx1 - 2.0_dkind/3.0_dkind*div_v)
+                    sigma%pr(dim1,dim2)%cells(i,j,k) = nu%cells(i,j,k) * (dv1_dx2 + dv2_dx1 - 2.0_dp/3.0_dp*div_v)
 
                     select case(coordinate_system)
 						case ('cylindrical')
-							this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
-							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k))
+							this%sigma_theta_theta(i,j,k) = -2.0_dp/3.0_dp*div_v
+							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k))
 						case ('spherical')
-							this%sigma_theta_theta(i,j,k) = -2.0_dkind/3.0_dkind*div_v
-							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dkind*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k)) 
+							this%sigma_theta_theta(i,j,k) = -2.0_dp/3.0_dp*div_v
+							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k)) 
 					end select						
                 
 					if (dim1 /= dim2) sigma%pr(dim2,dim1)%cells(i,j,k) = sigma%pr(dim1,dim2)%cells(i,j,k)
@@ -347,16 +359,18 @@ contains
 
 		!$omp end parallel
 					
-        continue
-		end associate
+        end associate
 					
+        continue
+		
+
 	end subroutine
 	
 	subroutine calculate_viscosity_coeff_constant(this)
 		class(viscosity_solver) ,intent(inout) :: this
 
-		real(dkind)	:: reduced_collision_diameter
-		real(dkind)	:: inv_reduced_molar_mass
+		real(dp)	:: reduced_collision_diameter
+		real(dp)	:: inv_reduced_molar_mass
 
 		integer		:: species_number
 		integer		:: specie_number1, specie_number2
@@ -368,7 +382,7 @@ contains
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter)
 
 			do specie_number1 = 1,species_number
-				this%viscosity_coeff_constant(specie_number1)    = 0.00001_dkind * 0.0844_dkind * sqrt(molar_masses(specie_number1))/collision_diameter(specie_number1)/collision_diameter(specie_number1)
+				this%viscosity_coeff_constant(specie_number1)    = 0.00001_dp * 0.0844_dp * sqrt(molar_masses(specie_number1))/collision_diameter(specie_number1)/collision_diameter(specie_number1)
 			end do
 
 		end associate
@@ -378,9 +392,9 @@ contains
 	subroutine calculate_viscosity_coeff(this)
 		class(viscosity_solver) ,intent(inout) :: this
 
-		real(dkind)                     :: mol_frac, smc, reduced_temperature, sum1, sum2
-		real(dkind)                     :: specie_cp, specie_cv
-		real(dkind)                     :: omega_2_2
+		real(dp)                     :: mol_frac, smc, reduced_temperature, sum1, sum2
+		real(dp)                     :: specie_cp, specie_cv
+		real(dp)                     :: omega_2_2
 		
 		integer	:: dimensions
 		integer	:: sign, bound_number
@@ -405,10 +419,11 @@ contains
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter	, &
 					bc						=> this%boundary%bc_ptr)
 
-	!$omp parallel default(none)  private(i,j,k,specie_number,sum1,sum2,mol_frac,reduced_temperature,omega_2_2,specie_cp,specie_cv,smc,sign,bound_number) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(T,nu,mol_mix_conc,Y,collision_diameter,molar_masses,potential_well_depth,species_number,cons_inner_loop,bc,dimensions) 
-	!$omp do collapse(3) schedule(static)
+	!$omp parallel default(shared)  private(i,j,k,specie_number,sum1,sum2,mol_frac,reduced_temperature,omega_2_2,specie_cp,specie_cv,smc,sign,bound_number) !, &
+    !!$omp& firstprivate(this)
+	!!$omp& shared(this,species_number,cons_inner_loop,dimensions) 
+
+        	!$omp do collapse(3) schedule(static)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -416,20 +431,20 @@ contains
 
 			if(bc%bc_markers(i,j,k) == 0) then
 
-				sum1 = 0.0_dkind
-				sum2 = 0.0_dkind
+				sum1 = 0.0_dp
+				sum2 = 0.0_dp
 
 				do specie_number = 1,species_number
-					if (molar_masses(specie_number) /= 0.0_dkind) then				
+					if (molar_masses(specie_number) /= 0.0_dp) then				
 						mol_frac            =	Y%pr(specie_number)%cells(i,j,k)/molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
-						if (mol_frac /= 0.0_dkind) then
+						if (mol_frac /= 0.0_dp) then
 							reduced_temperature =	T%cells(i,j,k) / potential_well_depth(specie_number)
-							if (reduced_temperature < 70.0_dkind) then
-								omega_2_2           =	1.16145_dkind / (reduced_temperature ** 0.14874_dkind)    +   &
-														0.52487_dkind / exp(0.77320_dkind * reduced_temperature)  +   &
-														2.16178_dkind / exp(2.43787_dkind * reduced_temperature)
+							if (reduced_temperature < 70.0_dp) then
+								omega_2_2           =	1.16145_dp / (reduced_temperature ** 0.14874_dp)    +   &
+														0.52487_dp / exp(0.77320_dp * reduced_temperature)  +   &
+														2.16178_dp / exp(2.43787_dp * reduced_temperature)
 							else
-								omega_2_2           =	1.16145_dkind / (reduced_temperature ** 0.14874_dkind)
+								omega_2_2           =	1.16145_dp / (reduced_temperature ** 0.14874_dp)
 							end if
 							specie_cp = this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k), specie_number)
 							specie_cv = specie_cp - r_gase_J
@@ -442,10 +457,10 @@ contains
 					end if
 				end do
 
-				if (sum2 <= 1.0E-10_dkind) then	
-					nu%cells(i,j,k)      = 0.0_dkind
+				if (sum2 <= 1.0E-10_dp) then	
+					nu%cells(i,j,k)      = 0.0_dp
 				else
-					nu%cells(i,j,k)      = 0.5_dkind * (sum1 + 1.0_dkind / sum2)
+					nu%cells(i,j,k)      = 0.5_dp * (sum1 + 1.0_dp / sum2)
 				end if
 				
 				if(bc%bc_markers(i,j,k) == 0) then
@@ -466,11 +481,14 @@ contains
 		end do
 
 	!$omp end do nowait
+
 	!$omp end parallel
 
+        end associate
+                    
 		continue
 		
-		end associate
+		
 
 	end subroutine
 
@@ -492,9 +510,9 @@ contains
 					bc			=> this%boundary%bc_ptr	, &
 					mesh		=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,sign,bound_number) , &
-		!$omp& firstprivate(this)	,&
-		!$omp& shared(sigma,bc,dimensions,cons_inner_loop) 
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,sign,bound_number) !, &
+		!!$omp& shared(this,dimensions,cons_inner_loop) 
+        
 		!$omp do collapse(3) schedule(static)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)

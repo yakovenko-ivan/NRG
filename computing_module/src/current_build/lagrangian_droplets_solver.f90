@@ -28,15 +28,15 @@ module lagrangian_droplets_solver_class
 
 	integer	:: average_io_unit
 	
-    real(dkind)	:: streams_distance, release_time, droplets_velocity
+    real(dp)	:: streams_distance, release_time, droplets_velocity
     
 	
 	type	:: lagrangian_droplet
-		real(dkind)	,dimension(3)	:: coords, velocity
+		real(dp)	,dimension(3)	:: coords, velocity
 		integer		,dimension(3)	:: cell
-		real(dkind)					:: temperature
-		real(dkind)					:: mass	
-		real(dkind)					:: dm
+		real(dp)					:: temperature
+		real(dp)					:: mass	
+		real(dp)					:: dm
 		logical						:: outside_domain
 	end type
 	
@@ -53,7 +53,7 @@ module lagrangian_droplets_solver_class
 		
 		type(liquid_droplets_phase)			:: droplets_params
 
-		real(dkind)							:: droplet_mass
+		real(dp)							:: droplet_mass
         		
 		type(lagrangian_droplet)	,dimension(:)	,allocatable	:: droplets	
 		
@@ -179,12 +179,12 @@ contains
 		class(lagrangian_droplets_solver)	,intent(inout)	:: this
 
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
-		real(dkind)	:: delta, drop_number_max, a ,b, dimless_length
+		real(dp)	:: delta, drop_number_max, a ,b, dimless_length
 		integer		,dimension(3)	:: drop_number
-		real(dkind)	,dimension(3)	:: coords
-		real(dkind)	,dimension(:,:)	,allocatable	:: lengths
+		real(dp)	,dimension(3)	:: coords
+		real(dp)	,dimension(:,:)	,allocatable	:: lengths
 		
 		integer	:: dimensions
 		integer :: i,j,k, drop, drop_x, drop_y, drop_z, dim, droplet
@@ -210,19 +210,19 @@ contains
 		
 		do drop = 1, this%droplets_number
 			this%droplets(drop)%outside_domain	= .true.
-			this%droplets(drop)%coords			= 0.0_dkind
-			this%droplets(drop)%velocity		= 0.0_dkind
-			this%droplets(drop)%dm				= 0.0_dkind 
+			this%droplets(drop)%coords			= 0.0_dp
+			this%droplets(drop)%velocity		= 0.0_dp
+			this%droplets(drop)%dm				= 0.0_dp 
         end do 
 
-        this%droplets(1)%coords(1)			= 0.5_dkind * (lengths(1,2) + cell_size(1))
-        this%droplets(1)%coords(2)			= 0.5_dkind * (lengths(2,2) + cell_size(1))
-        this%droplets(1)%coords(3)			= 0.5_dkind * (lengths(3,2) + cell_size(1))
+        this%droplets(1)%coords(1)			= 0.5_dp * (lengths(1,2) + cell_size(1))
+        this%droplets(1)%coords(2)			= 0.5_dp * (lengths(2,2) + cell_size(1))
+        this%droplets(1)%coords(3)			= 0.5_dp * (lengths(3,2) + cell_size(1))
         
         this%droplets(1)%outside_domain		= .false. 
-        this%droplets(1)%temperature		= 300.0_dkind
+        this%droplets(1)%temperature		= 300.0_dp
         
-		this%droplets(1)%mass	= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+		this%droplets(1)%mass	= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
         continue
         
         !# Two droplet streams setup
@@ -231,7 +231,7 @@ contains
 		allocate(this%droplets(this%droplets_number))	
         
         release_time = 2.5e-05
-        droplets_velocity = 20.0_dkind
+        droplets_velocity = 20.0_dp
         streams_distance = 2e-03
         
         delta = release_time * droplets_velocity
@@ -248,20 +248,20 @@ contains
 			this%droplets(drop)%outside_domain		= .false.
 			this%droplets(drop)%coords(1)			= delta * (drop + 1)
             this%droplets(drop)%coords(2)			= lengths(2,2) / 2 + streams_distance / 2
-			this%droplets(drop)%velocity(1)			= 1.0_dkind
-			this%droplets(drop)%dm					= 0.0_dkind
-        	this%droplets(drop)%temperature			= 300.0_dkind
-			this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+			this%droplets(drop)%velocity(1)			= 1.0_dp
+			this%droplets(drop)%dm					= 0.0_dp
+        	this%droplets(drop)%temperature			= 300.0_dp
+			this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
         end do 
         
         do drop = drop_number(1)+1, 2*drop_number(1)
 			this%droplets(drop)%outside_domain		= .false.
 			this%droplets(drop)%coords(1)			= delta * (drop + 1 - drop_number(1))
             this%droplets(drop)%coords(2)			= lengths(2,2) / 2 - streams_distance / 2
-			this%droplets(drop)%velocity(1)			= 1.0_dkind
-			this%droplets(drop)%dm					= 0.0_dkind
-            this%droplets(drop)%temperature			= 300.0_dkind
-			this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+			this%droplets(drop)%velocity(1)			= 1.0_dp
+			this%droplets(drop)%dm					= 0.0_dp
+            this%droplets(drop)%temperature			= 300.0_dp
+			this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
         end do 
         
         continue 
@@ -272,31 +272,31 @@ contains
 	subroutine droplets_solve(this,time_step)
 
 		class(lagrangian_droplets_solver)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
-		real(dkind)								:: droplet_time_step
+		real(dp)				,intent(in)		:: time_step
+		real(dp)								:: droplet_time_step
 		integer									:: droplet_iterations
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
-		real(dkind)					:: cell_volume
-		real(dkind)	,dimension(3)	:: gas_velocity, relative_velocity, old_velocity, F_a, droplet_acceleration
-		real(dkind)					:: abs_relative_velocity
-		real(dkind)					:: lower_face, higher_face, a, b
-		real(dkind)					:: Re_p, Nu_p, Sc_p, Sh_p, Pr_p, C_drag, A_pc, A_ps, alpha_p, beta_p, D_air_water, Bm
-		real(dkind)					:: H_mass, H_heat, H_v, H_l, dH_v_dT
-		real(dkind)					:: X_vap, Y_vap, W_ratio, dY_dT
-		real(dkind)					:: specie_enthalpy_gas, specie_enthalpy_liquid, mixture_cp, h_s_Tref
-		real(dkind)					:: dmp, Q,	Tg_new, Tp_new, Tg_old, Tp_old, rhog_old, rhog_new, M_gas_old, M_gas_new, m_liq, mol_mix_w, Hg_old, Hg_new, Hp_old, Hp_new
-		real(dkind)					:: delta_H
-		real(dkind)	,dimension(:)	, allocatable	:: Yg_old, Yg_new
-		real(dkind)					:: DTOP, DTOG, DTGOG, DTGOP, AGHRHO, DADYDTHVHL, DADYDTHV, DAHVHLDY, DADYHV
-		real(dkind)	,dimension(2)	:: A_col, B_col, D_vec
+		real(dp)	,dimension(3)	:: cell_size
+		real(dp)					:: cell_volume
+		real(dp)	,dimension(3)	:: gas_velocity, relative_velocity, old_velocity, F_a, droplet_acceleration
+		real(dp)					:: abs_relative_velocity
+		real(dp)					:: lower_face, higher_face, a, b
+		real(dp)					:: Re_p, Nu_p, Sc_p, Sh_p, Pr_p, C_drag, A_pc, A_ps, alpha_p, beta_p, D_air_water, Bm
+		real(dp)					:: H_mass, H_heat, H_v, H_l, dH_v_dT
+		real(dp)					:: X_vap, Y_vap, W_ratio, dY_dT
+		real(dp)					:: specie_enthalpy_gas, specie_enthalpy_liquid, mixture_cp, h_s_Tref
+		real(dp)					:: dmp, Q,	Tg_new, Tp_new, Tg_old, Tp_old, rhog_old, rhog_new, M_gas_old, M_gas_new, m_liq, mol_mix_w, Hg_old, Hg_new, Hp_old, Hp_new
+		real(dp)					:: delta_H
+		real(dp)	,dimension(:)	, allocatable	:: Yg_old, Yg_new
+		real(dp)					:: DTOP, DTOG, DTGOG, DTGOP, AGHRHO, DADYDTHVHL, DADYDTHV, DAHVHLDY, DADYHV
+		real(dp)	,dimension(2)	:: A_col, B_col, D_vec
 		
 		integer						:: droplets_in_cell
 		character(len=100)			:: file_path, file_name
 		
-		real(dkind)                 :: local_diameter, evaporation_rate, velocity_2, specie_enthalpy
-		real(dkind)					:: average_diameter, average_temperature, droplets_inside
+		real(dp)                 :: local_diameter, evaporation_rate, velocity_2, specie_enthalpy
+		real(dp)					:: average_diameter, average_temperature, droplets_inside
 				
 		integer	:: dimensions, species_number
 		integer, dimension(3)	:: cell, initial_cell
@@ -306,7 +306,7 @@ contains
 		integer :: i,j,k,dim, drop, drop_iter, spec
 		logical	:: out_flag
 		
-		real(dkind)	,save	:: time = 0.0_dkind, CFL_p
+		real(dp)	,save	:: time = 0.0_dp, CFL_p
 		integer		,save	:: output_counter = 0
 		integer		,save	:: droplet_release_counter = 0
 
@@ -347,22 +347,22 @@ contains
 		!!$omp& shared(T,T_d,T_d_int,E_f_prod,rho,rho_d,mass_d,numdens_d,v_d,v_d_int,v,v_prod,Y_prod,nu,kappa,foam_marker,time_boil,droplet,Nusselt,droplet_material_index,time_step,mesh,bc,cons_inner_loop,dimensions,marker1,specie_enthalpy)
 		!!$omp do collapse(3) schedule(guided)					
 			
-		E_f_prod%cells = 0.0_dkind			
-		Y_prod%pr(droplet_material_index)%cells = 0.0_dkind	
+		E_f_prod%cells = 0.0_dp			
+		Y_prod%pr(droplet_material_index)%cells = 0.0_dp	
 		
 		do dim = 1, dimensions
-			v_prod%pr(dim)%cells = 0.0_dkind
+			v_prod%pr(dim)%cells = 0.0_dp
 		end do
 
-		average_temperature = 0.0_dkind
-		average_diameter	= 0.0_dkind
+		average_temperature = 0.0_dp
+		average_diameter	= 0.0_dp
 		droplets_inside		= 0
 		
 		do drop = 1, this%droplets_number
 
 			if (.not.this%droplets(drop)%outside_domain) then
 		
-				average_diameter	= average_diameter		+ (6.0_dkind * this%droplets(drop)%mass / Pi /  droplet%material_density) ** (1.0_dkind / 3.0_dkind)
+				average_diameter	= average_diameter		+ (6.0_dp * this%droplets(drop)%mass / Pi /  droplet%material_density) ** (1.0_dp / 3.0_dp)
 				average_temperature	= average_temperature	+ this%droplets(drop)%temperature
 				droplets_inside		= droplets_inside + 1
 				
@@ -371,10 +371,10 @@ contains
 				!droplet_time_step = time_step
                 CFL_p = 0.0
 				do dim = 1, dimensions
-					if (abs(this%droplets(drop)%velocity(dim)) > 1e-10_dkind) then
+					if (abs(this%droplets(drop)%velocity(dim)) > 1e-10_dp) then
                         if (this%droplets(drop)%velocity(dim)/cell_size(dim) > CFL_p) CFL_p = this%droplets(drop)%velocity(dim)/cell_size(dim)
                     else
-                        CFL_p = 1.0_dkind/0.9_dkind
+                        CFL_p = 1.0_dp/0.9_dp
                     end if
                 end do
                 CFL_p = time_step*CFL_p
@@ -382,7 +382,7 @@ contains
                 droplet_time_step = time_step / ceiling(0.9*CFL_p) 
                 droplet_iterations	= time_step/ droplet_time_step
                 
-				F_a =	0.0_dkind			
+				F_a =	0.0_dp			
 			
 				initial_cell = this%get_droplet_cell(this%droplets(drop)%coords,out_flag)
 				i = initial_cell(1)
@@ -404,7 +404,7 @@ contains
 					Tp_old	= this%droplets(drop)%temperature
 					Hp_old	= this%droplets(drop)%temperature * droplet%material_heat_capacity * this%droplets(drop)%mass
 			
-					local_diameter = (6.0_dkind * this%droplets(drop)%mass / Pi /  droplet%material_density) ** (1.0_dkind / 3.0_dkind)
+					local_diameter = (6.0_dp * this%droplets(drop)%mass / Pi /  droplet%material_density) ** (1.0_dp / 3.0_dp)
 					
 					cell = this%get_droplet_cell(this%droplets(drop)%coords,out_flag)
 					i = cell(1)
@@ -420,8 +420,8 @@ contains
 							Yg_old(spec)	= Y%pr(spec)%cells(i,j,k)
 						end do
 					
-						E_f_prod%cells(i,j,k) = 0.0_dkind
-						Y_prod%pr(droplet_material_index)%cells(i,j,k) = 0.0_dkind					
+						E_f_prod%cells(i,j,k) = 0.0_dp
+						Y_prod%pr(droplet_material_index)%cells(i,j,k) = 0.0_dp					
 					
 						this%droplets(drop)%cell = cell
 					end if
@@ -429,10 +429,10 @@ contains
 					old_velocity = this%droplets(drop)%velocity
 			
 				!# Interpolate gas velocity to the droplet location using linear interpolation
-					gas_velocity = 0.0_dkind
+					gas_velocity = 0.0_dp
 					do dim = 1, dimensions
-						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dkind*cell_size(dim)
-						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dkind*cell_size(dim)
+						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dp*cell_size(dim)
+						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dp*cell_size(dim)
 					
 						b = (v_f%pr(dim)%cells(dim,i,j,k)*higher_face - v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*lower_face) / (higher_face - lower_face) 
 						a = (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_f%pr(dim)%cells(dim,i,j,k)) / (higher_face - lower_face) 
@@ -440,7 +440,7 @@ contains
 						gas_velocity(dim) = a * this%droplets(drop)%coords(dim) + b
 					end do
 				
-					abs_relative_velocity = 0.0_dkind
+					abs_relative_velocity = 0.0_dp
 					do dim = 1, dimensions
 						relative_velocity(dim)	= this%droplets(drop)%velocity(dim) - gas_velocity(dim)
 						abs_relative_velocity	= abs_relative_velocity + relative_velocity(dim)*relative_velocity(dim)
@@ -449,50 +449,50 @@ contains
 					abs_relative_velocity = sqrt(abs_relative_velocity)
 				
 					!# Calculate droplet mass and cross section
-					m_liq	= Pi*local_diameter**3 / 6.0_dkind * droplet%material_density
-					A_pc	= Pi*local_diameter**2 / 4.0_dkind
+					m_liq	= Pi*local_diameter**3 / 6.0_dp * droplet%material_density
+					A_pc	= Pi*local_diameter**2 / 4.0_dp
 					A_ps	= Pi*local_diameter**2
 					!# Calculate droplet Reynolds number
 					Re_p	= rhog_old * abs_relative_velocity * local_diameter / nu%cells(i,j,k)
 				
-					if ( abs_relative_velocity > 1.0e-10_dkind) then	
+					if ( abs_relative_velocity > 1.0e-10_dp) then	
 					!# Calculate drag coefficient for spherical droplet
 						if (Re_p < 1e-010) then
 							C_drag = 100
-						elseif (Re_p < 1.0_dkind) then
-								C_drag = 24.0_dkind / Re_p
-						elseif (Re_p < 1000.0_dkind) then
-								C_drag = 24.0_dkind * ( 0.85_dkind + 0.15 * Re_p**0.687) / Re_p
-						elseif (Re_p >= 1000.0_dkind) then
-								C_drag = 0.44_dkind
+						elseif (Re_p < 1.0_dp) then
+								C_drag = 24.0_dp / Re_p
+						elseif (Re_p < 1000.0_dp) then
+								C_drag = 24.0_dp * ( 0.85_dp + 0.15 * Re_p**0.687) / Re_p
+						elseif (Re_p >= 1000.0_dp) then
+								C_drag = 0.44_dp
 						end if
 				
 						droplets_in_cell = this%count_droplets_in_cell(cell)
 				
 					!# Calculate new droplet coordinates and velocities
 						!alpha_p	= M_gas_old / m_liq
-						!beta_p	= 0.5_dkind * rhog_old * C_drag * A_p * ( 1/m_liq + 1/M_gas_old) * abs_relative_velocity
+						!beta_p	= 0.5_dp * rhog_old * C_drag * A_p * ( 1/m_liq + 1/M_gas_old) * abs_relative_velocity
 					
-                        beta_p = 0.5_dkind * rhog_old * C_drag * A_pc * abs_relative_velocity / m_liq
+                        beta_p = 0.5_dp * rhog_old * C_drag * A_pc * abs_relative_velocity / m_liq
                         
 						do dim = 1, dimensions
 							
                             
                             
                             this%droplets(drop)%velocity(dim)	= gas_velocity(dim) + (this%droplets(drop)%velocity(dim) - gas_velocity(dim))*exp(-beta_p * droplet_time_step)
-                            this%droplets(drop)%coords(dim)		= this%droplets(drop)%coords(dim) + 0.5_dkind * droplet_time_step*(this%droplets(drop)%velocity(dim) + old_velocity(dim))
+                            this%droplets(drop)%coords(dim)		= this%droplets(drop)%coords(dim) + 0.5_dp * droplet_time_step*(this%droplets(drop)%velocity(dim) + old_velocity(dim))
                             
-                            !this%droplets(drop)%coords(dim) =	this%droplets(drop)%coords(dim) + (this%droplets(drop)%velocity(dim) + alpha_p * gas_velocity(dim)) * droplet_time_step / (1.0_dkind + alpha_p) + &
-							!									alpha_p * log(1.0_dkind + beta_p*droplet_time_step) / beta_p / (1.0_dkind + alpha_p) * relative_velocity(dim)
+                            !this%droplets(drop)%coords(dim) =	this%droplets(drop)%coords(dim) + (this%droplets(drop)%velocity(dim) + alpha_p * gas_velocity(dim)) * droplet_time_step / (1.0_dp + alpha_p) + &
+							!									alpha_p * log(1.0_dp + beta_p*droplet_time_step) / beta_p / (1.0_dp + alpha_p) * relative_velocity(dim)
 							!							
-							!this%droplets(drop)%velocity(dim)	= (this%droplets(drop)%velocity(dim) + (this%droplets(drop)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * droplet_time_step / (1.0_dkind + alpha_p)) / (1.0_dkind + beta_p*droplet_time_step)	
+							!this%droplets(drop)%velocity(dim)	= (this%droplets(drop)%velocity(dim) + (this%droplets(drop)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * droplet_time_step / (1.0_dp + alpha_p)) / (1.0_dp + beta_p*droplet_time_step)	
 					 
-!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
-!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_liq*(gas_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
+!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dp/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
+!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dp/(cell_volume * rhog_old) * (m_liq*(gas_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
 							
-                            F_a(dim) = F_a(dim) + 1.0_dkind/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step) ! 1/rho_g*f_b (4.43 FDS guide)
+                            F_a(dim) = F_a(dim) + 1.0_dp/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step) ! 1/rho_g*f_b (4.43 FDS guide)
 
-                            !F_a(dim) = 1000.0_dkind * 1.0_dkind / (cell_volume * rhog_old) * ( -m_liq * (this%droplets(drop)%velocity(dim) - old_velocity(dim)) / droplet_time_step + this%droplets(drop)%dm * (this%droplets(drop)%velocity(dim) - old_velocity(dim)))
+                            !F_a(dim) = 1000.0_dp * 1.0_dp / (cell_volume * rhog_old) * ( -m_liq * (this%droplets(drop)%velocity(dim) - old_velocity(dim)) / droplet_time_step + this%droplets(drop)%dm * (this%droplets(drop)%velocity(dim) - old_velocity(dim)))
                             
 						end do 
 					end if
@@ -505,52 +505,52 @@ contains
 			
 					do dim = 1, dimensions
                         
-						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dkind*cell_size(dim)
-						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dkind*cell_size(dim)
+						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dp*cell_size(dim)
+						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dp*cell_size(dim)
 						
 						a = this%droplets(drop)%coords(dim) - lower_face
 						
 						b = higher_face - this%droplets(drop)%coords(dim) 
 					
-						v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dkind - a/cell_size(dim)) * F_a(dim) 
-						v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (1.0_dkind - b/cell_size(dim)) * F_a(dim) 
+						v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dp - a/cell_size(dim)) * F_a(dim) 
+						v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (1.0_dp - b/cell_size(dim)) * F_a(dim) 
 						
                         
-					!	v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dkind - this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
+					!	v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dp - this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
 					!	v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
                     end do
 			
                     !# Heat and evaporate droplet, account energy transfer
                     
                     !# Temperature dependence of latent heat of water
-					H_v	= 3.133e+06_dkind - 2316.0_dkind*Tp_old     !!2440622.73496162! droplet%material_latent_heat
-			        dH_v_dT = -2316_dkind
+					H_v	= 3.133e+06_dp - 2316.0_dp*Tp_old     !!2440622.73496162! droplet%material_latent_heat
+			        dH_v_dT = -2316_dp
                     
-					mol_mix_w = 0.0_dkind
+					mol_mix_w = 0.0_dp
 					do spec = 1, species_number
 						mol_mix_w = mol_mix_w + Yg_old(spec)/this%thermo%thermo_ptr%molar_masses(spec)
 					end do
-					mol_mix_w = 1.0_dkind / mol_mix_w
+					mol_mix_w = 1.0_dp / mol_mix_w
 			
-					W_ratio	= mol_mix_w*(1.0_dkind - Yg_old(droplet_material_index)) / this%thermo%thermo_ptr%molar_masses(droplet_material_index)
+					W_ratio	= mol_mix_w*(1.0_dp - Yg_old(droplet_material_index)) / this%thermo%thermo_ptr%molar_masses(droplet_material_index)
 			
-					X_vap = min(1.0_dkind,  exp(H_v * this%thermo%thermo_ptr%molar_masses(droplet_material_index) / r_gase_J * (1.0_dkind / droplet%material_boiling_temperature - 1.0_dkind / this%droplets(drop)%temperature)))
-					Y_vap = X_vap / (X_vap * (1.0_dkind - W_ratio) + W_ratio)
+					X_vap = min(1.0_dp,  exp(H_v * this%thermo%thermo_ptr%molar_masses(droplet_material_index) / r_gase_J * (1.0_dp / droplet%material_boiling_temperature - 1.0_dp / this%droplets(drop)%temperature)))
+					Y_vap = X_vap / (X_vap * (1.0_dp - W_ratio) + W_ratio)
 			
                     !# dY_dT with an account of hv(T) from FDS part.90 ln 3940. 
-					dY_dT = (W_ratio / (X_vap*(1.0_dkind - W_ratio) + W_ratio)**2) * &
+					dY_dT = (W_ratio / (X_vap*(1.0_dp - W_ratio) + W_ratio)**2) * &
                             (H_v * X_vap * this%thermo%thermo_ptr%molar_masses(droplet_material_index) / r_gase_J / this%droplets(drop)%temperature ** 2 + &
-                            (1.0_dkind / droplet%material_boiling_temperature - 1.0_dkind / this%droplets(drop)%temperature)*(dH_v_dT) * this%thermo%thermo_ptr%molar_masses(droplet_material_index) / r_gase_J)
+                            (1.0_dp / droplet%material_boiling_temperature - 1.0_dp / this%droplets(drop)%temperature)*(dH_v_dT) * this%thermo%thermo_ptr%molar_masses(droplet_material_index) / r_gase_J)
 				
-					Pr_p = 0.7_dkind
-					Sc_p = 0.6_dkind
+					Pr_p = 0.7_dp
+					Sc_p = 0.6_dp
 			
                     !# BM is the Spalding mass transfer number
-                    Bm = (Y_vap - Yg_old(droplet_material_index)) / (1.0_dkind - Y_vap)
+                    Bm = (Y_vap - Yg_old(droplet_material_index)) / (1.0_dp - Y_vap)
                     
                     !# FDS TRG 6ed pg. 99 (func.f90 DROPLET_H_MASS_H_HEAT_GAS)
-					Nu_p = log(1.0_dkind + Bm)/Bm * (2.0_dkind + 0.6_dkind * sqrt(Re_p) * Pr_p ** (1.0_dkind / 3.0_dkind))
-					Sh_p = log(1.0_dkind + Bm)/Bm * (2.0_dkind + 0.6_dkind * sqrt(Re_p) * Sc_p ** (1.0_dkind / 3.0_dkind))
+					Nu_p = log(1.0_dp + Bm)/Bm * (2.0_dp + 0.6_dp * sqrt(Re_p) * Pr_p ** (1.0_dp / 3.0_dp))
+					Sh_p = log(1.0_dp + Bm)/Bm * (2.0_dp + 0.6_dp * sqrt(Re_p) * Sc_p ** (1.0_dp / 3.0_dp))
 			
 					D_air_water = D%pr(droplet_material_index)%cells(i,j,k)
 
@@ -558,8 +558,8 @@ contains
 !					H_m	= 1.35020265065071 *1e-04/ local_diameter       ! FDS Sh_p * D_air_water / local_diameter          !1.35020265065071 ! FDS
                     
                     !# FDS TRG 6ed pg. 99 (func.f90 DROPLET_H_MASS_H_HEAT_GAS)
-					H_heat	= Nu_p * kappa%cells(i,j,k)	/ local_diameter ! * 1.0_dkind                                                              ! Nu_p * kappa%cells(i,j,k)	/ local_diameter   !814.814366872002 ! FDS
-					H_mass	= Sh_p * D_air_water * Bm / (Y_vap - Yg_old(droplet_material_index)) / local_diameter !/ 50.0_dkind                     ! Sh_p * D_air_water / local_diameter          !1.35020265065071 ! FDS
+					H_heat	= Nu_p * kappa%cells(i,j,k)	/ local_diameter ! * 1.0_dp                                                              ! Nu_p * kappa%cells(i,j,k)	/ local_diameter   !814.814366872002 ! FDS
+					H_mass	= Sh_p * D_air_water * Bm / (Y_vap - Yg_old(droplet_material_index)) / local_diameter !/ 50.0_dp                     ! Sh_p * D_air_water / local_diameter          !1.35020265065071 ! FDS
                     
                     
 					specie_enthalpy_gas		= (this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,droplet_material_index))*Tg_old / this%thermo%thermo_ptr%molar_masses(droplet_material_index)
@@ -574,31 +574,31 @@ contains
 						mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,spec)	* Yg_old(spec) / this%thermo%thermo_ptr%molar_masses(spec)
                     end do			
 
-    				AGHRHO      = A_ps * H_mass * (rhog_old) / ( 1.0_dkind + 0.5_dkind * droplet_time_step * A_ps * H_mass * (1.0_dkind - Yg_old(droplet_material_index)) / cell_volume / rhog_old)
+    				AGHRHO      = A_ps * H_mass * (rhog_old) / ( 1.0_dp + 0.5_dp * droplet_time_step * A_ps * H_mass * (1.0_dp - Yg_old(droplet_material_index)) / cell_volume / rhog_old)
                                         
                     DTOG        = droplet_time_step / (mixture_cp * M_gas_old)
-                    DTGOG       = 0.5_dkind * DTOG * A_ps * H_heat                    
-                    DADYDTHVHL  = 0.5_dkind * DTOG * AGHRHO	* (specie_enthalpy_liquid - specie_enthalpy_gas) * dY_dT
+                    DTGOG       = 0.5_dp * DTOG * A_ps * H_heat                    
+                    DADYDTHVHL  = 0.5_dp * DTOG * AGHRHO	* (specie_enthalpy_liquid - specie_enthalpy_gas) * dY_dT
                     DAHVHLDY    = DTOG * AGHRHO * (specie_enthalpy_liquid - specie_enthalpy_gas) * (Y_vap - Yg_old(droplet_material_index))
                     
                     DTOP        = droplet_time_step / (droplet%material_heat_capacity * m_liq)
-                    DTGOP       = 0.5_dkind * DTOP * A_ps * H_heat
-                    DADYDTHV    = 0.5_dkind * DTOP * AGHRHO  * dY_dT * H_v
+                    DTGOP       = 0.5_dp * DTOP * A_ps * H_heat
+                    DADYDTHV    = 0.5_dp * DTOP * AGHRHO  * dY_dT * H_v
                     DADYHV      = DTOP*AGHRHO*H_v*(Y_vap - Yg_old(droplet_material_index))
                
-					A_col(1)	= 1.0_dkind + DTGOG
+					A_col(1)	= 1.0_dp + DTGOG
 					B_col(1)	= - (DTGOG + DADYDTHVHL)
 					A_col(2)	= -DTGOP
-					B_col(2)	= 1.0_dkind + DTGOP + DADYDTHV
-					D_vec(1)	= (1.0_dkind - DTGOG) * Tg_old + (DTGOG - DADYDTHVHL) * this%droplets(drop)%temperature + DAHVHLDY
-					D_vec(2)	= DTGOP * Tg_old + (1.0_dkind - DTGOP + DADYDTHV) * this%droplets(drop)%temperature - DADYHV
+					B_col(2)	= 1.0_dp + DTGOP + DADYDTHV
+					D_vec(1)	= (1.0_dp - DTGOG) * Tg_old + (DTGOG - DADYDTHVHL) * this%droplets(drop)%temperature + DAHVHLDY
+					D_vec(2)	= DTGOP * Tg_old + (1.0_dp - DTGOP + DADYDTHV) * this%droplets(drop)%temperature - DADYHV
 			
 					Tp_new	= -(A_col(2) * D_vec(1) - A_col(1) * D_vec(2))/(A_col(1) * B_col(2) - A_col(2) * B_col(1))
 					Tg_new	= (D_vec(1) - B_col(1) * Tp_new) / A_col(1)
 			
-					dmp = max(0.0_dkind, min(this%droplets(drop)%mass, droplet_time_step * AGHRHO * ( Y_vap -  Yg_old(droplet_material_index) + 0.5_dkind * dY_dT * (Tp_new - Tp_old))))
+					dmp = max(0.0_dp, min(this%droplets(drop)%mass, droplet_time_step * AGHRHO * ( Y_vap -  Yg_old(droplet_material_index) + 0.5_dp * dY_dT * (Tp_new - Tp_old))))
 			
-					Q	= droplet_time_step * A_ps * H_g * 0.5_dkind * (Tg_old + Tg_new - Tp_old - Tp_new)
+					Q	= droplet_time_step * A_ps * H_g * 0.5_dp * (Tg_old + Tg_new - Tp_old - Tp_new)
 					if (Q > this%droplets(drop)%mass * H_v) dmp = this%droplets(drop)%mass
 			
 					if ( dmp < this%droplets(drop)%mass) then
@@ -664,7 +664,7 @@ contains
 			end if
 		end do
 
-		if ((time/(250e-06) >= (output_counter)).or.(time==0.0_dkind).and.(droplets_inside /= 0)) then
+		if ((time/(250e-06) >= (output_counter)).or.(time==0.0_dp).and.(droplets_inside /= 0)) then
 		
 			write (average_io_unit,'(3E14.6)')	time, average_temperature/droplets_inside, average_diameter/droplets_inside
 			write(file_path,'(I6.6,A)')  int(time*1e06),'us'
@@ -680,7 +680,7 @@ contains
 			close(lagrangian_droplets_io_unit)
 		end if
 		
-		if ((time/release_time >= 1.0_dkind*(droplet_release_counter)).or.(time==0.0_dkind)) then
+		if ((time/release_time >= 1.0_dp*(droplet_release_counter)).or.(time==0.0_dp)) then
 		!	droplet_release_counter = droplet_release_counter + 1
 		!	call this%release_droplet()
 		end if
@@ -698,12 +698,12 @@ contains
 	function get_droplet_cell(this,droplet_coords, out_flag)
 		
 		class(lagrangian_droplets_solver)			,intent(inout)					:: this
-		real(dkind)		,dimension(3)				,intent(in)						:: droplet_coords
+		real(dp)		,dimension(3)				,intent(in)						:: droplet_coords
 		logical										,intent(inout)	,optional		:: out_flag
 		
 		integer			,dimension(3)	:: get_droplet_cell
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
 		integer	:: dimensions
 		
@@ -725,8 +725,8 @@ contains
 		
 		if (dimensions	== 3) then
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-				if (( 0.5_dkind*(mesh%mesh(3,1,1,k-1) + mesh%mesh(3,1,1,k)) <= droplet_coords(3)).and. &
-					( 0.5_dkind*(mesh%mesh(3,1,1,k+1) + mesh%mesh(3,1,1,k)) > droplet_coords(3))) then
+				if (( 0.5_dp*(mesh%mesh(3,1,1,k-1) + mesh%mesh(3,1,1,k)) <= droplet_coords(3)).and. &
+					( 0.5_dp*(mesh%mesh(3,1,1,k+1) + mesh%mesh(3,1,1,k)) > droplet_coords(3))) then
 					get_droplet_cell(3) = k
 					exit
 				end if		
@@ -736,8 +736,8 @@ contains
 		
 		if (dimensions	>= 2) then
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-				if (( 0.5_dkind*(mesh%mesh(2,1,j-1,get_droplet_cell(3)) + mesh%mesh(2,1,j,get_droplet_cell(3))) <= droplet_coords(2)).and. &
-					( 0.5_dkind*(mesh%mesh(2,1,j+1,get_droplet_cell(3)) + mesh%mesh(2,1,j,get_droplet_cell(3))) > droplet_coords(2))) then
+				if (( 0.5_dp*(mesh%mesh(2,1,j-1,get_droplet_cell(3)) + mesh%mesh(2,1,j,get_droplet_cell(3))) <= droplet_coords(2)).and. &
+					( 0.5_dp*(mesh%mesh(2,1,j+1,get_droplet_cell(3)) + mesh%mesh(2,1,j,get_droplet_cell(3))) > droplet_coords(2))) then
 					get_droplet_cell(2) = j
 					exit
 				end if		
@@ -746,8 +746,8 @@ contains
 		
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 
-			if ((  0.5_dkind*(mesh%mesh(1,i-1,get_droplet_cell(2),get_droplet_cell(3)) + mesh%mesh(1,i,get_droplet_cell(2),get_droplet_cell(3))) <= droplet_coords(1)).and. &
-				(  0.5_dkind*(mesh%mesh(1,i+1,get_droplet_cell(2),get_droplet_cell(3)) + mesh%mesh(1,i,get_droplet_cell(2),get_droplet_cell(3))) > droplet_coords(1))) then				
+			if ((  0.5_dp*(mesh%mesh(1,i-1,get_droplet_cell(2),get_droplet_cell(3)) + mesh%mesh(1,i,get_droplet_cell(2),get_droplet_cell(3))) <= droplet_coords(1)).and. &
+				(  0.5_dp*(mesh%mesh(1,i+1,get_droplet_cell(2),get_droplet_cell(3)) + mesh%mesh(1,i,get_droplet_cell(2),get_droplet_cell(3))) > droplet_coords(1))) then				
 				get_droplet_cell(1) = i
 				exit
 			end if		
@@ -855,7 +855,7 @@ contains
 	subroutine apply_boundary_conditions_main(this)
 		class(lagrangian_droplets_solver)		,intent(inout)		:: this
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
+		real(dp)				:: farfield_density, farfield_pressure, wall_temperature
 		
 		integer					:: dimensions
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -910,7 +910,7 @@ contains
 		!								if(.not.bc%boundary_types(bound_number)%is_slip()) then
 		!									do dim1 = 1, dimensions
 		!										if (dim1 /= dim) then	
-		!											v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dkind
+		!											v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
 		!										end if
 		!									end do
 		!								end if
@@ -936,7 +936,7 @@ contains
 		integer	:: dimensions
 		integer :: i,j,k, drop_x, drop_y, drop_z, dim, drop
 
-        real(dkind)	,dimension(:,:)	,allocatable	:: lengths
+        real(dp)	,dimension(:,:)	,allocatable	:: lengths
 		integer, dimension(3)	:: cell, initial_cell
 		logical	:: out_flag
 		
@@ -955,20 +955,20 @@ contains
 			do drop = 1, this%droplets_number
 				if (this%droplets(drop)%outside_domain) then
 				
-					this%droplets(drop)%coords(1)		= droplets_velocity * release_time !0.001_dkind
+					this%droplets(drop)%coords(1)		= droplets_velocity * release_time !0.001_dp
                     this%droplets(drop)%coords(2)		= lengths(2,2) / 2 + streams_distance / 2
 
-					this%droplets(drop)%dm				= 0.0_dkind  
+					this%droplets(drop)%dm				= 0.0_dp  
 					
 					this%droplets(drop)%outside_domain = .false.
 				
-					this%droplets(drop)%temperature		= 300.0_dkind
-					this%droplets(drop)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+					this%droplets(drop)%temperature		= 300.0_dp
+					this%droplets(drop)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
 					
 					initial_cell = this%get_droplet_cell(this%droplets(drop)%coords,out_flag)
 					this%droplets(drop)%cell = initial_cell
 					
-					this%droplets(drop)%velocity(1)	= droplets_velocity !1.0_dkind!v_f%pr(1)%cells(1,initial_cell(1),initial_cell(2),initial_cell(3))
+					this%droplets(drop)%velocity(1)	= droplets_velocity !1.0_dp!v_f%pr(1)%cells(1,initial_cell(1),initial_cell(2),initial_cell(3))
 					
 					this%droplets(drop)%outside_domain = out_flag	
 					
@@ -979,20 +979,20 @@ contains
             do drop = 1, this%droplets_number
 				if (this%droplets(drop)%outside_domain) then
 				
-					this%droplets(drop)%coords(1)		= droplets_velocity * release_time !0.001_dkind
+					this%droplets(drop)%coords(1)		= droplets_velocity * release_time !0.001_dp
                     this%droplets(drop)%coords(2)		= lengths(2,2) / 2 - streams_distance / 2
 
-					this%droplets(drop)%dm				= 0.0_dkind  
+					this%droplets(drop)%dm				= 0.0_dp  
 					
 					this%droplets(drop)%outside_domain = .false.
 				
-					this%droplets(drop)%temperature		= 300.0_dkind
-					this%droplets(drop)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dkind * this%droplets_params%material_density
+					this%droplets(drop)%temperature		= 300.0_dp
+					this%droplets(drop)%mass			= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
 					
 					initial_cell = this%get_droplet_cell(this%droplets(drop)%coords,out_flag)
 					this%droplets(drop)%cell = initial_cell
 					
-					this%droplets(drop)%velocity(1)	= droplets_velocity !1.0_dkind!v_f%pr(1)%cells(1,initial_cell(1),initial_cell(2),initial_cell(3))
+					this%droplets(drop)%velocity(1)	= droplets_velocity !1.0_dp!v_f%pr(1)%cells(1,initial_cell(1),initial_cell(2),initial_cell(3))
 					
 					this%droplets(drop)%outside_domain = out_flag	
 					

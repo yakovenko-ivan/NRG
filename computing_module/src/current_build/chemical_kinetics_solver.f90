@@ -9,6 +9,7 @@ module chemical_kinetics_solver_class
 	use computational_mesh_class
 	use thermophysical_properties_class
 	use chemical_properties_class
+	use benchmarking
 	
 	implicit none
 
@@ -19,13 +20,13 @@ module chemical_kinetics_solver_class
 	private
 	public  :: chemical_kinetics_solver, chemical_kinetics_solver_c
 
-	real(dkind) ,dimension(:)       ,allocatable    :: mixture_concentration
-	real(dkind) ,dimension(:,:)     ,allocatable    :: rate_constants
+	real(dp) ,dimension(:)       ,allocatable    :: mixture_concentration
+	real(dp) ,dimension(:,:)     ,allocatable    :: rate_constants
 	integer     ,dimension(:,:,:)   ,allocatable    :: chemical_coeffs
-	real(dkind) ,dimension(:)		,allocatable    :: conc_in, conc_out
+	real(dp) ,dimension(:)		,allocatable    :: conc_in, conc_out
 	integer     ,dimension(:)		,allocatable    :: IWORK
-	real(dkind) ,dimension(:)		,allocatable    :: WORK
-	real(dkind)										:: temperature, pressure 
+	real(dp) ,dimension(:)		,allocatable    :: WORK
+	real(dp)										:: temperature, pressure 
 	
 	!$omp threadprivate(mixture_concentration,rate_constants,chemical_coeffs,conc_in, conc_out,IWORK,WORK, temperature, pressure)
 
@@ -89,10 +90,12 @@ module chemical_kinetics_solver_class
 		type(computational_mesh_pointer)			:: mesh
 		character(len=20)							:: ODE_solver = 'slatec'
 		
-		real(dkind)	,dimension(:,:)	,allocatable	:: Y_t
-		real(dkind)	,dimension(:)	,allocatable	:: T_t 
+		real(dp)	,dimension(:,:)	,allocatable	:: Y_t
+		real(dp)	,dimension(:)	,allocatable	:: T_t 
+
 	contains
 		procedure				:: solve_chemical_kinetics
+!       procedure               :: chemical_kinetics_benchmark
 		procedure	,private	:: calculate_rate_constants
 		procedure	,private	:: interpolate_chemical_kinetics
 		procedure	,private	:: read_chemical_kinetics_table
@@ -112,7 +115,7 @@ contains
 		type(field_vector_cons_pointer)	:: vect_ptr
 		type(field_tensor_cons_pointer)	:: tens_ptr
 		
-		real(dkind) ::  TIN
+		real(dp) ::  TIN
 		
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
@@ -153,12 +156,12 @@ contains
 		allocate(WORK(species_number**2 + 10*species_number+250))
 		allocate(IWORK(50+species_number))
 
-		rate_constants	= 0.0_dkind
-		conc_in			= 0.0_dkind
-		conc_out		= 0.0_dkind
-		mixture_concentration	= 0.0_dkind
+		rate_constants	= 0.0_dp
+		conc_in			= 0.0_dp
+		conc_out		= 0.0_dp
+		mixture_concentration	= 0.0_dp
 		chemical_coeffs	= manager%chemistry%chem_ptr%chemical_coeffs
-		WORK			= 0.0_dkind
+		WORK			= 0.0_dp
 		IWORK			= 0
 		!$omp end parallel
 
@@ -172,20 +175,20 @@ contains
 	subroutine solve_chemical_kinetics(this,time_step)
 
 		class(chemical_kinetics_solver)  ,intent(inout) :: this
-		real(dkind)                                     :: time_step
+		real(dp)                                     :: time_step
 
 		integer     ::  N,NSTATE,NTASK,NROOT,IERROR,MINT,MITER,IMPL,MU,ML,MXORD,MXSTEP,LENW,LENIW,NDE,MATDIM,IERFLG
-		real(dkind) ::  EPS,HMAX,TIN,TOUT,TOUT2
-		real(dkind) ,dimension(1)   ::  EWT
+		real(dp) ::  EPS,HMAX,TIN,TOUT,TOUT2
+		real(dp) ,dimension(1)   ::  EWT
 
 		integer						::  IER, ITOL, ITASK
-		real(dkind)	,dimension(3)	::	ATOL(3) 
-		real(dkind)					::	RTOL	
+		real(dp)	,dimension(3)	::	ATOL(3) 
+		real(dp)					::	RTOL	
 		
-		real(dkind) :: specie_enthalpy
+		real(dp) :: specie_enthalpy
 
 		logical	:: acetylene_flag
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
 		integer :: i,j,k,dim1,dim2, i_specie, i_react
@@ -209,27 +212,31 @@ contains
 					mesh			=> this%mesh%mesh_ptr						, &
 					chem			=> this%chem%chem_ptr)
 					
+	!$omp parallel default(shared) private(i,j,k,i_react,i_specie,specie_enthalpy,N,NSTATE,NTASK,NROOT,IERROR,MINT,MITER,IMPL,MU,ML,MXORD,MXSTEP,LENW,LENIW,NDE,MATDIM,IERFLG,EPS,HMAX,TIN,TOUT,EWT) , &
+	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	, & 
+    !$omp& firstprivate(this)
+        
+	!!$omp& shared(this,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag)
 
-	!$omp parallel default(none) private(i,j,k,i_react,i_specie,specie_enthalpy,N,NSTATE,NTASK,NROOT,IERROR,MINT,MITER,IMPL,MU,ML,MXORD,MXSTEP,LENW,LENIW,NDE,MATDIM,IERFLG,EPS,HMAX,TIN,TOUT,EWT) , &
-	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	, &			
-	!$omp& firstprivate(this)	, &
-	!$omp& shared(T,p,rho,Y,E_f_prod,Y_prod,Y_prod2,molar_masses,enhanced_efficiencies,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag,mesh)
-	!$omp do collapse(3) schedule(dynamic)
+    !$omp do collapse(3) schedule(dynamic)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			continue
-			if (		(T%cells(i,j,k) >= 305.0_dkind) 	&
-				!.and.	(T%cells(i,j,k) <= 5000.0_dkind)	&
+
+			if (		(T%cells(i,j,k) >= 305.0_dp) 	&
+				!.and.	(T%cells(i,j,k) <= 5000.0_dp)	&
+				!.and.	(Y%pr(2)%cells(i,j,k) >= 0.001_dkind)	&
 				.and.	(this%boundary%bc_ptr%bc_markers(i,j,k) == 0)) then
 
-				E_f_prod%cells(i,j,k)	= 0.0_dkind
-				mixture_concentration	= 0.0_dkind
+
+
+				E_f_prod%cells(i,j,k)	= 0.0_dp
+				mixture_concentration	= 0.0_dp
 
 				do i_react	= 1,reactions_number
 					do i_specie	= 1,species_number
-						if (molar_masses(i_specie) /= 0.0_dkind) then
+						if (molar_masses(i_specie) /= 0.0_dp) then
 						mixture_concentration(i_react)	= mixture_concentration(i_react)           &
 														+ Y%pr(i_specie)%cells(i,j,k)*rho%cells(i,j,k)/molar_masses(i_specie)*enhanced_efficiencies(i_react,i_specie)
 
@@ -243,9 +250,9 @@ contains
 					call this%calculate_rate_constants(T%cells(i,j,k))
 				end if
 
-				conc_in = 0.0_dkind
+				conc_in = 0.0_dp
 				do i_specie	= 1,species_number
-					if (molar_masses(i_specie) /= 0.0_dkind) then
+					if (molar_masses(i_specie) /= 0.0_dp) then
 						conc_in(i_specie) = Y%pr(i_specie)%cells(i,j,k)*rho%cells(i,j,k)/molar_masses(i_specie)
 						if(this%ODE_solver == 'table_approximated') then
 							conc_in(i_specie)	= Y%pr(i_specie)%cells(i,j,k)	! For table approximated kinetics
@@ -263,8 +270,8 @@ contains
 				NSTATE  =   1
 				NTASK   =   1
 				NROOT   =   0
-				EPS     =   1.0e-9_dkind !D1MACH(4)**(1.0_dkind/3.0_dkind)
-				EWT(1)  =   1.0e-4_dkind
+				EPS     =   1.0e-9_dp !D1MACH(4)**(1.0_dp/3.0_dp)
+				EWT(1)  =   1.0e-4_dp
 				IERROR  =   3
 				MINT    =   2
 				MITER   =   2
@@ -272,9 +279,9 @@ contains
 				ML      =   0
 				MU      =   0
 				MXORD   =   5
-				TIN     =   0.0_dkind
+				TIN     =   0.0_dp
 				TOUT    =   time_step
-				TOUT2   =   0.0_dkind
+				TOUT2   =   0.0_dp
 				!=====================================
 				HMAX    =   1.0E-7
 				MXSTEP  =   10000
@@ -289,10 +296,10 @@ contains
 				!=====================================
 				!  * CVODE parameters *				
 				ITOL	= 1
-				RTOL	= 1.0E-4_dkind
-				ATOL(1) = 1.0E-8_dkind
-				ATOL(2) = 1.0E-8_dkind
-				ATOL(3) = 1.0E-8_dkind
+				RTOL	= 1.0E-4_dp
+				ATOL(1) = 1.0E-8_dp
+				ATOL(2) = 1.0E-8_dp
+				ATOL(3) = 1.0E-8_dp
 				ITASK	= 1
 
 				temperature	= T%cells(i,j,k)
@@ -308,7 +315,7 @@ contains
 				end select
 
 				do i_specie	= 1,species_number
-					if (molar_masses(i_specie) /= 0.0_dkind) then
+					if (molar_masses(i_specie) /= 0.0_dp) then
 						Y_prod%pr(i_specie)%cells(i,j,k) = (conc_out(i_specie) - conc_in(i_specie))*molar_masses(i_specie) / time_step
 						Y_prod2%pr(i_specie)%cells(i,j,k)	= (conc_out(i_specie) - conc_in(i_specie))
 						
@@ -332,9 +339,9 @@ contains
 				end do
 			else
 				do i_specie	= 1,species_number
-					Y_prod%pr(i_specie)%cells(i,j,k)	= 0.0_dkind
+					Y_prod%pr(i_specie)%cells(i,j,k)	= 0.0_dp
 				end do
-				E_f_prod%cells(i,j,k)				= 0.0_dkind
+				E_f_prod%cells(i,j,k)				= 0.0_dp
 			end if
 
 			continue
@@ -352,13 +359,13 @@ contains
 	recursive subroutine calculate_rate_constants(this,Tin)
 
 		class(chemical_kinetics_solver) ,intent(inout)  :: this
-		real(dkind)                     ,intent(in)     :: Tin
+		real(dp)                     ,intent(in)     :: Tin
 
-		real(dkind)	,dimension(species_number)			:: s, h
-		real(dkind)										:: d_s, d_h, d_nu
-		real(dkind)										:: Kp, Kc, k_0, k_inf, reduced_pressure, mix_conc
-		real(dkind)										:: c, n, d, F_cent, blending_function
-		real(dkind)										:: T, dfd
+		real(dp)	,dimension(species_number)			:: s, h
+		real(dp)										:: d_s, d_h, d_nu
+		real(dp)										:: Kp, Kc, k_0, k_inf, reduced_pressure, mix_conc
+		real(dp)										:: c, n, d, F_cent, blending_function
+		real(dp)										:: T, dfd
 
 		integer     :: i_react, i_component
 
@@ -371,10 +378,10 @@ contains
 					chem_coeffs		=> this%chem%chem_ptr%chemical_coeffs	,&
 					Troe_coeffs		=> this%chem%chem_ptr%Troe_coeffs)
 		
-		T = min(Tin,10000.0_dkind)
+		T = min(Tin,10000.0_dp)
 						
-		s = 0.0_dkind
-		h = 0.0_dkind
+		s = 0.0_dp
+		h = 0.0_dp
 
 		do 	i_component= 1,	species_number
 			s(i_component) = this%thermo%thermo_ptr%calculate_specie_entropy(T,i_component)
@@ -383,9 +390,9 @@ contains
 
 		do i_react = 1, reactions_number
 
-		d_s		= 0.0_dkind
-		d_h		= 0.0_dkind
-		d_nu	= 0.0_dkind
+		d_s		= 0.0_dp
+		d_h		= 0.0_dp
+		d_nu	= 0.0_dp
 
 		do i_component = 2, chem_coeffs(1,i_react,2)+1
 			if(chem_coeffs(i_component,i_react,2) == species_number + 1) cycle
@@ -422,7 +429,7 @@ contains
 
 				reduced_pressure = k_0 * mixture_concentration(i_react) / k_inf
 
-				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dkind + reduced_pressure))
+				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dp + reduced_pressure))
 
 				Kp = exp(d_s/r_gase_j - d_h/r_gase_j/T)
 				Kc = Kp * (P_atm/r_gase_j/T) ** d_nu
@@ -438,22 +445,22 @@ contains
 
 				reduced_pressure = k_0 * mixture_concentration(i_react) / k_inf
 
-				F_cent = (1.0_dkind - Troe_coeffs(i_react,1))*exp(-T/Troe_coeffs(i_react,2)) + Troe_coeffs(i_react,1)*exp(-T/Troe_coeffs(i_react,3)) + exp(-Troe_coeffs(i_react,4)/T)
+				F_cent = (1.0_dp - Troe_coeffs(i_react,1))*exp(-T/Troe_coeffs(i_react,2)) + Troe_coeffs(i_react,1)*exp(-T/Troe_coeffs(i_react,3)) + exp(-Troe_coeffs(i_react,4)/T)
 
-				c = -0.4_dkind - 0.67_dkind * log10(F_cent)
-				n = 0.75_dkind - 1.27_dkind * log10(F_cent)
-				d = 0.14_dkind
+				c = -0.4_dp - 0.67_dp * log10(F_cent)
+				n = 0.75_dp - 1.27_dp * log10(F_cent)
+				d = 0.14_dp
 
-				if (reduced_pressure /= 0.0_dkind) then
-					blending_function = F_cent ** (1.0_dkind/ (1.0_dkind + ((log10(reduced_pressure) + c)/(n - d*(log10(reduced_pressure)+c)))**2))
+				if (reduced_pressure /= 0.0_dp) then
+					blending_function = F_cent ** (1.0_dp/ (1.0_dp + ((log10(reduced_pressure) + c)/(n - d*(log10(reduced_pressure)+c)))**2))
 				else
-					blending_function = F_cent ** (-1.0_dkind / d)
+					blending_function = F_cent ** (-1.0_dp / d)
 				end if
 					
-        !       dfd = (1.0_dkind + ((log10(reduced_pressure) + c)/(n - d * (log10(reduced_pressure) + c))) ** 2) ** (-1) * log10(F_cent)
+        !       dfd = (1.0_dp + ((log10(reduced_pressure) + c)/(n - d * (log10(reduced_pressure) + c))) ** 2) ** (-1) * log10(F_cent)
        	!		dfd = log10(blending_function)
 				
-				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dkind + reduced_pressure)) * blending_function
+				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dp + reduced_pressure)) * blending_function
 
 				Kp = exp(d_s/r_gase_j - d_h/r_gase_j/T)
 				Kc = Kp * (P_atm/r_gase_j/T) ** d_nu
@@ -462,18 +469,18 @@ contains
 			case(4)         ! duplicate
 			case(5)         ! one-directed
 				rate_constants(i_react,1) = A(i_react)*(T**beta(i_react))*exp(-E_act(i_react)/r_gase_J/T)
-				rate_constants(i_react,2) = 0.0_dkind
+				rate_constants(i_react,2) = 0.0_dp
 			case(6)         ! one-directed +M
 				rate_constants(i_react,1) = A(i_react)*(T**beta(i_react))*exp(-E_act(i_react)/r_gase_J/T)
-				rate_constants(i_react,2) = 0.0_dkind
+				rate_constants(i_react,2) = 0.0_dp
 			case(7)         !one-directed (+M) Lindemann or Troe
 				k_0     = A_low (i_react)*(T**beta_low  (i_react))*exp(-E_act_low   (i_react)/r_gase_J/T)
 				k_inf   = A     (i_react)*(T**beta      (i_react))*exp(-E_act       (i_react)/r_gase_J/T)
 
 				reduced_pressure = k_0 * mixture_concentration(i_react) / k_inf
 
-				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dkind + reduced_pressure))
-				rate_constants(i_react,2) = 0.0_dkind
+				rate_constants(i_react,1) = k_inf * (reduced_pressure / (1.0_dp + reduced_pressure))
+				rate_constants(i_react,2) = 0.0_dp
 		end select
 
 		end do
@@ -486,17 +493,17 @@ contains
 
 	recursive subroutine fun(N,T,Z,ZDOT)
 
-		real(dkind)                             ,intent(in)     :: T
+		real(dp)                             ,intent(in)     :: T
 		integer                                 ,intent(in)     :: N
 
-		real(dkind) ,dimension(species_number)  ,intent(in)     :: Z
-		real(dkind) ,dimension(species_number)  ,intent(out)    :: ZDOT
+		real(dp) ,dimension(species_number)  ,intent(in)     :: Z
+		real(dp) ,dimension(species_number)  ,intent(out)    :: ZDOT
 
-		real(dkind) :: forward_rate, reverse_rate
+		real(dp) :: forward_rate, reverse_rate
 !		integer     ,save   :: counter = 0
 		integer     :: i_react, i_specie, i_coeff
 
-		ZDOT = 0.0_dkind
+		ZDOT = 0.0_dp
 
 		do i_react  = 1,reactions_number
 			forward_rate = rate_constants(i_react,1)
@@ -535,12 +542,12 @@ contains
 		class(chemical_kinetics_solver) ,intent(inout)  :: this	
 		character(len=*)				,intent(in)		:: table_file
 		
-		real(dkind)			:: max_T
+		real(dp)			:: max_T
 		integer				:: min_index, max_index
 		
 		character(len=100)							:: name_string
 		character(len=10)							:: fmt
-		real(dkind)	,dimension(species_number+1)	:: temp
+		real(dp)	,dimension(species_number+1)	:: temp
 
 		integer	,dimension(3,2)	:: cons_inner_loop
 		
@@ -562,9 +569,9 @@ contains
 					Y_prod2			=> this%Y_prod2%v_ptr						, &
 					chem			=> this%chem%chem_ptr)
 
-		max_T = 0.0_dkind
+		max_T = 0.0_dp
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			if((T%cells(i,1,1) > 300.0_dkind).and.(T%cells(i,1,1) < 310.0_dkind))	min_index = i
+			if((T%cells(i,1,1) > 300.0_dp).and.(T%cells(i,1,1) < 310.0_dp))	min_index = i
 			if(T%cells(i,1,1) > max_T) then
 				max_index = i
 				max_T = T%cells(i,1,1)
@@ -602,7 +609,7 @@ contains
 		character(len=10)								:: name_string
 		character(len=10)								:: fmt
 			
-		real(dkind)	,dimension(species_number+1)		:: temp
+		real(dp)	,dimension(species_number+1)		:: temp
 		
 		integer	:: io_unit
 		integer :: table_size
@@ -640,10 +647,10 @@ contains
 	
 	subroutine	interpolate_chemical_kinetics(this,concentrations,temperature)
 		class(chemical_kinetics_solver)			,intent(inout)  :: this	
-		real(dkind) ,dimension(species_number)  ,intent(inout)	:: concentrations
-		real(dkind)								,intent(in)		:: temperature
+		real(dp) ,dimension(species_number)  ,intent(inout)	:: concentrations
+		real(dp)								,intent(in)		:: temperature
 		
-		real(dkind)	:: Y_O
+		real(dp)	:: Y_O
 		integer		:: table_size
 		integer		:: i, spec
 		
@@ -661,7 +668,7 @@ contains
 
 		if((temperature < this%T_t(1))) then
 			do spec = 1, species_number
-				concentrations(spec)	= 0.0_dkind !this%Y_t(spec,1)	
+				concentrations(spec)	= 0.0_dp !this%Y_t(spec,1)	
 			end do
 		end if		
 			

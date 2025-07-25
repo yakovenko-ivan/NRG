@@ -42,13 +42,12 @@ module coarse_particles_method
 		type(computational_mesh_pointer)	:: mesh
 		type(chemical_properties_pointer)	:: chem
 
-		real(dkind) ,dimension(:,:,:)	,allocatable    :: div_v_old
+		real(dp) ,dimension(:,:,:)	,allocatable    :: div_v_old
 		
 	contains
 		procedure				::	euler_step_v
 		procedure				::	euler_step_E
 		procedure				::	lagrange_step
-		procedure				:: calculate_p_dyn		
 		procedure				::	final_step
         procedure				::	perturb_velocity_field
 	end type
@@ -133,7 +132,7 @@ contains
 											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
         
-			constructor%div_v_old			= 0.0_dkind  
+			constructor%div_v_old			= 0.0_dp  
  		end if
 										
 	end function
@@ -141,11 +140,11 @@ contains
 	subroutine euler_step_v(this,time_step)
 
 		class(coarse_particles)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
-		real(dkind)	:: av_pressure1, av_velocity1, av_pressure2, av_velocity2, div_p_v	
+		real(dp)				,intent(in)		:: time_step
+		real(dp)	:: av_pressure1, av_velocity1, av_pressure2, av_velocity2, div_p_v	
 
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		
 		integer	:: dimensions
 		integer	:: sign
@@ -157,6 +156,11 @@ contains
 
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
+		
+        associate(  p			=> this%p%s_ptr)
+		call this%mpi_support%exchange_conservative_scalar_field(p)
+        end associate
+ 
 		associate(  p			=> this%p%s_ptr			, &
 					v_prod_gd	=> this%v_prod_gd%v_ptr	, &
 					v			=> this%v%v_ptr			, &
@@ -164,11 +168,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 
-		call this%mpi_support%exchange_conservative_scalar_field(p)
-
-	!$omp parallel default(none)  private(i,j,k,dim) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,p,v_prod_gd,rho,dimensions,cell_size,time_step,cons_inner_loop)
+	!$omp parallel default(shared)  private(i,j,k,dim) !, &
+	!!$omp& shared(this,dimensions,cell_size,time_step,cons_inner_loop)
+ 
 	!$omp do collapse(3) schedule(guided)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -176,7 +178,7 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				do dim = 1,dimensions
-					v_prod_gd%pr(dim)%cells(i,j,k)  = - 0.5_dkind*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
+					v_prod_gd%pr(dim)%cells(i,j,k)  = - 0.5_dp*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
 					v_prod_gd%pr(dim)%cells(i,j,k) = v_prod_gd%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
 				end do
 			end if
@@ -188,20 +190,21 @@ contains
 	!$omp end parallel
 
 		end associate
+
 	end subroutine
 
 	subroutine euler_step_E(this,time_step)
 		class(coarse_particles)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
-		real(dkind)	:: av_pressure1, av_velocity1, av_pressure2, av_velocity2, div_p_v	
+		real(dp)				,intent(in)		:: time_step
+		real(dp)	:: av_pressure1, av_velocity1, av_pressure2, av_velocity2, div_p_v	
 		
-		real(dkind), dimension (3,3)			:: lame_coeffs
+		real(dp), dimension (3,3)			:: lame_coeffs
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
 		
 		character(len=20)	:: coordinate_system
 		
-		real(dkind)	,dimension(3)	:: cell_size
+		real(dp)	,dimension(3)	:: cell_size
 		integer	:: dimensions
 		integer	:: sign
 		integer :: i,j,k,plus,dim
@@ -214,6 +217,10 @@ contains
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
+        associate(		v_int		=> this%v_int%v_ptr)
+		    call this%mpi_support%exchange_conservative_vector_field(v_int)
+        end associate
+ 
 		associate(		p			=> this%p%s_ptr			, &
 						v_int		=> this%v_int%v_ptr		, &
 						E_f_prod	=> this%E_f_prod%s_ptr	, &
@@ -221,43 +228,40 @@ contains
 						mesh		=> this%mesh%mesh_ptr	, &
 						bc			=> this%boundary%bc_ptr)
 						
-		call this%mpi_support%exchange_conservative_vector_field(v_int)
-			
-	!$omp parallel default(none)  private(i,j,k,dim,div_p_v,av_pressure1,av_velocity1,av_pressure2,av_velocity2,lame_coeffs) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,p,v_int,rho,E_f_prod,dimensions,cell_size,time_step,cons_inner_loop,coordinate_system)
+	!$omp parallel default(shared)  private(i,j,k,dim,div_p_v,av_pressure1,av_velocity1,av_pressure2,av_velocity2,lame_coeffs) !, &
+	!!$omp& shared(this,dimensions,cell_size,time_step,cons_inner_loop,coordinate_system)
+	
 	!$omp do collapse(3) schedule(guided)
-
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
-				div_p_v = 0.0_dkind
+				div_p_v = 0.0_dp
 
-				lame_coeffs		= 1.0_dkind				
+				lame_coeffs		= 1.0_dp				
 				
 				select case(coordinate_system)
 					case ('cartesian')	
-						lame_coeffs			= 1.0_dkind
+						lame_coeffs			= 1.0_dp
 					case ('cylindrical')
 						! x -> z, y -> r
-						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)			
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)			
 						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1)	
 					case ('spherical')
 						! x -> r
-						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
+						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
 						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
+						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
 				end select				
 				
 				do dim = 1,dimensions
 		
-                    av_velocity1	= 0.5_dkind * (v_int%pr(dim)%cells(i,j,k)	+ v_int%pr(dim)	%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
-                    av_pressure1	= 0.5_dkind * (p			%cells(i,j,k)	+ p				%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+                    av_velocity1	= 0.5_dp * (v_int%pr(dim)%cells(i,j,k)	+ v_int%pr(dim)	%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+                    av_pressure1	= 0.5_dp * (p			%cells(i,j,k)	+ p				%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 					
-                    av_velocity2	= 0.5_dkind * (v_int%pr(dim)%cells(i,j,k)	+ v_int%pr(dim)	%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
-                    av_pressure2	= 0.5_dkind * (p			%cells(i,j,k)	+ p				%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+                    av_velocity2	= 0.5_dp * (v_int%pr(dim)%cells(i,j,k)	+ v_int%pr(dim)	%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+                    av_pressure2	= 0.5_dp * (p			%cells(i,j,k)	+ p				%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
 					
 					div_p_v = div_p_v + (av_velocity2*av_pressure2*lame_coeffs(dim,3) - av_velocity1*av_pressure1*lame_coeffs(dim,1)) * time_step / lame_coeffs(dim,2) / cell_size(dim) / rho%cells(i,j,k) 
 				end do
@@ -279,15 +283,15 @@ contains
 	subroutine lagrange_step(this,time_step)
 
 		class(coarse_particles)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
 
-		real(dkind)	:: av_velocity, dif_velocity
+		real(dp)	:: av_velocity, dif_velocity
 		
 		integer		,dimension(3,2)	:: flow_inner_loop
 		
 		character(len=20)	:: coordinate_system
 
-		real(dkind)	,dimension(3)	:: cell_size	, cell_surface_area	
+		real(dp)	,dimension(3)	:: cell_size	, cell_surface_area	
 		integer	:: dimensions
 		integer	:: sign
 		integer :: i,j,k,plus,dim
@@ -299,19 +303,23 @@ contains
 		
 		flow_inner_loop	= this%domain%get_local_inner_faces_bounds()
 		
+        associate(	rho			=> this%rho%s_ptr		, &
+					v_int		=> this%v_int%v_ptr)
+            
+		call this%mpi_support%exchange_conservative_vector_field(v_int)
+		call this%mpi_support%exchange_conservative_scalar_field(rho)
+
+    end associate
+    
 		associate(  m_flux		=> this%m_flux%s_ptr	, &
         !            foam_marker => this%foam_marker%s_ptr, &
 					rho			=> this%rho%s_ptr		, &
 					v_int		=> this%v_int%v_ptr		, &
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
+	!$omp parallel default(shared)  private(i,j,k,dim,av_velocity,dif_velocity,cell_surface_area) !, &
+	!!$omp& shared(this,dimensions,cell_size,time_step,flow_inner_loop,coordinate_system)
 
-		call this%mpi_support%exchange_conservative_vector_field(v_int)
-		call this%mpi_support%exchange_conservative_scalar_field(rho)
-
-	!$omp parallel default(none)  private(i,j,k,dim,av_velocity,dif_velocity,cell_surface_area) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,m_flux,rho,v_int,dimensions,cell_size,time_step,flow_inner_loop,coordinate_system)
 	!$omp do collapse(3) schedule(guided)
 
 		do k = flow_inner_loop(3,1),flow_inner_loop(3,2)
@@ -328,23 +336,23 @@ contains
 							cell_surface_area	= cell_surface_area
 						case ('cylindrical')
 							! x -> r, y -> z
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))									
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))									
 							if(dim==2) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k))		
 						case ('spherical')
 							! x -> r
-							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2	
+							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2	
 					end select		
 	
-                    av_velocity     = 0.5_dkind *(v_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_int%pr(dim)%cells(i,j,k))
+                    av_velocity     = 0.5_dp *(v_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_int%pr(dim)%cells(i,j,k))
                     dif_velocity    = time_step *(v_int%pr(dim)%cells(i,j,k) - v_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / cell_size(dim)
                     if( av_velocity >= 0 ) then
-                        m_flux%cells(dim,i,j,k) = rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dkind + dif_velocity)
+                        m_flux%cells(dim,i,j,k) = rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
                     else
-                        m_flux%cells(dim,i,j,k) = rho%cells(i,j,k)										* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dkind + dif_velocity)
+                        m_flux%cells(dim,i,j,k) = rho%cells(i,j,k)										* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
                     end if
                     
-                  !  if(abs(foam_marker%cells(i,j,k) - foam_marker%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) == 1.0_dkind) then
-                  !      m_flux%cells(dim,i,j,k) = 0.0_dkind
+                  !  if(abs(foam_marker%cells(i,j,k) - foam_marker%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) == 1.0_dp) then
+                  !      m_flux%cells(dim,i,j,k) = 0.0_dp
                   !  end if    
 
                 end do
@@ -363,13 +371,13 @@ contains
 	subroutine final_step(this,time_step)
 
 		class(coarse_particles)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
 
-		real(dkind)	:: D11, D12, D21, D22, rho_old, av_velocity1, av_velocity2
+		real(dp)	:: D11, D12, D21, D22, rho_old, av_velocity1, av_velocity2
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dkind)	,dimension(3)	:: cell_size
-		real(dkind)					:: cell_volume
+		real(dp)	,dimension(3)	:: cell_size
+		real(dp)					:: cell_volume
 		integer	:: dimensions, species_number
 		character(len=20)	:: coordinate_system
 		integer	:: sign
@@ -383,6 +391,19 @@ contains
 	
 		cell_size			= this%mesh%mesh_ptr%get_cell_edges_length()
 		
+
+    associate(  m_flux		=> this%m_flux%s_ptr	, &
+			    E_f_int		=> this%E_f_int%s_ptr	, &
+			    Y_int		=> this%Y_int%v_ptr)            
+
+	call this%mpi_support%exchange_conservative_scalar_field(E_f_int)
+	call this%mpi_support%exchange_conservative_vector_field(Y_int)
+
+	call this%mpi_support%exchange_flow_scalar_field(m_flux)
+    
+    end associate
+
+                
 		associate(  m_flux		=> this%m_flux%s_ptr	, &
 					rho			=> this%rho%s_ptr		, &
 					E_f			=> this%E_f%s_ptr		, &
@@ -395,14 +416,9 @@ contains
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 
-	call this%mpi_support%exchange_conservative_scalar_field(E_f_int)
-	call this%mpi_support%exchange_conservative_vector_field(Y_int)
-
-	call this%mpi_support%exchange_flow_scalar_field(m_flux)
-
-	!$omp parallel default(none)  private(i,j,k,dim,dim1,dim2,spec,rho_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) , &
-	!$omp& firstprivate(this)	,&
-	!$omp& shared(bc,mesh,m_flux,rho,E_f_int,E_f,v,v_int,v_f,Y,Y_int,dimensions,species_number,cons_inner_loop,coordinate_system)
+	!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,spec,rho_old,av_velocity1,av_velocity2,cell_volume,D11,D21,D12,D22,i_ind1,i_ind2,j_ind1,j_ind2,k_ind1,k_ind2) !, &
+	!!$omp& shared(this,dimensions,species_number,cons_inner_loop,coordinate_system)
+    
 	!$omp do collapse(3) schedule(guided)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -434,10 +450,10 @@ contains
 				end do
 
                 do dim2 = 1,dimensions
-                    D11 = 0.0_dkind
-					D12 = 0.0_dkind
-					D21 = 0.0_dkind
-					D22 = 0.0_dkind
+                    D11 = 0.0_dp
+					D12 = 0.0_dp
+					D21 = 0.0_dp
+					D22 = 0.0_dp
 
 					i_ind1 = i - I_m(dim2,1)
 					i_ind2 = i + I_m(dim2,1)
@@ -450,14 +466,14 @@ contains
                     av_velocity2 = v_int%pr(dim2)%cells(i_ind2,j_ind2,k_ind2) + v_int%pr(dim2)%cells(i,j,k)
 
                     if(av_velocity1 > 0.0) then
-						D11 = 1.0_dkind
+						D11 = 1.0_dp
 					else
-						D12 = 1.0_dkind
+						D12 = 1.0_dp
 					end if
                     if(av_velocity2 < 0.0) then
-						D21 = 1.0_dkind
+						D21 = 1.0_dp
 					else
-						D22 = 1.0_dkind
+						D22 = 1.0_dp
 					end if
 
 
@@ -493,221 +509,27 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				do dim = 1,dimensions
-					v_f%pr(dim)%cells(dim,i,j,k) = 0.5_dkind * ( v%pr(dim)%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+					v_f%pr(dim)%cells(dim,i,j,k) = 0.5_dp * ( v%pr(dim)%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 				end do
 			end if
 		end do
 		end do
 		end do		
-		
+    !$omp end do 		
 	!$omp end parallel
 
 		end associate
+
+
 	end subroutine
 
-	subroutine calculate_p_dyn(this,time_step)
 
-#ifdef mpi
-	use MPI
-#endif
-
-		class(coarse_particles)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
-		
-        real(dkind) :: rho_min(1)
-        real(dkind)	,dimension(:)	,allocatable	,save	:: rho_min_array
-		
-		real(dkind)	:: div_pres_flux, pres_flux1, pres_flux2
-		
-		real(dkind), dimension (3,3)	:: lame_coeffs	
-		
-		integer	                    :: dimensions, iterations
-		integer	,dimension(3,2)	    :: cons_inner_loop, cons_utter_loop
-		real(dkind)	,dimension(3)	:: cell_size        
-        real(dkind)					:: time_step_adj
-		
-		integer						:: processor_rank, processor_number, mpi_communicator		
-		character(len=20)			:: coordinate_system
-		
-		logical	:: converged
-		
-		integer	:: iteration
-		integer	:: bound_number
-		integer :: i,j,k,dim,specie_number
-		
-		integer	:: error
-
-		dimensions		= this%domain%get_domain_dimensions()
-		
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-		cons_utter_loop = this%domain%get_local_utter_cells_bounds()
-			
-        cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-
-		time_step_adj	=  0.125_dkind*cell_size(1)**2	
-		
-		coordinate_system	= this%domain%get_coordinate_system_name()		
-		
-		processor_rank		= this%domain%get_processor_rank()
-		mpi_communicator	= this%domain%get_mpi_communicator()
-
-		if (.not.allocated(rho_min_array)) then
-			processor_number = this%domain%get_mpi_communicator_size()
-			allocate(rho_min_array(processor_number))
-		end if		
-		
-        rho_min(1) = 100.0_dkind
-        
-		associate (	rho				=> this%rho%s_ptr			, &
-					p				=> this%p%s_ptr				, &
-                    p_dyn			=> this%p_dyn%s_ptr			, &
-					p_stat			=> this%p_stat%s_ptr		, &
-                    p_int			=> this%p_int%s_ptr			, &
-					div_v			=> this%div_v%s_ptr         , &
-					div_v_old       => this%div_v_old			, &
-                    e_i             => this%e_i%s_ptr			, &
-                    E_f             => this%E_f%s_ptr			, &
-					mesh			=> this%mesh%mesh_ptr		, &
-					bc				=> this%boundary%bc_ptr)
-			
-		!!$omp parallel default(none)  private(i,j,k) , &
-		!!$omp& firstprivate(this)	,&
-		!!$omp& shared(time_step,div_v_old,div_v,p_int,rho,e_i,E_f,rho_min,p,p_dyn,p_stat,bc,cons_inner_loop)
-		!!$omp do collapse(3) schedule(guided) reduction(min:rho_min)
-					
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then					
-                    div_v_old(i,j,k) = div_v%cells(i,j,k)
-                    div_v%cells(i,j,k) = rho%cells(i,j,k)/p_stat%cells(i,j,k)/time_step * (e_i%cells(i,j,k) - E_f%cells(i,j,k))
-					p_int%cells(i,j,k) = p_dyn%cells(i,j,k)
-                    if (rho%cells(i,j,k) < rho_min(1))  then
-						rho_min(1) = rho%cells(i,j,k)
-					end if
-				end if
-			end do
-			end do
-            end do
-
-		!	p_int%cells = p_dyn%cells
-			
-		!!$omp end do nowait
-		!!$omp end parallel			
-		
-		rho_min_array(processor_rank+1) = rho_min(1) 
-		
-#ifdef mpi
-		call mpi_gather(rho_min,1,MPI_DOUBLE_PRECISION,rho_min_array,1,MPI_DOUBLE_PRECISION,0,mpi_communicator,error)
-#endif
-		
-		if (processor_rank == 0) then
-			do i = 0,size(rho_min_array) - 1 
-				if (rho_min_array(i+1) < rho_min(1)) rho_min(1) = rho_min_array(i+1)
-			end do
-		end if
-
-#ifdef mpi	
-		call mpi_bcast(rho_min,1,MPI_DOUBLE_PRECISION,0,mpi_communicator,error)
-#endif
-	
-		iteration = 0
-		converged = .false.
-		
-		!$omp parallel default(none)  private(i,j,k,dim,pres_flux1,pres_flux2,div_pres_flux,lame_coeffs,iterations) , &
-		!$omp& firstprivate(this) , &
-		!$omp& shared(time_step,time_step_adj,coordinate_system,p_dyn,p_int,div_v,div_v_old,rho_min,bc,cell_size,dimensions,cons_inner_loop,mesh,converged,iteration)
-		do while (.not.converged)!do iterations = 1, 100
-		!do iterations = 1, 10
-		!	call this%mpi_support%exchange_conservative_scalar_field(p_int)	
-		
-			!$omp barrier		
-			!$omp atomic write
-			converged = .true.
-			!$omp end atomic			
-				
-			!$omp do collapse(3) schedule(guided)
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-								
-					lame_coeffs		= 1.0_dkind		
-				 
-					select case(coordinate_system)
-						case ('cartesian')	
-							lame_coeffs			= 1.0_dkind
-						case ('cylindrical')
-							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1)
-							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1)	
-						case ('spherical')
-							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dkind*cell_size(1))**2
-							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dkind*cell_size(1))**2
-					end select					
-				 
-					p_dyn%cells(i,j,k) = p_int%cells(i,j,k) - time_step_adj * (div_v%cells(i,j,k) - div_v_old(i,j,k))/time_step * rho_min(1) 
-					
-					div_pres_flux = 0.0_dkind
-					do dim = 1,dimensions
-						pres_flux1	= lame_coeffs(dim,1)* (p_int%cells(i,j,k) - p_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / cell_size(dim)
-     
-						pres_flux2	= lame_coeffs(dim,3)* (p_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_int%cells(i,j,k)) / cell_size(dim)
-     
-						div_pres_flux = div_pres_flux  + (pres_flux2 - pres_flux1) / cell_size(dim) / lame_coeffs(dim,2)
-					end do			
-					
-					p_dyn%cells(i,j,k) = p_dyn%cells(i,j,k) + time_step_adj * div_pres_flux
-				end if
-			end do
-			end do
-			end do            
-			!$omp end do
-			
-			!$omp do collapse(3) schedule(guided) reduction(.and.:converged)	
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			
-				if ((abs(p_int%cells(i,j,1) - p_dyn%cells(i,j,1)) > 1.0e-02_dkind)) then
-					converged = .false.
-				!	print *, abs(p_int%cells(i,j,1) - p_dyn%cells(i,j,1))
-				end if			
-   
-				p_int%cells(i,j,k) = p_dyn%cells(i,j,k)
-			end do
-			end do
-			end do 
-			!$omp end do		
-			
-			!$omp master
-			iteration = iteration + 1
-			!$omp end master
-		
-		end do
-		!$omp end parallel
-		
-		print *, 'Poisson iteration:', iteration
-
-		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)		
-			p%cells(i,j,k) = p_dyn%cells(i,j,k) + p_stat%cells(i,j,k)
-		end do
-		end do
-		end do 	
-		
-		end associate
-
-    end subroutine	
-    
     subroutine perturb_velocity_field(this,time_step)
 		class(coarse_particles)	,intent(inout)	:: this
-		real(dkind)				,intent(in)		:: time_step
+		real(dp)				,intent(in)		:: time_step
 
-		real(dkind)	,dimension(3)	:: cell_size		
-		real(dkind) ,save			:: time = 0.0_dkind
+		real(dp)	,dimension(3)	:: cell_size		
+		real(dp) ,save			:: time = 0.0_dp
         
 		integer	:: dimensions, iterations
 		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
@@ -718,7 +540,7 @@ contains
 		integer	:: sign, bound_number
 		integer :: i,j,k,dim,dim1,dim2,spec,plus
 
-		real(dkind)	:: kappa_turb, gamma_turb, kx_turb, ky_turb, kappa_turb_max, time_scale
+		real(dp)	:: kappa_turb, gamma_turb, kx_turb, ky_turb, kappa_turb_max, time_scale
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		
@@ -732,15 +554,15 @@ contains
 		associate (	v_prod_source	=> this%v_prod_sources%v_ptr	, &
 					bc				=> this%boundary%bc_ptr)
 
-            time_scale		= 1.0e-03_dkind
-            kappa_turb_max	= 100000.0_dkind
+            time_scale		= 1.0e-03_dp
+            kappa_turb_max	= 100000.0_dp
             
             kappa_turb	= min(kappa_turb_max, kappa_turb_max/time_scale * time)
 
 			call RANDOM_SEED()
 			call RANDOM_NUMBER(gamma_turb)
 			
-			gamma_turb = 2.0_dkind * pi * gamma_turb   !2.0_dkind*gamma_turb - 1.0_dkind   !cos(alpha) sin(alpha)=sqrt(1-gamma_turb**2.0)
+			gamma_turb = 2.0_dp * pi * gamma_turb   !2.0_dp*gamma_turb - 1.0_dp   !cos(alpha) sin(alpha)=sqrt(1-gamma_turb**2.0)
 			
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -749,11 +571,11 @@ contains
 					if((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then	
 
 						!call RANDOM_NUMBER(gamma_turb)
-						!gamma_turb = 2.0_dkind*gamma_turb - 1.0_dkind
+						!gamma_turb = 2.0_dp*gamma_turb - 1.0_dp
 						!v_f%pr(dim)%cells(dim,i,j,k) = v_f%pr(dim)%cells(dim,i,j,k) + kappa_turb*gamma_turb*sqrt(this%time_step)
 							
-						kx_turb = 2.0_dkind*pi*sin(gamma_turb)/0.005_dkind   !0.002   !sqrt(1.0_dkind-gamma_turb**2.0)/0.002  
-						ky_turb = 2.0_dkind*pi*cos(gamma_turb)/0.005_dkind   !0.002   !gamma_turb/0.002
+						kx_turb = 2.0_dp*pi*sin(gamma_turb)/0.005_dp   !0.002   !sqrt(1.0_dp-gamma_turb**2.0)/0.002  
+						ky_turb = 2.0_dp*pi*cos(gamma_turb)/0.005_dp   !0.002   !gamma_turb/0.002
 							
 						if(dim == 1)then
 							v_prod_sources%pr(dim)%cells(i,j,k) = kappa_turb*cos(gamma_turb)*sqrt(time_step)*cos(kx_turb*(i-0.5)*cell_size(1)+ky_turb*(j-0.5)*cell_size(1))
