@@ -53,10 +53,11 @@ module cpm_solver_class
     type(timer)     :: cpm_viscosity_timer
     
 	type cpm_solver
-		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, perturbed_velocity, hydrodynamics_flag, multiphase_flag, CFL_condition_flag
-		real(dp)		:: courant_fraction
-		real(dp)		:: time, time_step, initial_time_step
-		integer			:: additional_particles_phases_number, additional_droplets_phases_number
+		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, perturbed_velocity, hydrodynamics_flag, multiphase_flag, CFL_condition_flag
+		real(dp)		            :: courant_fraction
+		real(dp)                    :: time, time_step, initial_time_step
+        real(dp),   dimension(3)    :: g
+		integer			            :: additional_particles_phases_number, additional_droplets_phases_number
 		
 		type(viscosity_solver)				:: visc_solver
 		type(coarse_particles)				:: gas_dynamics_solver
@@ -143,6 +144,9 @@ contains
 		constructor%courant_fraction		= problem_solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag		= problem_solver_options%get_CFL_condition_flag()
 		constructor%perturbed_velocity		= .false.
+        
+        constructor%g                       = problem_solver_options%get_grav_acc()
+
 		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
 		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()
 		
@@ -180,7 +184,7 @@ contains
 		constructor%v_int%v_ptr					=> v_int
 		call manager%create_vector_field(Y_int		,'specie_molar_concentration_interm'	,'Y_int'	,'chemical')
 		constructor%Y_int%v_ptr					=> Y_int
-		constructor%gas_dynamics_solver	= coarse_particles_c(manager)
+		constructor%gas_dynamics_solver	= coarse_particles_c(manager, constructor%g)
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_gas_dynamics')
 		constructor%v_prod_gd%v_ptr				=> vect_ptr%v_ptr

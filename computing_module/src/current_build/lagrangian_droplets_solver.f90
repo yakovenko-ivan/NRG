@@ -598,7 +598,7 @@ contains
 			
 					dmp = max(0.0_dp, min(this%droplets(drop)%mass, droplet_time_step * AGHRHO * ( Y_vap -  Yg_old(droplet_material_index) + 0.5_dp * dY_dT * (Tp_new - Tp_old))))
 			
-					Q	= droplet_time_step * A_ps * H_g * 0.5_dp * (Tg_old + Tg_new - Tp_old - Tp_new)
+					Q	= droplet_time_step * A_ps * H_heat * 0.5_dp * (Tg_old + Tg_new - Tp_old - Tp_new)
 					if (Q > this%droplets(drop)%mass * H_v) dmp = this%droplets(drop)%mass
 			
 					if ( dmp < this%droplets(drop)%mass) then

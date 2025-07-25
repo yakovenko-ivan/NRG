@@ -42,8 +42,8 @@ module coarse_particles_method
 		type(computational_mesh_pointer)	:: mesh
 		type(chemical_properties_pointer)	:: chem
 
-		real(dp) ,dimension(:,:,:)	,allocatable    :: div_v_old
-		
+		real(dp),   dimension(:,:,:)	,allocatable    :: div_v_old
+		real(dp),   dimension(3)                        :: g
 	contains
 		procedure				::	euler_step_v
 		procedure				::	euler_step_E
@@ -58,10 +58,11 @@ module coarse_particles_method
 
 contains
 
-	type(coarse_particles)	function constructor(manager,low_mach_flag)
+	type(coarse_particles)	function constructor(manager,g,low_mach_flag)
 
-		type(data_manager)	, intent(inout)				:: manager
-		logical				, intent(in)	,optional	:: low_mach_flag
+		type(data_manager)	    , intent(inout)				:: manager
+        real(dp), dimension(3)  , intent(in)                :: g
+		logical				    , intent(in)	,optional	:: low_mach_flag
 
 		type(field_scalar_cons_pointer)	:: scal_ptr
 		type(field_vector_cons_pointer)	:: vect_ptr
@@ -179,7 +180,7 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
 				do dim = 1,dimensions
 					v_prod_gd%pr(dim)%cells(i,j,k)  = - 0.5_dp*(p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * time_step / cell_size(dim) / rho%cells(i,j,k) 
-					v_prod_gd%pr(dim)%cells(i,j,k) = v_prod_gd%pr(dim)%cells(i,j,k)  + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
+					v_prod_gd%pr(dim)%cells(i,j,k) = v_prod_gd%pr(dim)%cells(i,j,k)  + this%g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * time_step / rho%cells(i,j,k) 
 				end do
 			end if
 		end do

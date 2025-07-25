@@ -25,6 +25,7 @@ module solver_options_class
 		character(len=20)	:: solver_name	
 		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
 		real(dp)			:: CFL_coefficient, initial_time_step
+        real(dp),   dimension(3)    :: grav_acc
 		integer				:: additional_particles_phases
 		integer				:: additional_droplets_phases
 		type(solid_particles_phase)	,dimension(:)	,allocatable	:: particles
@@ -47,6 +48,7 @@ module solver_options_class
 		procedure	:: get_molecular_diffusion_flag
 		procedure	:: get_viscosity_flag
 		procedure	:: get_chemical_reaction_flag
+        procedure   :: get_grav_acc
 		procedure	:: get_additional_particles_phases_number
 		procedure	:: get_additional_droplets_phases_number
 		procedure	:: get_particles_params
@@ -62,12 +64,13 @@ module solver_options_class
 
 contains
 
-	type(solver_options) function constructor(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step)
-		character(len=*)	,intent(in)	:: solver_name
-		logical				,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
-		integer				,intent(in)	,optional	:: additional_particles_phases
-		integer				,intent(in)	,optional	:: additional_droplets_phases
-		real(dp)			,intent(in)	:: CFL_coefficient, initial_time_step
+	type(solver_options) function constructor(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step)
+		character(len=*)	    ,intent(in)	:: solver_name
+		logical				    ,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+        real(dp), dimension(3)  ,intent(in) :: grav_acc
+		integer				    ,intent(in)	,optional	:: additional_particles_phases
+		integer				    ,intent(in)	,optional	:: additional_droplets_phases
+		real(dp)			    ,intent(in)	:: CFL_coefficient, initial_time_step
 		
 		integer	:: additional_particles, additional_droplets
 		
@@ -85,7 +88,7 @@ contains
 			additional_droplets = 0
 		end if
 		
-		call constructor%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles, additional_droplets, CFL_flag, CFL_coefficient, initial_time_step)
+		call constructor%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles, additional_droplets, CFL_flag, CFL_coefficient, initial_time_step)
 		
 		open(newunit = io_unit, file = solver_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
@@ -137,12 +140,13 @@ contains
 		class(solver_options)	,intent(in)	:: this
 		integer					,intent(in)	:: solver_data_unit
 		
-		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
-		integer				:: additional_particles_phases, additional_droplets_phases
-		real(dp)			:: CFL_coefficient, initial_time_step
-		character(len=20)	:: solver_name
+		logical				    :: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+		real(dp), dimension(3)  :: grav_acc
+        integer				    :: additional_particles_phases, additional_droplets_phases
+		real(dp)			    :: CFL_coefficient, initial_time_step
+		character(len=20)	    :: solver_name
 		
-		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step
+		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step
 		
 		solver_name					=	this%solver_name
 		hydrodynamics_flag			=	this%hydrodynamics_flag
@@ -150,8 +154,9 @@ contains
 		molecular_diffusion_flag	=	this%molecular_diffusion_flag
 		viscosity_flag				=	this%viscosity_flag
 		chemical_reaction_flag		=	this%chemical_reaction_flag
-		additional_particles_phases		=	this%additional_particles_phases	
-		additional_droplets_phases		=	this%additional_droplets_phases
+        grav_acc                    =   this%grav_acc
+		additional_particles_phases	=	this%additional_particles_phases	
+		additional_droplets_phases	=	this%additional_droplets_phases
 		CFL_flag					=	this%CFL_flag
 		CFL_coefficient				=	this%CFL_coefficient
 		initial_time_step			=	this%initial_time_step
@@ -164,22 +169,24 @@ contains
 		class(solver_options)	,intent(inout)	:: this
 		integer					,intent(in)		:: solver_data_unit
 		
-		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
-		integer				:: additional_particles_phases, additional_droplets_phases
-		real(dp)			:: CFL_coefficient, initial_time_step
-		character(len=20)	:: solver_name
+		logical				    :: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+		real(dp), dimension(3)  :: grav_acc		
+        integer				    :: additional_particles_phases, additional_droplets_phases
+		real(dp)			    :: CFL_coefficient, initial_time_step
+		character(len=20)	    :: solver_name
 	
-		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step
+		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step
 		
 		read(unit = solver_data_unit, nml = solver_properties)
-		call this%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step)
+		call this%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step)
 		
 	end subroutine
 	
-	subroutine set_properties(this, solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step)
+	subroutine set_properties(this, solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, additional_droplets_phases, CFL_flag, CFL_coefficient, initial_time_step)
 		class(solver_options)	,intent(inout)	:: this
 		logical								,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
-		integer								,intent(in)	:: additional_particles_phases, additional_droplets_phases
+		real(dp), dimension(3)              ,intent(in) :: grav_acc		
+        integer								,intent(in)	:: additional_particles_phases, additional_droplets_phases
 		real(dp)							,intent(in)	:: CFL_coefficient, initial_time_step
 		character(len=*)					,intent(in)	:: solver_name
 
@@ -189,6 +196,7 @@ contains
 		this%molecular_diffusion_flag	=	molecular_diffusion_flag
 		this%viscosity_flag				=	viscosity_flag
 		this%chemical_reaction_flag		=	chemical_reaction_flag
+        this%grav_acc                   =   grav_acc
 		allocate(this%particles(additional_particles_phases))
 		allocate(this%droplets(additional_droplets_phases))
 		this%additional_particles_phases	= additional_particles_phases
@@ -214,6 +222,7 @@ contains
 		write(log_unit,'(A,L)')     ' Molecular diffusion	: ',	this%molecular_diffusion_flag
 		write(log_unit,'(A,L)')     ' Viscosity				: ',	this%viscosity_flag
 		write(log_unit,'(A,L)')     ' Chemical reaction		: ',	this%chemical_reaction_flag
+		write(log_unit,'(A,L)')     ' Gravitational accel.	: ',	this%grav_acc
 		write(log_unit,'(A,L)')     ' Solid particles		: ',	this%additional_particles_phases
 		write(log_unit,'(A,L)')     ' Liquid droplets		: ',	this%additional_droplets_phases
 		write(log_unit,'(A,L)')     ' Courant-Freidrichs-Lewy condition		: ',	this%CFL_flag
@@ -314,7 +323,14 @@ contains
 		type(liquid_droplets_phase)			:: get_droplets_params
 		
 		get_droplets_params	= this%droplets(phase_number)
-	end function    
+    end function 
+    
+    pure function get_grav_acc(this)
+		class(solver_options)	,intent(in)	:: this
+		real(dp), dimension(3)				:: get_grav_acc
+		
+		get_grav_acc	= this%grav_acc
+	end function 
     
 	subroutine create_additional_phase(this, phase_type, solid_particles_parameters, liquid_droplets_parameters)
 		class(solver_options)	,intent(inout)	:: this

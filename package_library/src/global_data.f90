@@ -37,6 +37,6 @@ module global_data
     real(dp)	,parameter	:: r_gase_cal	= 1.98720425864083_dp
     real(dp)	,parameter	:: T_ref        = 298.15_dp
     real(dp)	,parameter	:: P_atm		= 101325.0_dp
-    real(dp)	,dimension(3)	,parameter	:: g	=	(/0.0_dp,0.0_dp,0.0_dp/)
+!    real(dp)	,dimension(3)	,parameter	:: g	=	(/0.0_dp,0.0_dp,0.0_dp/)
 	
 end module

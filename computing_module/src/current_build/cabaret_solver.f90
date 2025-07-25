@@ -35,7 +35,7 @@ module cabaret_solver_class
 
 	type(field_scalar_flow)	,target	::	rho_f_new, p_f_new, e_i_f_new, v_s_f_new, E_f_f_new, T_f_new
 	type(field_vector_flow)	,target	::	Y_f_new, v_f_new
-	
+    
     real(dp)	,dimension(:)	,allocatable	:: flame_front_coords
     integer	:: flame_loc_unit
     
@@ -52,10 +52,10 @@ module cabaret_solver_class
     type(timer)     :: cabaret_viscosity_timer
 
 	type cabaret_solver
-		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag
-		real(dp)		:: courant_fraction
-		real(dp)		:: time, time_step, initial_time_step
-		
+		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag
+		real(dp)		            :: courant_fraction
+		real(dp)		            :: time, time_step, initial_time_step
+		real(dp)    , dimension(3)  :: g
 		integer			:: additional_particles_phases_number, additional_droplets_phases_number
         
 		type(chemical_kinetics_solver)		:: chem_kin_solver
@@ -163,6 +163,8 @@ contains
 		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
 		constructor%sources_flag		= .false.
+        
+        constructor%g                       = problem_solver_options%get_grav_acc()
 
         constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()        
         
@@ -1864,7 +1866,7 @@ end associate
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_visc%cells(i,j,k) * this%time_step
 					do dim = 1, dimensions
 						v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) * this%time_step
-				!		v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * this%time_step
+				!		v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + this%g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * this%time_step
 					end do
                 end if		
                 

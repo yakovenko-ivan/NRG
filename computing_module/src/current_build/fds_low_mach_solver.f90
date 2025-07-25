@@ -69,8 +69,11 @@ module fds_low_mach_solver_class
 		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag, perturbed_velocity
 		real(dp)		:: courant_fraction
 		real(dp)		:: time, time_step, initial_time_step
+        real(dp)    , dimension(3)  :: g
 		integer			:: additional_particles_phases_number, additional_droplets_phases_number
 		
+		logical			:: perturbed_velocity_flag, stabilizing_inlet_flag, igniter_flag 
+        
 		type(viscosity_solver)				:: visc_solver
 		type(heat_transfer_solver)			:: heat_trans_solver
 		type(diffusion_solver)				:: diff_solver
@@ -200,8 +203,14 @@ contains
 		constructor%hydrodynamics_flag	= problem_solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
-		constructor%perturbed_velocity	= .false.
-		
+        
+        !# sub solver options
+		    constructor%perturbed_velocity_flag	= .false.
+            constructor%stabilizing_inlet_flag	= .false.
+		    constructor%igniter_flag	        = .false.
+            
+        constructor%g                       = problem_solver_options%get_grav_acc()
+        
 		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()		
 		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
 		
@@ -733,16 +742,13 @@ contains
 		integer	:: droplets_phase_counter, particles_phase_counter
 		integer	:: specie
 
-		logical	:: stabilizing_inlet_flag, ignite_flag, stabilized_flag
+		logical	:: stabilized_flag
 
         call fds_timer%tic()
         
-		stabilizing_inlet_flag			= .false.
-		ignite_flag					    = .false.
-		
 		this%time = this%time + this%time_step		
 
-		if (ignite_flag) then
+		if (this%igniter_flag) then
 			call this%igniter(this%time)
         end if
 		
@@ -766,7 +772,7 @@ contains
 		if (this%heat_trans_flag)			call this%heat_trans_solver%solve_heat_transfer(this%time_step)				
         call fds_heattransfer_timer%toc(new_iter=.true.)
  
-		if (this%perturbed_velocity)		call this%perturb_velocity_field(this%time_step)
+		if (this%perturbed_velocity_flag)		call this%perturb_velocity_field(this%time_step)
         
 		if(this%additional_droplets_phases_number /= 0) then
 			do droplets_phase_counter = 1, this%additional_droplets_phases_number
@@ -808,7 +814,7 @@ contains
         call fds_viscosity_timer%tic()
 		if (this%viscosity_flag)		call this%visc_solver%solve_viscosity(this%time_step)
         call fds_viscosity_timer%toc()
-!		if (this%perturbed_velocity)	call this%perturb_velocity_field(this%time_step)
+		if (this%perturbed_velocity_flag)	call this%perturb_velocity_field(this%time_step)
         
         call fds_gas_dynamics_timer%tic()
 		call this%calculate_interm_Y_corrector(this%time_step)
@@ -832,7 +838,7 @@ contains
  
 !		call this%chem_kin_solver%write_chemical_kinetics_table('15_pcnt_H2-Air_table(T).dat')
 
-		if (stabilizing_inlet_flag) then
+		if (this%stabilizing_inlet_flag) then
 			call this%stabilizing_inlet_1D(this%time, stabilized_flag)
 			if (stabilized_flag) then
 				stop_flag = .true.
@@ -1626,14 +1632,14 @@ contains
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then 
 						if (predictor) then
 							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
-								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* g(dim))
+								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
 							end if
 
 							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
 							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
                         else
 							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
-								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* g(dim))
+								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
 							end if
 								
 							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
