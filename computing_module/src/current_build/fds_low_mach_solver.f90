@@ -169,7 +169,8 @@ contains
 		integer				:: bound_number, plus, sign, bound
 		character(len=20)	:: boundary_type_name
         
-		real(dkind)	,dimension(3)	:: cell_size, offset
+		real(dkind)	,dimension(3)	:: cell_size
+        integer     ,dimension(3)   :: offset
 		real(dkind)					:: x, y
 		real(dkind)					:: farfield_velocity
 		integer	:: dimensions
@@ -187,7 +188,7 @@ contains
 		constructor%hydrodynamics_flag	= problem_solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
-		constructor%perturbed_velocity	= .true.
+		constructor%perturbed_velocity	= .false.
 		
 		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()		
 		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
@@ -410,6 +411,8 @@ contains
 
         constructor%load_counter	= problem_data_io%get_load_counter()
         
+		dimensions		= manager%domain%get_domain_dimensions()
+
 		do dim = 1, dimensions		
 			loop = flow_inner_loop
 			do dim1 = 1,dimensions
@@ -454,9 +457,7 @@ contains
 			call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
         end if	       
 
-		dimensions		= manager%domain%get_domain_dimensions()
-
-		cell_size						= constructor%mesh%mesh_ptr%get_cell_edges_length()
+        cell_size						= constructor%mesh%mesh_ptr%get_cell_edges_length()
 		
 		constructor%time				= calculation_time
 		constructor%initial_time_step	= problem_solver_options%get_initial_time_step()
@@ -711,15 +712,15 @@ contains
 		integer	:: droplets_phase_counter, particles_phase_counter
 		integer	:: specie
 
-		logical	:: stabilizing_inlet, ignite, stabilized
+		logical	:: stabilizing_inlet_flag, ignite_flag, stabilized_flag
 
         
-		stabilizing_inlet			= .false.
-		ignite						= .false.
+		stabilizing_inlet_flag			= .false.
+		ignite_flag					    = .false.
 		
 		this%time = this%time + this%time_step		
 
-		if (ignite) then
+		if (ignite_flag) then
 			call this%igniter(this%time)
         end if
 		
@@ -736,7 +737,7 @@ contains
 		if(this%additional_droplets_phases_number /= 0) then
 			do droplets_phase_counter = 1, this%additional_droplets_phases_number
 				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
-				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main(this%time)		!# Continuum droplets solver
+				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main(this%time)    !# Continuum droplets solver
 				!call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
 				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
 				!call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
@@ -779,14 +780,14 @@ contains
         
 !		call this%chem_kin_solver%write_chemical_kinetics_table('15_pcnt_H2-Air_table(T).dat')
 
-		if (stabilizing_inlet) then
-			call this%stabilizing_inlet_1D(this%time, stabilized)
-			!if (stabilized) then
-			!	stop_flag = .true.
-!			!	call this%chem_kin_solver%write_chemical_kinetics_table('15.0_pcnt_H2-Air_table(T).dat')
-			!	call this%write_data_table('H2-Air_flamelet.dat')
-			!	stop
-			!end if
+		if (stabilizing_inlet_flag) then
+			call this%stabilizing_inlet_1D(this%time, stabilized_flag)
+			if (stabilized_flag) then
+				stop_flag = .true.
+!				call this%chem_kin_solver%write_chemical_kinetics_table('15.0_pcnt_H2-Air_table(T).dat')
+				call this%write_data_table('H2-Air_flamelet.dat')
+				stop
+			end if
 		end if
          
 		!call this%state_eq%check_conservation_laws()
@@ -1611,7 +1612,7 @@ contains
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then 
 						if (this%additional_droplets_phases_number /= 0) then
 							do droplets_phase_counter = 1, this%additional_droplets_phases_number
-									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)	![m/s^2]						!# Lagrangian droplets solver
+                                F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)	![m/s^2]						!# Lagrangian droplets solver
 								if (bc%bc_markers(i,j,k) == 0) then
 !									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dkind*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum droplets solver
 								end if
@@ -3043,9 +3044,9 @@ contains
 		
 		real(dkind)	,dimension(3)		:: cell_size		
 		
-		real(dkind)				:: max_val_lp, left_val, right_val, left_val2, right_val2, flame_velocity, flame_surface_length, surface_factor
+		real(dkind)				:: max_val_lp, left_val, right_val, left_val2, right_val2, left_val3, right_val3, flame_velocity, flame_surface_length, surface_factor
 		real(dkind)				:: a, b 
-		real(dkind)				:: time_diff, time_delay, time_stabilization
+		real(dkind)				:: time_track, time_delay, time_stabilization
 		real(dkind), dimension(2), save		:: previous_flame_location = 0.0_dkind,	current_flame_location = 0.0_dkind
 
 		real(dkind), dimension(2), save		:: previous_flame_location_E = 0.0_dkind, current_flame_location_E = 0.0_dkind, farfield_velocity_E = 0.0_dkind
@@ -3054,10 +3055,10 @@ contains
 
 		real(dkind), save			:: flame_velocity_E, max_val_E, flame_velocity_T, max_val_T, flame_velocity_H, max_val_H, farfield_velocity = 0.0_dkind, av_flame_velocity = 0.0
 
-		real(dkind), save			:: previous_time = 0.0_dkind, current_time = 0.0_dkind
+		real(dkind), save			:: previous_time = 0.0_dkind, current_time = 0.0_dkind, previous_correction_time = 0.0_dkind
 
 		real(dkind), dimension(20), save	:: flame_velocity_hist = 0.0
-		integer		,save			:: correction = 0, counter = 0
+		integer		,save			:: track_counter = 0, correction_counter = 0, stabilization_counter = 0, hist_indx
 
 		character(len=200)			:: file_name
 		
@@ -3067,12 +3068,14 @@ contains
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
 
-		real(dkind)					:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
+		real(dkind)					:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x, velocity_deviation
 		real(dkind)	,dimension(2)	:: coords_lp
 		integer						:: i_lp, j_lp, lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2
 		integer		,save			:: j_lp_E = 1
 		
-		real(dkind)	,dimension(18)	:: data_array, test
+		integer						:: hist_size
+		real(dkind)	,dimension(20)	:: data_array, test
+		real(dkind)					:: s, diff, var_s, z
         
 		integer :: CO_index, H2O2_index, HO2_index, OH_index, H_index
 		integer	:: bound_number,sign
@@ -3116,12 +3119,12 @@ contains
 					bc				=> this%boundary%bc_ptr)
 
 		time_delay			= 1e-05_dkind!1e-05_dkind!1e-05_dkind!1e-05_dkind			
-		time_diff			= 1e-05_dkind!2e-04_dkind!1e-05_dkind!2e-04_dkind
-		time_stabilization	= 1e-05_dkind!5e-06_dkind!1e-05_dkind!5e-06_dkind		
+		time_track			= 1e-03_dkind!2e-04_dkind!1e-05_dkind!2e-04_dkind
+		time_stabilization	= 1e-03_dkind!5e-06_dkind!1e-05_dkind!5e-06_dkind		
        
-		if ( time > (correction+1)*(time_diff) + time_delay) then			
+		if ( (time - time_delay) / time_track  > track_counter + 1) then			
 					
-            if (correction == 0) then
+            if (track_counter == 0) then
  				write(flame_data_file,'(A,I2,A)') 'av_flame_data_',this%load_counter,'.dat'
 				open(newunit = flame_loc_unit, file = flame_data_file, status = 'replace', form = 'formatted')
 
@@ -3179,6 +3182,8 @@ contains
 			left_val2	= E_f_prod_chem%cells(i_lp-2,j_lp,1)
 			right_val2	= E_f_prod_chem%cells(i_lp+2,j_lp,1)	
 
+			left_val3	= E_f_prod_chem%cells(i_lp-3,j_lp,1)
+			right_val3	= E_f_prod_chem%cells(i_lp+3,j_lp,1)            
 			a = (right_val + left_val - 2.0_dkind * max_val_lp)/2.0_dkind/cell_size(1)**2
 			b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*coords_lp(1)
 			
@@ -3186,7 +3191,7 @@ contains
 
 			current_flame_location_E(1) = -b/2.0_dkind/a	
 
-			current_flame_location_E(1) = Newton(coords_lp(1),(/left_val2,left_val,max_val_E,right_val,right_val2/),cell_size(1),1e-06*max_val_E)
+			current_flame_location_E(1) = Newton(coords_lp(1),(/left_val3,left_val2,left_val,max_val_E,right_val,right_val2,right_val3/),cell_size(1),1e-10*max_val_E)
 			current_flame_location_E(2) = coords_lp(2)
             
 			!# 1D front tracer
@@ -3233,6 +3238,9 @@ contains
 			left_val2	= T%cells(i_lp-1,j_lp,1) - T%cells(i_lp-3,j_lp,1)
 			right_val2	= T%cells(i_lp+3,j_lp,1) - T%cells(i_lp+1,j_lp,1)
 
+			left_val3	= T%cells(i_lp-2,j_lp,1) - T%cells(i_lp-4,j_lp,1)
+			right_val3	= T%cells(i_lp+4,j_lp,1) - T%cells(i_lp+2,j_lp,1)           
+            
 			a = (right_val + left_val - 2.0_dkind * max_val_lp)/2.0_dkind/cell_size(1)**2
 			b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*coords_lp(1)
 			
@@ -3240,7 +3248,7 @@ contains
 
 			current_flame_location_T(1) = -b/2.0_dkind/a
 
-			current_flame_location_T(1) = Newton(coords_lp(1),(/left_val2,left_val,max_val_T,right_val,right_val2/),cell_size(1),1e-06*max_val_T)
+			current_flame_location_T(1) = Newton(coords_lp(1),(/left_val3,left_val2,left_val,max_val_T,right_val,right_val2,right_val3/),cell_size(1),1e-06*max_val_T)
 			current_flame_location_T(2) = coords_lp(2)
 
 			!# 1D front tracer
@@ -3288,6 +3296,9 @@ contains
 			left_val2	= Y%pr(H_index)%cells(i_lp-2,j_lp,1)
 			right_val2	= Y%pr(H_index)%cells(i_lp+2,j_lp,1)
 
+			left_val3	= Y%pr(H_index)%cells(i_lp-3,j_lp,1)
+			right_val3	= Y%pr(H_index)%cells(i_lp+3,j_lp,1)           
+            
 			a = (right_val + left_val - 2.0_dkind * max_val_lp)/2.0_dkind/cell_size(1)**2
 			b = (right_val - left_val)/2.0_dkind/cell_size(1) - 2.0_dkind*a*coords_lp(1)
 			
@@ -3295,19 +3306,19 @@ contains
 
 			current_flame_location_H(1) = -b/2.0_dkind/a
 
-			current_flame_location_H(1) = Newton(coords_lp(1),(/left_val2,left_val,max_val_H,right_val,right_val2/),cell_size(1),1e-06*max_val_H)
+			current_flame_location_H(1) = Newton(coords_lp(1),(/left_val3,left_val2,left_val,max_val_H,right_val,right_val2,right_val3/),cell_size(1),1e-06*max_val_H)
 			current_flame_location_H(2) = coords_lp(2)
 
-			current_flame_location = current_flame_location_E
+			current_flame_location = current_flame_location_H
 
 			flame_velocity = 0.0_dkind
-			if(correction == 0) then
+			if(track_counter == 0) then
 				farfield_velocity = farfield_velocity_array(1)
 				previous_flame_location = current_flame_location
 				previous_time = current_time
                 if (this%load_counter > 1) then
                     do 
-						read (flame_loc_unit_old,'(18E20.12)', iostat = stat) test
+						read (flame_loc_unit_old,'(20E20.12)', iostat = stat) test
                         if (stat == 0) then
                             data_array = test
                         else
@@ -3318,19 +3329,21 @@ contains
 					previous_time			= data_array(1)
                     previous_flame_location	= data_array(2:3)
                     av_flame_velocity		= data_array(5)
-                    correction				= data_array(18)
+                    track_counter				= data_array(18)
 
-                    if( correction < size(flame_velocity_hist)) then
-                        flame_velocity_hist(:mod(correction,size(flame_velocity_hist))) = av_flame_velocity
+                    if( track_counter < size(flame_velocity_hist)) then
+                        flame_velocity_hist(:mod(track_counter,size(flame_velocity_hist))) = av_flame_velocity
                     else
                         flame_velocity_hist = av_flame_velocity
                     end if
                     
-                    flame_velocity_hist(mod(correction,size(flame_velocity_hist))+1) = data_array(4)
+                    flame_velocity_hist(mod(track_counter,size(flame_velocity_hist))+1) = data_array(4)
                 end if
  			end if  
 
-			if( (correction /= 0).and.(correction /= nint(data_array(18))).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
+        
+
+			if( (track_counter /= 0).and.(track_counter /= nint(data_array(19))).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
 !            if( (correction /= 0).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
                 
 				flame_velocity		= (current_flame_location(1) - previous_flame_location(1))/(current_time - previous_time)
@@ -3339,9 +3352,65 @@ contains
 				flame_velocity_H	= (current_flame_location_H(1) - previous_flame_location_H(1))/(current_time - previous_time)
 				flame_velocity_E	= (current_flame_location_E(1) - previous_flame_location_E(1))/(current_time - previous_time)
 
-				flame_velocity_hist(mod(correction,size(flame_velocity_hist))+1) = flame_velocity
+				flame_velocity_hist(mod(track_counter,size(flame_velocity_hist))+1) = flame_velocity
                 
-				av_flame_velocity = sum(flame_velocity_hist)/(count((flame_velocity_hist) > 1e-08_dkind) + count((flame_velocity_hist) < -1e-08_dkind))         
+!				av_flame_velocity = sum(flame_velocity_hist)/(count((flame_velocity_hist) > 1e-10_dkind) + count((flame_velocity_hist) < -1e-10_dkind))         
+
+				av_flame_velocity = sum(flame_velocity_hist)/(count(abs(flame_velocity_hist) > 1e-18_dkind)) 
+                
+                print *, 'Velo hist:'
+                print *, flame_velocity_hist
+                print *, '----'
+                print *, 'Non-zero velocities:', count(abs(flame_velocity_hist) > 1e-18_dkind)
+                print *, 'Av. flame velocity:', av_flame_velocity
+                
+                velocity_deviation = 0.0_dkind
+                do hist_indx = 1, size(flame_velocity_hist)
+                    if(abs(flame_velocity_hist(hist_indx)) > 1e-18_dkind) then
+					!	velocity_deviation = velocity_deviation + (av_flame_velocity - flame_velocity_hist(hist_indx))**2
+                        velocity_deviation = velocity_deviation + (av_flame_velocity - flame_velocity_hist(hist_indx))
+					end if
+                end do
+                
+                !print *, 'Velocity deviation (before norm):', velocity_deviation
+
+                ! Simplified Mann-Kendall Test (No Tie Adjustment)
+                hist_size = size(flame_velocity_hist)
+                
+                if (count(abs(flame_velocity_hist) > 1e-18_dkind) == hist_size) then
+
+					s = 0.0_dkind
+					! Calculate S statistic (no ties expected)
+					do i = 1, hist_size-1
+					do j = i+1, hist_size
+						diff = flame_velocity_hist(j) - flame_velocity_hist(i)
+						if (diff > 0.0_dkind) then
+							s = s + 1.0_dkind    ! Increasing
+						else if (diff < 0.0_dkind) then
+							s = s - 1.0_dkind    ! Decreasing
+						end if
+					end do
+					end do
+
+					! Simplified variance (no tie adjustment)
+					var_s = real(hist_size)*(hist_size-1)*(2*hist_size+5)/18.0_dkind
+
+					! Z-score with continuity correction
+					if (s > 0.0_dkind) then
+						z = (s - 1.0_dkind) / sqrt(var_s)
+					else if (s < 0.0_dkind) then
+						z = (s + 1.0_dkind) / sqrt(var_s)
+					else
+						z = 0.0
+                    end if
+                end if
+                
+                !velocity_deviation = sqrt(velocity_deviation / (count(abs(flame_velocity_hist) > 1e-18_dkind))) / abs(av_flame_velocity) * 100.0_dkind
+                !velocity_deviation = (velocity_deviation / (count(abs(flame_velocity_hist) > 1e-18_dkind))) / abs(av_flame_velocity) * 100.0_dkind
+                
+                !print *, 'Velocity deviation (after norm):', velocity_deviation
+                
+                !pause
 
 				!if (av_flame_velocity < 0.0_dkind) then
 				!	correction_flag = .true.
@@ -3349,28 +3418,40 @@ contains
 				!	correction_flag = .false.
 				!end if
                 
-				if ((correction > 10).and.(correction_flag)) then
-					farfield_velocity_array = max(farfield_velocity_array - 0.1_dkind*av_flame_velocity, 0.0_dkind)
+				!if ((track_counter > 10).and.(correction_flag).and.(abs(velocity_deviation) < 1e+01_dkind).and.((time - previous_correction_time) / time_stabilization > 1)) then
+                if ((count(abs(flame_velocity_hist) > 1e-18_dkind) == hist_size).and.(correction_flag))  then
+                    print *, abs(z)
+                    print *, (time - previous_correction_time) / time_stabilization
+                !    pause
+					if ((abs(z) < 1.96_dkind).and.((time - previous_correction_time) / time_stabilization > 1)) then
+						farfield_velocity_array = max(farfield_velocity_array - 0.1_dkind*av_flame_velocity, 0.0_dkind)
+						previous_correction_time = time
+						correction_counter = correction_counter + 1 
+					end if
                 end if
 				
                 data_array(1)		= time
                 data_array(2:3)		= current_flame_location
                 data_array(4)		= flame_velocity
                 data_array(5)		= av_flame_velocity
+
                 data_array(6)		= farfield_velocity_array(1)
                 data_array(7)		= abs(farfield_velocity_array(1))+abs(av_flame_velocity)
-                data_array(8)		= max_val_E
+                data_array(8)		= max_val_H
                 data_array(9:10)	= current_flame_location_T
                 data_array(11)		= flame_velocity_T
                 data_array(12)		= max_val_T
-                data_array(13:14)	= current_flame_location_H
-                data_array(15)		= flame_velocity_H
-                data_array(16)		= max_val_H
-                data_array(17)		= counter
-                data_array(18)		= correction
-				
-				if (mod(correction,1) == 0) then
-					write (flame_loc_unit,'(18E20.12)') data_array
+                data_array(13:14)	= current_flame_location_E
+                data_array(15)		= flame_velocity_E
+                data_array(16)		= max_val_E
+                data_array(17)		= z
+                data_array(18)		= correction_counter
+                data_array(19)		= stabilization_counter
+                data_array(20)		= track_counter
+                
+                				
+				if (mod(track_counter,1) == 0) then
+					write (flame_loc_unit,'(20E20.12)') data_array
 				end if
 
 				previous_flame_location		= current_flame_location
@@ -3381,17 +3462,17 @@ contains
 
 				previous_time = current_time
 				
-				if( (correction /= 0).and.(abs(flame_velocity) < 1e-04))then 
-					counter = counter + 1
+				if( (track_counter /= 0).and.(abs(av_flame_velocity) < 1e-06))then 
+					stabilization_counter = stabilization_counter + 1
 				end if
 				
 			end if
 
-			if(counter > 100) then
+			if(stabilization_counter > 100) then
 				stabilized = .true.
 			end if
 			
-			correction = correction + 1
+			track_counter = track_counter + 1
 			
 		end if	
 			
@@ -4916,8 +4997,8 @@ contains
 		class(fds_solver)	,intent(inout)  :: this	
 		character(len=*)	,intent(in)		:: table_file
 		
-		real(dkind)			:: max_T, min_T, max_grad_T, lf
-		integer				:: max_grad_index
+		real(dkind)			:: max_T, min_T, max_grad_T, min_grad_T, lf
+		integer				:: max_grad_index, left_min_index, right_min_index
 		
 		character(len=100)						:: name_string
 		character(len=10)						:: fmt
@@ -4953,7 +5034,9 @@ contains
 					bc				=> this%boundary%bc_ptr)
 
 		max_grad_T = 0.0	
-		max_T = 0.0
+
+        
+        max_T = 0.0
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1) > max_grad_T) then
 				max_grad_T = abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1)
@@ -4962,10 +5045,28 @@ contains
 			if(T%cells(i,1,1) > max_T)	max_T = T%cells(i,1,1)
 		end do
 
+        min_grad_T = 1e06
+        do i = cons_inner_loop(1,1),max_grad_index
+			if(abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1) < min_grad_T) then
+				min_grad_T = abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1)
+				left_min_index = i
+			end if
+        end do
+
+        min_grad_T = 1e06 
+        do i = max_grad_index,cons_inner_loop(1,2)
+			if(abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1) < min_grad_T) then
+				min_grad_T = abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1)
+				right_min_index = i
+			end if
+		end do
+        
 		min_T = 300.0
 		
 		lf = (max_T-min_T)/max_grad_T
 		
+		table_size = max(lf/cell_size(1) - left_min_index, right_min_index - lf/cell_size(1))
+ 
 		name_string = 'x'
 		name_string = trim(name_string) // '  ' // trim(T%name_short)
 		name_string = trim(name_string) // '  ' // trim(rho%name_short)
@@ -4982,7 +5083,9 @@ contains
 		
 		write(io_unit,'(A)',iostat = ierr)	name_string
 		
-		do i = max_grad_index-10*lf/cell_size(1), max_grad_index+10*lf/cell_size(1)
+		do i = max(cons_inner_loop(1,1), max_grad_index-20*int(lf/cell_size(1))), min(cons_inner_loop(1,2),max_grad_index+20*int(lf/cell_size(1)))
+!        do i = max(cons_inner_loop(1,1), max_grad_index-table_size), min(cons_inner_loop(1,2),max_grad_index+table_size)   
+!        do i = left_min_index, right_min_index
 			temp(1) = mesh%mesh(1,i,1,1)
 			temp(2) = T%cells(i,1,1)
 			temp(3) = rho%cells(i,1,1)
