@@ -2140,6 +2140,15 @@ contains
 										v_f_new%pr(dim1)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = v_f(dim1,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 									end if
 								end if
+                            end do
+                            
+                            spec_summ = 0.0_dkind
+							do spec = 1,species_number
+								Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=  Y%pr(spec)%cells(i,j,k) 	
+								spec_summ = spec_summ + max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind)
+							end do
+							do spec = 1,species_number
+								Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = max(Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), 0.0_dkind) / spec_summ
 							end do
 						end if
 	
@@ -2157,7 +2166,8 @@ contains
 		integer					:: dimensions
 		integer	,dimension(3,2)	:: cons_utter_loop, cons_inner_loop
 		character(len=20)		:: boundary_type_name
-		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature
+		real(dkind)				:: farfield_density, farfield_pressure, wall_temperature, farfield_velocity
+        real(dkind)             :: relax_time, delay_time, H_wall_frac
 
 		integer	:: sign, bound_number
 		integer :: i,j,k,plus,dim,dim1,dim2,specie_number
@@ -2166,6 +2176,8 @@ contains
 		cons_utter_loop		= this%domain%get_local_utter_cells_bounds()	
 		cons_inner_loop		= this%domain%get_local_inner_cells_bounds()	
 		
+        H_wall_frac			= 0.0_dkind
+        
 		associate(  T				=> this%T%s_ptr					, &
 					mol_mix_conc	=> this%mol_mix_conc%s_ptr		, &
 					p				=> this%p%s_ptr					, &
@@ -2177,9 +2189,9 @@ contains
 					bc				=> this%boundary%bc_ptr			, &
 					mesh			=> this%mesh%mesh_ptr)
 
-		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,farfield_pressure,farfield_density,wall_temperature,boundary_type_name) , &
+		!$omp parallel default(none)  private(i,j,k,plus,dim,dim1,sign,bound_number,farfield_pressure,farfield_density,farfield_velocity, relax_time, delay_time, wall_temperature,boundary_type_name) , &
 		!$omp& firstprivate(this)	,&
-		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_utter_loop, cons_inner_loop)
+		!$omp& shared(bc,dimensions,p,rho,T,mol_mix_conc,v,v_s,Y,cons_utter_loop, cons_inner_loop, H_wall_frac)
 		!$omp do collapse(3) schedule(static)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -2237,7 +2249,13 @@ contains
 										!	farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
 										!	farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
 										!	v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
-										case ('inlet')
+                                        case ('inlet')
+                                            !if(bound_number == 5) then
+                                            !    delay_time = 50e-06_dkind
+                                            !    relax_time = 20e-06_dkind
+                                            !    farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+                                            !    v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	farfield_velocity*(min((this%time-delay_time)/relax_time,1.0))
+                                            !end if
 										!	farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
 										!	farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
 										!	v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))

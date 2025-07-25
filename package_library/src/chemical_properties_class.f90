@@ -672,7 +672,7 @@ contains
 		class(chemical_properties)          ,intent(inout)	:: this
 		integer										,intent(in)		:: file_unit
 
-		character(len=20)			:: string
+		character(len=150)			:: string
 		character(len=1)			:: letter, prev_letter
 
 		integer						:: stat

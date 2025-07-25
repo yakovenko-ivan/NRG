@@ -26,9 +26,9 @@ module global_data
 	character(len=100)	,parameter	:: boundary_data_file_name					= trim(task_setup_folder) // trim(fold_sep) // 'boundary_conditions_setup.inf'
 	character(len=100)	,parameter	:: problem_setup_log_file					= 'problem_setup.log'
 
-    character(len=10)   ,dimension(3)   ,parameter  :: spatial_axis_names_cartesian   = (/'x','y','z'/)
-    character(len=10)   ,dimension(3)   ,parameter  :: spatial_axis_names_cylindrical = (/'r','phi','z'/)
-    character(len=10)   ,dimension(3)   ,parameter  :: spatial_axis_names_spherical   = (/'r','theta','phi'/)
+    character(len=10)   ,dimension(3)   ,parameter  :: spatial_axis_names_cartesian   = [character(len=10) :: 'x','y','z']
+    character(len=10)   ,dimension(3)   ,parameter  :: spatial_axis_names_cylindrical = [character(len=10) :: 'r','phi','z']
+    character(len=10)   ,dimension(3)   ,parameter  :: spatial_axis_names_spherical   = [character(len=10) :: 'r','theta','phi']
 
     integer             ,dimension(3,3) ,parameter  :: I_m = reshape((/1,0,0,0,1,0,0,0,1/), (/3,3/))
 
@@ -36,7 +36,7 @@ module global_data
     real(dkind)	,parameter	:: r_gase_J		= 8.31446261815324_dkind
     real(dkind)	,parameter	:: r_gase_cal	= 1.98720425864083_dkind
     real(dkind)	,parameter	:: T_ref        = 298.15_dkind
-    real(dkind)	,parameter	:: P_atm	= 101325.0_dkind
+    real(dkind)	,parameter	:: P_atm		= 101325.0_dkind
     real(dkind)	,dimension(3)	,parameter	:: g	=	(/0.0_dkind,0.0_dkind,0.0_dkind/)
 	
 end module

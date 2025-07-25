@@ -75,7 +75,7 @@ program computing_module
 #ifdef OMP
 	call omp_set_num_threads(6)
 	
-	!$omp parallel
+	!$omp parallel private(nth, num)
 	nth		=	omp_get_num_threads()
 	num		=	omp_get_thread_num()
 	if (num == 0) then
@@ -192,7 +192,7 @@ program computing_module
 !			call problem_cpm_solver%set_CFL_coefficient(0.75_dkind)
 !		end if
 	
-!		if (calculation_time > 8500.0e-06_dkind) then
+!		if (calculation_time > 1.0e-04_dkind) then
 !			call problem_data_save%set_save_time(200.0_dkind)
 !            stop
 !        end if    

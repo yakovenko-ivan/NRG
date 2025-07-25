@@ -1,4 +1,5 @@
 computing_module/computing_module
+computing_module/x64
 computing_module/src/third_party
 computing_module/src/test_versions
 computing_module/src/old_versions
@@ -8,6 +9,8 @@ computing_module/debug_OMP
 computing_module/release_OMP
 computing_module/debug_seq
 computing_module/release_seq
+computing_module/computing_module.u2d
+computing_module/computing_module.vfproj
 package_library/package_library
 package_library/debug_MPI
 package_library/release_MPI
@@ -24,3 +27,6 @@ package_utilities/release_OMP
 package_utilities/debug_seq
 package_utilities/release_seq
 *.bak
+*.u2d
+*.vfproj
+*.sln

@@ -27,7 +27,7 @@ module chemical_kinetics_solver_class
 	real(dkind) ,dimension(:)		,allocatable    :: WORK
 	real(dkind)										:: temperature, pressure 
 	
-	!$OMP THREADPRIVATE(mixture_concentration,rate_constants,chemical_coeffs,conc_in, conc_out,IWORK,WORK, temperature, pressure)
+	!$omp threadprivate(mixture_concentration,rate_constants,chemical_coeffs,conc_in, conc_out,IWORK,WORK, temperature, pressure)
 
 	integer			:: reactions_number
 	integer			:: species_number
