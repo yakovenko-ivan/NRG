@@ -188,9 +188,14 @@ contains
 		real(dp)					:: x, y
 		real(dp)					:: farfield_velocity
 		integer	:: dimensions
-		integer	:: i,j,k,dim,dim1
-		integer	:: ilb,	jlb, irb, jrb, ilt, jlt, irt, jrt  
-        	integer	:: counter
+		integer	:: i,j,k,n,dim,dim1
+        
+        integer								    		:: neighbours
+        integer,        dimension(:,:),	    allocatable	:: neighbours_indexes
+        integer										    :: resid
+        logical                                         :: inside_flag
+
+        integer	:: counter
 		integer	:: mesh
 		
 		integer :: cells_number
@@ -587,46 +592,27 @@ contains
 		end do	
 		
 		constructor%sub_bc(0)%cells	= constructor%boundary%bc_ptr%bc_markers
-        	constructor%sub_mesh(0)%cells	=  constructor%mesh%mesh_ptr%mesh
+        constructor%sub_mesh(0)%cells	=  constructor%mesh%mesh_ptr%mesh
 		
 		constructor%all_Neumann_flag = .true.
 		
-		do mesh = 0,constructor%number_of_meshes-2
-
-			do k = constructor%subgrid_cons_utter_loop(mesh,3,1),constructor%subgrid_cons_utter_loop(mesh,3,2)
-			do j = constructor%subgrid_cons_utter_loop(mesh,2,1),constructor%subgrid_cons_utter_loop(mesh,2,2)
-			do i = constructor%subgrid_cons_utter_loop(mesh,1,1),constructor%subgrid_cons_utter_loop(mesh,1,2)
-				if(constructor%sub_bc(mesh)%cells(i,j,k) /= 0) then
-
-					if (dimensions == 1) then
-				
-						ilb = int(i/2)
-						irb = int(i/2)+1
-					
-						if (mod(i,2) == 0) then
-							constructor%sub_bc(mesh+1)%cells(ilb,j,k) = constructor%sub_bc(mesh)%cells(i,j,k)  
-						end if			
-						if (mod(i,2) /= 0) then
-							constructor%sub_bc(mesh+1)%cells(irb,j,k) = constructor%sub_bc(mesh)%cells(i,j,k)
-                        end if	
-                         
-					end if					
-								
-					bound_number = constructor%boundary%bc_ptr%bc_markers(i,j,k)
-					
-					if (mesh == 0) then
-						boundary_type_name = constructor%boundary%bc_ptr%boundary_types(bound_number)%get_type_name()
+        do k = constructor%subgrid_cons_utter_loop(0,3,1),constructor%subgrid_cons_utter_loop(0,3,2)
+		do j = constructor%subgrid_cons_utter_loop(0,2,1),constructor%subgrid_cons_utter_loop(0,2,2)
+		do i = constructor%subgrid_cons_utter_loop(0,1,1),constructor%subgrid_cons_utter_loop(0,1,2)
+			bound_number = constructor%boundary%bc_ptr%bc_markers(i,j,k)
+            if (bound_number /= 0) then
+			    boundary_type_name = constructor%boundary%bc_ptr%boundary_types(bound_number)%get_type_name()
 									
-						if (boundary_type_name == 'outlet') then
-							constructor%all_Neumann_flag = .false.
-						end if
-					end if
-							
-				end if
-			end do
-			end do
-            end do
-		
+			    if ((boundary_type_name == 'outlet')) then
+				    constructor%all_Neumann_flag = .false.
+                end if
+            end if
+		end do
+		end do
+        end do
+        
+		do mesh = 0,constructor%number_of_meshes-2
+	
             do k = constructor%subgrid_cons_inner_loop(mesh+1,3,1),constructor%subgrid_cons_inner_loop(mesh+1,3,2)
 			do j = constructor%subgrid_cons_inner_loop(mesh+1,2,1),constructor%subgrid_cons_inner_loop(mesh+1,2,2)
 			do i = constructor%subgrid_cons_inner_loop(mesh+1,1,1),constructor%subgrid_cons_inner_loop(mesh+1,1,2)            
@@ -660,63 +646,52 @@ contains
         end do
 		
         
+        neighbours = 2**dimensions
+        allocate(neighbours_indexes(neighbours,3))
+        
+        
         do mesh = 1,constructor%number_of_meshes-1
 
 			do k = constructor%subgrid_cons_utter_loop(mesh,3,1),constructor%subgrid_cons_utter_loop(mesh,3,2)
 			do j = constructor%subgrid_cons_utter_loop(mesh,2,1),constructor%subgrid_cons_utter_loop(mesh,2,2)
 			do i = constructor%subgrid_cons_utter_loop(mesh,1,1),constructor%subgrid_cons_utter_loop(mesh,1,2)
                 
-                if (dimensions == 2) then
+                neighbours_indexes	= 1
+                do n = 1, neighbours
+                    resid = n - 1
+					do dim = dimensions, 1, -1
+						neighbours_indexes(n,dim) = -int(resid / 2**(dim-1)) + int(2*i)*I_m(dim,1) + int(2*j)*I_m(dim,2) + int(2*k)*I_m(dim,3)
+                        resid = mod(resid, 2**(dim-1))
+                    end do
+                end do
+
+                counter = 0
+                do n = 1, neighbours
+                    inside_flag = .true.
+                    do dim = 1, dimensions
+                        if ((constructor%subgrid_cons_utter_loop(mesh-1,dim,1) <= neighbours_indexes(n,dim)).and.(neighbours_indexes(n,dim) <= constructor%subgrid_cons_utter_loop(mesh-1,dim,2))) then
+                            inside_flag = inside_flag .and. .true.
+                        else
+                            inside_flag = inside_flag .and. .false.
+                        end if
+                    end do
                     
-                    irb = 2*i
-                    jrb = 2*j - 1
-                        
-                    ilb = 2*i - 1
-                    jlb = 2*j - 1
-                        
-                    irt	= 2*i
-                    jrt	= 2*j
-                        
-                    ilt = 2*i - 1
-                    jlt = 2*j
-                        
-                    counter = 0
-                        
-                    if ((constructor%subgrid_cons_utter_loop(mesh-1,1,1) <= ilt).and.(ilt <= constructor%subgrid_cons_utter_loop(mesh-1,1,2)).and. &
-                        (constructor%subgrid_cons_utter_loop(mesh-1,2,1) <= jlt).and.(jlt <= constructor%subgrid_cons_utter_loop(mesh-1,2,2))) then
+                    if (inside_flag) then
                         counter = counter + 1
-                        constructor%sub_bc(mesh)%cells(i,j,k) = constructor%sub_bc(mesh)%cells(i,j,k) + constructor%sub_bc(mesh-1)%cells(ilt,jlt,k)
+                        constructor%sub_bc(mesh)%cells(i,j,k) = constructor%sub_bc(mesh)%cells(i,j,k) + constructor%sub_bc(mesh-1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
 					end if
-                    
-					if ((constructor%subgrid_cons_utter_loop(mesh-1,1,1) <= irt).and.(irt <= constructor%subgrid_cons_utter_loop(mesh-1,1,2)).and. &
-                        (constructor%subgrid_cons_utter_loop(mesh-1,2,1) <= jrt).and.(jrt <= constructor%subgrid_cons_utter_loop(mesh-1,2,2))) then
-                        counter = counter + 1
-                        constructor%sub_bc(mesh)%cells(i,j,k) = constructor%sub_bc(mesh)%cells(i,j,k) + constructor%sub_bc(mesh-1)%cells(irt,jrt,k)
-					end if
-                        
-					if ((constructor%subgrid_cons_utter_loop(mesh-1,1,1) <= ilb).and.(ilb <= constructor%subgrid_cons_utter_loop(mesh-1,1,2)).and. &
-                        (constructor%subgrid_cons_utter_loop(mesh-1,2,1) <= jlb).and.(jlb <= constructor%subgrid_cons_utter_loop(mesh-1,2,2))) then
-                        counter = counter + 1
-                        constructor%sub_bc(mesh)%cells(i,j,k) = constructor%sub_bc(mesh)%cells(i,j,k) + constructor%sub_bc(mesh-1)%cells(ilb,jlb,k)
-					end if
+                end do
                 
-					if ((constructor%subgrid_cons_utter_loop(mesh-1,1,1) <= irb).and.(irb <= constructor%subgrid_cons_utter_loop(mesh-1,1,2)).and. &
-                        (constructor%subgrid_cons_utter_loop(mesh-1,2,1) <= jrb).and.(jrb <= constructor%subgrid_cons_utter_loop(mesh-1,2,2))) then
-                        counter = counter + 1
-                        constructor%sub_bc(mesh)%cells(i,j,k) = constructor%sub_bc(mesh)%cells(i,j,k) + constructor%sub_bc(mesh-1)%cells(irb,jrb,k)
-					end if
-                        
-!					constructor%sub_bc(mesh)%cells(i,j,k) = nint(constructor%sub_bc(mesh)%cells(i,j,k)/(counter) - 0.1)
-					constructor%sub_bc(mesh)%cells(i,j,k) = int(constructor%sub_bc(mesh)%cells(i,j,k)/(counter))
-                    
-                end if
-                    
+                constructor%sub_bc(mesh)%cells(i,j,k) = int(constructor%sub_bc(mesh)%cells(i,j,k)/(counter))
+
 			end do
 			end do
 			end do
             
         end do
-		!!!!!######
+        
+        
+        !!!!!######
 		!constructor%sub_bc(5)%cells(2,0,1) = 3.0
 
         call RANDOM_SEED()
@@ -2461,10 +2436,10 @@ contains
 					
 					!$omp end parallel						
 					
-					!if ((poisson_iteration == 0).or.(poisson_iteration == nu_2)) then
-						!	print *, "Final V cycle step", a_norm, poisson_iteration
-      !                      if (poisson_iteration == nu_2) write(*,'(A,/,A,/,A)') '*****', 'Finalizing Multigrid', '*****'
-						!end if
+					    if ((poisson_iteration == 0).or.(poisson_iteration == nu_2)) then
+							print *, "Final V cycle step", a_norm, poisson_iteration
+                            if (poisson_iteration == nu_2) write(*,'(A,/,A,/,A)') '*****', 'Finalizing Multigrid', '*****'
+						end if
 
                         poisson_iteration	= poisson_iteration + 1
 
@@ -4340,11 +4315,17 @@ contains
         integer	:: ilbr, ilbf, irbr, irbf, iltr, iltf, irtr, irtf
         integer	:: jlbr, jlbf, jrbr, jrbf, jltr, jltf, jrtr, jrtf
         integer	:: lb, rb, lt, rt, ind
+        integer :: n_v, n_h, n_d
 
-		integer										:: neighbours
-        integer,        dimension(:,:),	allocatable	:: neighbours_indexes
-        integer,        dimension(:),	allocatable	:: neighbours_coeffs
-        integer										:: resid
+		integer								    		:: neighbours
+        integer,        dimension(:,:),	    allocatable	:: neighbours_indexes
+        real(dp),       dimension(:),   	allocatable	:: neighbours_coeffs
+        integer,        dimension(:),   	allocatable	:: neighbours_distance
+        integer,        dimension(:),   	allocatable	:: neighbours_bound
+        integer,        dimension(0:1,0:1,0:1)         	:: neighbours_shifts
+        integer,        dimension(:),       allocatable :: nn
+        integer,        dimension(3)                    :: shift
+        integer										    :: resid
 		
 		cons_utter_loop	= this%domain%get_local_utter_cells_bounds()	
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
@@ -4357,7 +4338,8 @@ contains
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 		neighbours = 2**dimensions
-        allocate(neighbours_indexes(neighbours,dimensions), neighbours_coeffs(neighbours))
+        allocate(neighbours_indexes(neighbours,3), neighbours_coeffs(neighbours), neighbours_distance(neighbours), neighbours_bound(neighbours))
+        allocate(nn(neighbours-1))
         
 		factor		= 2**mesh_iter
 		
@@ -4371,7 +4353,7 @@ contains
 
 		if (mesh_iter < V_cycle_depth) then	
 		
-			        associate (	ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
+        associate (	ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
                     v_f				=> this%v_f%v_ptr			, &
                     v_f_old			=> this%v_f_old%v_ptr		, &            
                     F_a				=> this%F_a%s_ptr			, &
@@ -4577,7 +4559,7 @@ contains
 				
                 if (sub_bc(mesh_iter+1)%cells(i,j,k) == 0) then
                 
-				!** Piecewise linear restriction (CR)  
+				!** Piecewise constant restriction (CR)  
 					if (dimensions == 1) then
 						sub_F(mesh_iter+1)%cells(i,j,k) = 0.5_dp*(sub_R(mesh_iter)%cells(offset(1),offset(2),offset(3)) + sub_R(mesh_iter)%cells(offset(1)+1,offset(2),offset(3)))
 					end if				
@@ -4638,23 +4620,23 @@ contains
 			call this%V_cycle(mesh_iter+1,time_step,nu_1,nu_2,tol,predictor,V_cycle_depth)
 
             associate (	ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
-                v_f				=> this%v_f%v_ptr			, &
-                v_f_old			=> this%v_f_old%v_ptr		, &            
-                F_a				=> this%F_a%s_ptr			, &
-                F_b				=> this%F_b%s_ptr			, &
-                grad_F_a		=> this%grad_F_a			, &
-                grad_F_b		=> this%grad_F_b			, &
-                mesh			=> this%mesh%mesh_ptr		, &
-                bc				=> this%boundary%bc_ptr		, &
+                        v_f				=> this%v_f%v_ptr			, &
+                        v_f_old			=> this%v_f_old%v_ptr		, &            
+                        F_a				=> this%F_a%s_ptr			, &
+                        F_b				=> this%F_b%s_ptr			, &
+                        grad_F_a		=> this%grad_F_a			, &
+                        grad_F_b		=> this%grad_F_b			, &
+                        mesh			=> this%mesh%mesh_ptr		, &
+                        bc				=> this%boundary%bc_ptr		, &
             
-                sub_F			=> this%sub_F				, &
-                sub_R			=> this%sub_R				, &
-                sub_E			=> this%sub_E				, &
-                sub_E_old		=> this%sub_E_old			, &
-                sub_bc			=> this%sub_bc				, &
-                sub_mesh		=> this%sub_mesh)
+                        sub_F			=> this%sub_F				, &
+                        sub_R			=> this%sub_R				, &
+                        sub_E			=> this%sub_E				, &
+                        sub_E_old		=> this%sub_E_old			, &
+                        sub_bc			=> this%sub_bc				, &
+                        sub_mesh		=> this%sub_mesh)
 
-			!$omp parallel default(shared)  private(i,j,k,n,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs,neighbours_indexes,neighbours_coeffs,resid) !,			&
+			!$omp parallel default(shared)  private(i,j,k,n,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs,nn,neighbours_indexes,neighbours_bound,neighbours_coeffs,neighbours_distance,neighbours_shifts,resid,shift) !,			&
 			!!$omp& firstprivate(this)
             !!$omp& shared(a_norm,beta,factor,nu_2,mesh_iter,coordinate_system,					&
 			!!$omp& cons_inner_loop,cons_utter_loop,subgrid_cons_inner_loop,subgrid_cons_utter_loop,subgrid_cons_inner_loop_higher,dimensions,cell_size,converged,predictor,time_step,farfield_velocity_array,poisson_iteration)
@@ -4663,141 +4645,274 @@ contains
             do k = subgrid_cons_inner_loop(3,1),subgrid_cons_inner_loop(3,2)
 			do j = subgrid_cons_inner_loop(2,1),subgrid_cons_inner_loop(2,2)
 			do i = subgrid_cons_inner_loop(1,1),subgrid_cons_inner_loop(1,2)
-
-				!if (dimensions == 1) then
-				!
-				!	ilb = int(i/2)
-				!	irb = int(i/2)+1
-				!	
-				!	if (mod(i,2) == 0) then
-				!		sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.25_dp*(3.0_dp*sub_E(mesh_iter+1)%cells(ilb,j,k) + sub_E(mesh_iter+1)%cells(irb,j,k))  
-				!	end if			
-				!	if (mod(i,2) /= 0) then
-				!		sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k) + 0.25_dp*(sub_E(mesh_iter+1)%cells(ilb,j,k) + 3.0_dp*sub_E(mesh_iter+1)%cells(irb,j,k))  
-				!	end if	
-				!end if				
-				!
-				!if (dimensions == 2) then
-				!
-				!	ilb = int(i/2)
-				!	jlb = int(j/2)
-				!		
-				!	irb = int(i/2)+1
-				!	jrb = int(j/2)
-				!		
-				!	ilt = int(i/2)
-				!	jlt = int(j/2)+1
-				!		
-				!	irt = int(i/2)+1
-				!	jrt = int(j/2)+1
-    !
-    !                sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)
-    !                
-    !                if ((mod(i,2) == 0).and.(mod(j,2) /= 0)) then
-    !                    lt = 2
-    !                    lb = 1
-    !                    rt = 1
-    !                    rb = 0
-    !                end if
-    !                
-    !                if ((mod(i,2) /= 0).and.(mod(j,2) == 0)) then
-    !                    lt = 0
-    !                    lb = 1
-    !                    rt = 1
-    !                    rb = 2
-    !                end if
-    !                             
-    !                if ((mod(i,2) == 0).and.(mod(j,2) == 0)) then
-    !                    lt = 1
-    !                    lb = 2
-    !                    rt = 0
-    !                    rb = 1
-    !                end if
-    !                
-    !                if ((mod(i,2) /= 0).and.(mod(j,2) /= 0)) then
-    !                    lt = 1
-    !                    lb = 0
-    !                    rt = 2
-    !                    rb = 1
-    !                end if 
-    !                
-    !                coef	= (/lt, lb, rt, rb/)
-    !                indexes = reshape((/ilt, jlt, ilb, jlb, irt, jrt, irb, jrb/), shape(indexes))
-    !                
-    !                do ind = 1, 4
-				!		bound_number	= sub_bc(mesh_iter+1)%cells(indexes(1,ind),indexes(2,ind),k)
-				!		if (( bound_number /= 0 ).and.(abs(coef(ind)) > 1.0e-05)) then
-				!			coef(ind) = 0
-				!			boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-				!			select case(boundary_type_name)
-				!			case('wall')
-				!				coef(maxloc(coef)) = coef(maxloc(coef)) + 1	!# Neumann
-				!			case('outlet')
-				!				coef(maxloc(coef)) = coef(maxloc(coef)) - 1	!# Dirichlet
-				!			end select
-    !                    end if
-    !                    
-    !                end do
-    !                
-    !                coef = coef * 0.25_dp
-    !       
-    !                do ind = 1, 4
-    !                    sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) 	+ coef(ind) * sub_E(mesh_iter+1)%cells(indexes(1,ind),indexes(2,ind),k)
-    !                end do    
-				!end if				
-				
-!				if (dimensions == 3) then
                     
-                    sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)
+                sub_E_old(mesh_iter)%cells(i,j,k) = sub_E(mesh_iter)%cells(i,j,k)
                     
-                    !** translate neighbours into binary number 1 -> (0,0,0); 2 -> (0,0,1); etc
-                    neighbours_indexes	= 0
-                    neighbours_coeffs    = 0 
-                    do n = 1, neighbours
-                        resid = n - 1
-						do dim = dimensions, 1, -1
-							neighbours_indexes(n,dim) = int(resid / 2**(dim-1)) + int(i/2)*I_m(dim,1) + int(j/2)*I_m(dim,2) + int(k/2)*I_m(dim,3)
-                            resid = mod(resid, 2**(dim-1))
+                !** translate neighbours into binary number 1 -> (0,0,0); 2 -> (0,0,1); etc
+                neighbours_indexes	= 1
+                neighbours_coeffs   = 0.0_dp
+                neighbours_distance = 0
+                shift               = 0
+                neighbours_shifts   = 0
+                do n = 1, neighbours
+                    resid = n - 1
+					do dim = dimensions, 1, -1
                             
-                            if (( ((i/2) + mod(i,2))*I_m(dim,1) + ((j/2) + mod(j,2))*I_m(dim,2) + ((k/2) + mod(k,2))*I_m(dim,3)) == neighbours_indexes(n,dim)) then
-								neighbours_coeffs(n) = neighbours_coeffs(n) + 1
-                            end if
-						end do
-                    end do
-                    
-                    do n = 1, neighbours
-                        !** Piecewise linear prolongation (CP)
-                        if (neighbours_coeffs(n) == dimensions) then
-                            neighbours_coeffs(n) = 1
-                        else
-                            neighbours_coeffs(n) = 0
+                        shift(dim) = int(resid / 2**(dim-1)) 
+                                                       
+						neighbours_indexes(n,dim) = int(resid / 2**(dim-1)) + int(i/2)*I_m(dim,1) + int(j/2)*I_m(dim,2) + int(k/2)*I_m(dim,3)
+                        resid = mod(resid, 2**(dim-1))
+
+                        if (( ((i/2) + mod(i,2))*I_m(dim,1) + ((j/2) + mod(j,2))*I_m(dim,2) + ((k/2) + mod(k,2))*I_m(dim,3)) == neighbours_indexes(n,dim)) then
+							neighbours_distance(n) = neighbours_distance(n) + 1
                         end if
                     end do
+                        
+                    neighbours_shifts(shift(1),shift(2),shift(3)) = n
+                end do
                     
-                    continue
+                    
+                neighbours_bound = 0                    
+                do n = 1, neighbours
+                    bound_number	= sub_bc(mesh_iter+1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
+                            
+                    if (( bound_number /= 0 ).and.(neighbours_distance(n) > 1.0e-05)) then
+                        neighbours_bound(n) = 0
+                        boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+                        select case(boundary_type_name)
+                        case('wall')
+                            neighbours_bound(n) = neighbours_bound(n) + 1	!# Neumann 
+                        case('inlet')
+                            neighbours_bound(n) = neighbours_bound(n) + 1	!# Neumann 
+                        case('outlet')
+                            neighbours_bound(n) = neighbours_bound(n) - 1	!# Dirichlet
+                        end select
+                    end if
+                end do
 
-                    do n = 1, neighbours
-                        sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) 	+ neighbours_coeffs(n) * sub_E(mesh_iter+1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
-                    end do
+                do n = 1, neighbours
                     
-      !              do n = 1, neighbours
-						!
-      !                  
-      !                  bound_number	= sub_bc(mesh_iter+1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
-						!if (( bound_number /= 0 ).and.(abs(coef_2d(ind)) > 1.0e-05)) then
-						!	coef_2d(ind) = 0
-						!	boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-						!	select case(boundary_type_name)
-						!	case('wall')
-						!		coef_2d(maxloc(coef_2d)) = coef_2d(maxloc(coef_2d)) + 1	!# Neumann
-						!	case('outlet')
-						!		coef_2d(maxloc(coef_2d)) = coef_2d(maxloc(coef_2d)) - 1	!# Dirichlet
-						!	end select
-      !                  end if
-      !              end do
-           
-!                end if
-				
+                    shift = 0
+                    if (neighbours_bound(n) == 0) then
+                            
+                        shift = findloc(neighbours_shifts, n) - (/1,1,1/)
+
+                        do dim = 1, dimensions
+                            nn(dim)  = neighbours_shifts(   shift(1) * (1 - I_m(dim,1)) + mod(shift(1)+1,2) * I_m(dim,1), &
+                                                            shift(2) * (1 - I_m(dim,2)) + mod(shift(2)+1,2) * I_m(dim,2), &
+                                                            shift(3) * (1 - I_m(dim,3)) + mod(shift(3)+1,2) * I_m(dim,3))
+                        end do
+                    
+                        !** Piecewise constant prolongation (CP)
+                        !if (neighbours_distance(n) == dimensions) then
+                        !    neighbours_coeffs(n) = 1.0_dp
+                        !else
+                        !    neighbours_coeffs(n) = 0.0_dp
+                        !end if
+                        !
+                        !** for high-order prolongations there should not be Neumann boundary in the corner cell (cell with highest distance from the fine cell). 
+                        
+                        if (dimensions == 2) then
+                            !** bi linear prolongation (BP) ONLY for 2D
+                            !if (neighbours_distance(n) == dimensions) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                            !        !# Neumann boundary
+                            !        neighbours_coeffs(n) = (3.0_dp + neighbours_bound(nn(1)))*(3 + neighbours_bound(nn(2)))
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        neighbours_coeffs(n) = (3.0_dp + neighbours_bound(nn(1)))*(3 + neighbours_bound(nn(2)))
+                            !    end if
+                            !else if (neighbours_distance(n) == dimensions - 1) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                            !        if (neighbours_distance(nn(1)) == dimensions) then
+                            !            !# Neumann boundary
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))
+                            !        else
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(1)))
+                            !        end if
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        if (neighbours_distance(nn(1)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))
+                            !        else
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(1)))
+                            !        end if
+                            !    end if
+                            !else
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                            !        !# Neumann boundary
+                            !        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))*(1.0_dp - neighbours_bound(nn(2)))
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))*(1.0_dp + neighbours_bound(nn(2)))
+                            !    end if
+                            !end if
+                            !
+                            !neighbours_coeffs(n) = 1.0_dp / 16.0_dp * neighbours_coeffs(n)
+                        
+                        !** Kwak prolongation (KP) ONLY for 2D and 3D
+                            if (neighbours_distance(n) == dimensions) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                                    !# Neumann boundary
+                                    neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
+                                else
+                                    !# Dirichlet boundary
+                                    neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
+                                end if
+                            else if (neighbours_distance(n) == dimensions - 1) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                                    if (neighbours_distance(nn(1)) == dimensions) then
+                                        !# Neumann boundary
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))
+                                    else
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))
+                                    end if
+                                else
+                                    !# Dirichlet boundary
+                                    if (neighbours_distance(nn(1)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))
+                                    else
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))
+                                    end if
+                                end if
+                            else
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                                    !# Neumann boundary
+                                    neighbours_coeffs(n) = 0.0_dp
+                                else
+                                    !# Dirichlet boundary
+                                    neighbours_coeffs(n) = 0.0_dp
+                                end if
+                            end if
+                        
+                            
+                            neighbours_coeffs(n) = 1.0_dp / 4.0_dp * neighbours_coeffs(n)
+                        end if
+                            
+                    if (dimensions == 3) then
+                            !** tri linear prolongation (BP) ONLY for 3D
+                            !if (neighbours_distance(n) == dimensions) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                            !        !# Neumann boundary
+                            !        neighbours_coeffs(n) = (3.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        neighbours_coeffs(n) = (3.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !    end if
+                            !else if (neighbours_distance(n) == dimensions - 1) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                            !        !# Neumann boundary
+                            !        if (neighbours_distance(nn(1)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !        end if
+                            !        if (neighbours_distance(nn(2)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))*(3.0_dp + neighbours_bound(nn(1)))
+                            !        end if
+                            !        if (neighbours_distance(nn(3)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(3)))*(3.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))
+                            !        end if
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        if (neighbours_distance(nn(1)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !        end if
+                            !        if (neighbours_distance(nn(2)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !        end if
+                            !        if (neighbours_distance(nn(3)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(3)))*(3.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))
+                            !        end if
+                            !    end if
+                            !else if (neighbours_distance(n) == dimensions - 2) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                            !        !# Neumann boundary
+                            !        if ((neighbours_distance(nn(1)) == dimensions - 1).and.(neighbours_distance(nn(2)) == dimensions - 1)) then
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))*(1.0_dp - neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !        end if 
+                            !        if ((neighbours_distance(nn(3)) == dimensions - 1).and.(neighbours_distance(nn(1)) == dimensions - 1)) then
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(3)))*(1.0_dp - neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))
+                            !        end if
+                            !        if ((neighbours_distance(nn(2)) == dimensions - 1).and.(neighbours_distance(nn(3)) == dimensions - 1)) then
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))*(1.0_dp - neighbours_bound(nn(3)))*(3.0_dp + neighbours_bound(nn(1)))
+                            !        end if
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        if ((neighbours_distance(nn(1)) == dimensions - 1).and.(neighbours_distance(nn(2)) == dimensions - 1)) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))*(1.0_dp + neighbours_bound(nn(2)))*(3.0_dp + neighbours_bound(nn(3)))
+                            !        end if 
+                            !        if ((neighbours_distance(nn(3)) == dimensions - 1).and.(neighbours_distance(nn(1)) == dimensions - 1)) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(3)))*(1.0_dp + neighbours_bound(nn(1)))*(3.0_dp + neighbours_bound(nn(2)))
+                            !        end if
+                            !        if ((neighbours_distance(nn(2)) == dimensions - 1).and.(neighbours_distance(nn(3)) == dimensions - 1)) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))*(1.0_dp + neighbours_bound(nn(3)))*(3.0_dp + neighbours_bound(nn(1)))
+                            !        end if
+                            !    end if
+                            !else if (neighbours_distance(n) == dimensions - 3) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                            !    !# Neumann boundary
+                            !        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))*(1.0_dp - neighbours_bound(nn(2)))*(1.0_dp - neighbours_bound(nn(3)))
+                            !    else
+                            !    !# Dirichlet boundary
+                            !        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))*(1.0_dp + neighbours_bound(nn(2)))*(1.0_dp + neighbours_bound(nn(3)))
+                            !    end if
+                            !end if
+                            !
+                            !neighbours_coeffs(n) = 1.0_dp / 64.0_dp * neighbours_coeffs(n)
+                            
+                            !** Kwak prolongation (KP) ONLY for 2D and 3D
+                            if (neighbours_distance(n) == dimensions) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                                    !# Neumann boundary
+                                    neighbours_coeffs(n) = (3.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)) + neighbours_bound(nn(3)))
+                                else
+                                    !# Dirichlet boundary
+                                    neighbours_coeffs(n) = (3.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)) + neighbours_bound(nn(3)))
+                                end if
+                            else if (neighbours_distance(n) == dimensions - 1) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                                    !# Neumann boundary
+                                    if (neighbours_distance(nn(1)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))
+                                    end if
+                                    if (neighbours_distance(nn(2)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))
+                                    end if
+                                    if (neighbours_distance(nn(3)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(3)))
+                                    end if
+                                else
+                                    !# Dirichlet boundary
+                                    if (neighbours_distance(nn(1)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))
+                                    end if
+                                    if (neighbours_distance(nn(2)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))
+                                    end if
+                                    if (neighbours_distance(nn(3)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(3)))
+                                    end if
+                                end if
+                            else if ((neighbours_distance(n) == dimensions - 3).or.(neighbours_distance(n) == dimensions - 2)) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1).or.(neighbours_bound(nn(3)) == 1)) then
+                                !# Neumann boundary
+                                    neighbours_coeffs(n) = 0.0_dp
+                                else
+                                !# Dirichlet boundary
+                                    neighbours_coeffs(n) = 0.0_dp
+                                end if
+                            end if
+                            
+                            neighbours_coeffs(n) = 1.0_dp / 6.0_dp * real(neighbours_coeffs(n), dp)
+                            
+                        end if
+                    end if
+                end do
+                    
+                continue
+
+                do n = 1, neighbours
+                    sub_E_old(mesh_iter)%cells(i,j,k) = sub_E_old(mesh_iter)%cells(i,j,k) 	+ neighbours_coeffs(n) * sub_E(mesh_iter+1)%cells(neighbours_indexes(n,1),neighbours_indexes(n,2),neighbours_indexes(n,3))
+                end do 
 			end do
 			end do
 			end do				
@@ -4812,7 +4927,7 @@ contains
 				a_norm	= 0.0_dp
 				converged = .false.
 
-!$omp parallel default(shared)  private(i,j,k,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs,ilb, irb, ilt, irt, jlb, jrb, jlt, jrt, lb, rb, lt, rt, coef, indexes, ind) !,			&
+!$omp parallel default(shared)  private(i,j,k,dim,dim1,plus,sign,bound_number,boundary_type_name,farfield_velocity,offset,lame_coeffs) !,			&
 			    !!$omp& firstprivate(this)
                 
 				!$omp do collapse(3) schedule(static) reduction(+:a_norm)	
@@ -5056,10 +5171,9 @@ contains
 		end if
 
 		continue
-
-		
-	end subroutine V_cycle
-	
+    end subroutine V_cycle
+   
+    
 	subroutine farfield_values_modifier(this, time)
 		class(fds_solver)	,intent(in)		:: this
 		real(dp)			,intent(in)		:: time
@@ -5255,10 +5369,6 @@ contains
 
 		get_time = this%time
 	end function
-
-	
-	
-	
 end module
 	
 !subroutine Weighted_Jacobi_solver_MG(cell_size,max_iter,u,r,f,bc,boundary_types)
