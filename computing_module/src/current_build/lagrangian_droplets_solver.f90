@@ -227,42 +227,42 @@ contains
         
         !# Two droplet streams setup
         
-        this%droplets_number = 1000
-		allocate(this%droplets(this%droplets_number))	
-        
-        release_time = 2.5e-05
-        droplets_velocity = 20.0_dp
-        streams_distance = 2e-03
-        
-        delta = release_time * droplets_velocity
-        
-        drop_number(1) = 25
-        
-        do drop = 1,  this%droplets_number
-			this%droplets(drop)%outside_domain		= .true.
-            this%droplets(drop)%coords(1)			= 0.0
-			this%droplets(drop)%velocity(1)			= 0.0
-        end do
-        
-		do drop = 1, drop_number(1)
-			this%droplets(drop)%outside_domain		= .false.
-			this%droplets(drop)%coords(1)			= delta * (drop + 1)
-            this%droplets(drop)%coords(2)			= lengths(2,2) / 2 + streams_distance / 2
-			this%droplets(drop)%velocity(1)			= 1.0_dp
-			this%droplets(drop)%dm					= 0.0_dp
-        	this%droplets(drop)%temperature			= 300.0_dp
-			this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
-        end do 
-        
-        do drop = drop_number(1)+1, 2*drop_number(1)
-			this%droplets(drop)%outside_domain		= .false.
-			this%droplets(drop)%coords(1)			= delta * (drop + 1 - drop_number(1))
-            this%droplets(drop)%coords(2)			= lengths(2,2) / 2 - streams_distance / 2
-			this%droplets(drop)%velocity(1)			= 1.0_dp
-			this%droplets(drop)%dm					= 0.0_dp
-            this%droplets(drop)%temperature			= 300.0_dp
-			this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
-        end do 
+  !      this%droplets_number = 1000
+		!allocate(this%droplets(this%droplets_number))	
+  !      
+  !      release_time = 2.5e-05
+  !      droplets_velocity = 20.0_dp
+  !      streams_distance = 2e-03
+  !      
+  !      delta = release_time * droplets_velocity
+  !      
+  !      drop_number(1) = 25
+  !      
+  !      do drop = 1,  this%droplets_number
+		!	this%droplets(drop)%outside_domain		= .true.
+  !          this%droplets(drop)%coords(1)			= 0.0
+		!	this%droplets(drop)%velocity(1)			= 0.0
+  !      end do
+  !      
+		!do drop = 1, drop_number(1)
+		!	this%droplets(drop)%outside_domain		= .false.
+		!	this%droplets(drop)%coords(1)			= delta * (drop + 1)
+  !          this%droplets(drop)%coords(2)			= lengths(2,2) / 2 + streams_distance / 2
+		!	this%droplets(drop)%velocity(1)			= 1.0_dp
+		!	this%droplets(drop)%dm					= 0.0_dp
+  !      	this%droplets(drop)%temperature			= 300.0_dp
+		!	this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
+  !      end do 
+  !      
+  !      do drop = drop_number(1)+1, 2*drop_number(1)
+		!	this%droplets(drop)%outside_domain		= .false.
+		!	this%droplets(drop)%coords(1)			= delta * (drop + 1 - drop_number(1))
+  !          this%droplets(drop)%coords(2)			= lengths(2,2) / 2 - streams_distance / 2
+		!	this%droplets(drop)%velocity(1)			= 1.0_dp
+		!	this%droplets(drop)%dm					= 0.0_dp
+  !          this%droplets(drop)%temperature			= 300.0_dp
+		!	this%droplets(drop)%mass				= Pi*this%droplets_params%diameter**3 / 6.0_dp * this%droplets_params%material_density
+  !      end do 
         
         continue 
         

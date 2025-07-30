@@ -112,24 +112,35 @@ module data_io_class
 contains
 
 	type(data_io)	function constructor(manager,check_time,check_time_units,output_time,data_output_folder,io_fields_names)
-		type(data_manager)					,intent(in)	:: manager
-		real(dp)							,intent(in)	:: check_time
-		character(len=*)					,intent(in)	:: check_time_units
-		real(dp)							,intent(in)	:: output_time
-		character(len=*)					,intent(in)	:: data_output_folder
+		type(data_manager)					,intent(in)	            :: manager
+		real(dp)							,intent(in)	            :: check_time
+		character(len=*)					,intent(in)	            :: check_time_units
+		real(dp)							,intent(in), optional	:: output_time
+		character(len=*)					,intent(in)	            :: data_output_folder
 		character(len=35)	,dimension(:)	,intent(in)	,optional	:: io_fields_names
 					
+        real(dp)            :: output_time_set
 		character(len=10)	:: field_type
 		integer	:: load_counter, fields_counter
 		integer	:: io_unit
 				
 		load_counter = 0
 		
+        if(present(output_time)) then
+            output_time_set = output_time
+        else
+            output_time_set = 365*24*60 !# 1 year computing time if not explicitly specified
+        end if
+        
 		if(present(io_fields_names)) then
-			call constructor%set_properties(manager,check_time,check_time_units,output_time,data_output_folder,load_counter,io_fields_names)
+			call constructor%set_properties(manager,check_time,check_time_units,output_time_set,data_output_folder,load_counter,io_fields_names)
 		else
-			call constructor%set_properties(manager,check_time,check_time_units,output_time,data_output_folder,load_counter)
-		end if
+			call constructor%set_properties(manager,check_time,check_time_units,output_time_set,data_output_folder,load_counter)
+        end if
+        
+        
+            
+            
 		
 		open(newunit = io_unit, file = data_io_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
