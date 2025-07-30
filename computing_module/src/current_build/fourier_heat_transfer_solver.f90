@@ -329,14 +329,13 @@ contains
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 
-		!$omp parallel default(shared)  private(i,j,k,plus,dim,sign,bound_number,wall_conductivity_ratio,boundary_type_name) !, &
-		!!$omp& shared(this,cons_inner_loop,dimensions)
-        
 		associate(  T			=> this%T%s_ptr			, &
 					kappa		=> this%kappa%s_ptr		, &
 					bc			=> this%boundary%bc_ptr	, &
 					mesh		=> this%mesh%mesh_ptr)
 
+		!$omp parallel default(shared)  private(i,j,k,plus,dim,sign,bound_number,wall_conductivity_ratio,boundary_type_name) !, &
+		!!$omp& shared(this,cons_inner_loop,dimensions)
 		!$omp do collapse(3) schedule(static)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -367,9 +366,9 @@ contains
 
 		!$omp end do nowait
 
-		end associate
-                    
 		!$omp end parallel
+
+		end associate
 
 	end subroutine
 

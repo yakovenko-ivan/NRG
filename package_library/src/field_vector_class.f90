@@ -63,7 +63,8 @@ contains
 		type(chemical_properties_pointer)	,intent(in)	,optional	:: chem
 		
 		integer								:: dimensions
-		character(len=5)	,dimension(:)	,allocatable	:: projection_names
+		character(len=5)	,dimension(3)	:: projection_names
+
 
 		integer	:: specie, dim
 		
@@ -79,7 +80,8 @@ contains
 			end do
 		else
 			allocate(constructor_cons%pr(dimensions))
-			allocate(projection_names, source = domain%get_axis_names())
+			projection_names = domain%get_axis_names()
+			
 			do dim = 1,dimensions
 				constructor_cons%pr(dim) = field_scalar_cons_c(	trim(field_name_long)	//'('//trim(projection_names(dim))//')',	&
 																trim(field_name_short)	//'('//trim(projection_names(dim))//')',domain)

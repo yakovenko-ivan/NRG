@@ -92,6 +92,8 @@ contains
 		
 		constructor%number_of_flow_scalar_fields = 0
 		constructor%number_of_flow_vector_fields = 0
+        
+        constructor%number_of_timers            = 0
 
 	end function
 

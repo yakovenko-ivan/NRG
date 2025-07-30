@@ -167,8 +167,10 @@ contains
 		namelist /visible_fields/ visible_fields_names
 	
 		visible_fields_number = size(this%visible_fields_names)
-		allocate(visible_fields_names,source = this%visible_fields_names)
 		
+		allocate(visible_fields_names(visible_fields_number))
+		visible_fields_names = this%visible_fields_names		
+
 		save_time					= this%save_time
 		save_time_units				= this%save_time_units
 		save_format					= this%save_format
@@ -535,8 +537,8 @@ contains
 		integer						:: domain_dimensions
 		integer		,dimension(3)	:: utter_cells_number, inner_cells_number
 
-		character(len=5)	,dimension(:)	,allocatable	:: axis_names
-		real(dp)			,dimension(:,:)	,allocatable	:: domain_lengths
+		character(len=5)	,dimension(3)		:: axis_names
+		real(dp)			,dimension(3,2)		:: domain_lengths
 
 		real(dp)				:: min_value, max_value
 		integer					:: variables_number ,variables_counter
@@ -547,8 +549,8 @@ contains
 		inner_cells_number						= 1
 		inner_cells_number(:domain_dimensions)	= utter_cells_number(:domain_dimensions) - 2
 
-		allocate(axis_names		, source	= this%domain%get_axis_names())
-		allocate(domain_lengths	, source	= this%domain%get_domain_lengths())
+		axis_names = this%domain%get_axis_names()
+		domain_lengths = this%domain%get_domain_lengths()
 
 		variables_number = 0
 		variables_number = variables_number + domain_dimensions				! Mesh 

@@ -32,7 +32,7 @@ contains
 
 		integer								:: dimensions
 
-		character(len=5)	,dimension(:)	,allocatable	:: projection_names
+		character(len=5)	,dimension(3)	:: projection_names
 		integer	:: dim1, dim2
 
 		constructor%name_short	= field_name_short
@@ -40,7 +40,7 @@ contains
 
 		dimensions			= domain%get_domain_dimensions()
 
-		allocate(projection_names, source = domain%get_axis_names())
+		projection_names = domain%get_axis_names()
 		allocate(constructor%pr(dimensions,dimensions))
 		do dim1 = 1,dimensions
 		do dim2 = 1,dimensions

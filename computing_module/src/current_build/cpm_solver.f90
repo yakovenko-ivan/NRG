@@ -452,9 +452,6 @@ contains
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
 
-		!$omp parallel default(shared)  private(i,j,k,dim,particles_phase_counter) , &
-		!$omp& shared(this,cons_inner_loop,dimensions,time_step)
-        
 		associate (	rho					=> this%rho%s_ptr			, &
 					v					=> this%v%v_ptr				, &
 					v_int				=> this%v_int%v_ptr			, &
@@ -465,6 +462,9 @@ contains
                     v_prod_droplets		=> this%v_prod_droplets		, &
 					bc					=> this%boundary%bc_ptr)
 
+		!$omp parallel default(shared)  private(i,j,k,dim,particles_phase_counter) , &
+		!$omp& shared(this,cons_inner_loop,dimensions,time_step)
+        
 		!$omp do collapse(3) schedule(guided)
 
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -502,9 +502,8 @@ contains
 			end do
 		!$omp end do nowait
 			
-		end associate
-
 		!$omp end parallel
+		end associate
 			
 
 

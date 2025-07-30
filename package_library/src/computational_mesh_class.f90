@@ -86,14 +86,14 @@ contains
 		integer										:: dimensions
 		integer	,dimension(3,2)						:: loop_bounds
 		integer ,dimension(3)						:: decomposition_offset
-		real(dp)	,dimension(:,:)	,allocatable	:: domain_lengths
+		real(dp)	,dimension(3,2)					:: domain_lengths
 
 		dimensions				= domain%get_domain_dimensions()
 		decomposition_offset	= domain%get_global_offset()
 
 		loop_bounds				= domain%get_local_utter_cells_bounds()
 
-		allocate(domain_lengths,source = domain%get_domain_lengths())		
+		domain_lengths = domain%get_domain_lengths()
 
 		do dim = 1,dimensions
 			do k = loop_bounds(3,1),loop_bounds(3,2)

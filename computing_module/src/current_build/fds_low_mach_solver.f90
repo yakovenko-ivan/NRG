@@ -4695,7 +4695,7 @@ contains
                     shift = 0
                     if (neighbours_bound(n) == 0) then
                             
-                        shift = findloc(neighbours_shifts, n) - (/1,1,1/)
+                        shift = my_findloc(neighbours_shifts, n) - (/1,1,1/)
 
                         do dim = 1, dimensions
                             nn(dim)  = neighbours_shifts(   shift(1) * (1 - I_m(dim,1)) + mod(shift(1)+1,2) * I_m(dim,1), &
@@ -4704,11 +4704,11 @@ contains
                         end do
                     
                         !** Piecewise constant prolongation (CP)
-                        !if (neighbours_distance(n) == dimensions) then
-                        !    neighbours_coeffs(n) = 1.0_dp
-                        !else
-                        !    neighbours_coeffs(n) = 0.0_dp
-                        !end if
+                        if (neighbours_distance(n) == dimensions) then
+                            neighbours_coeffs(n) = 1.0_dp
+                        else
+                            neighbours_coeffs(n) = 0.0_dp
+                        end if
                         !
                         !** for high-order prolongations there should not be Neumann boundary in the corner cell (cell with highest distance from the fine cell). 
                         
@@ -4751,42 +4751,42 @@ contains
                             !neighbours_coeffs(n) = 1.0_dp / 16.0_dp * neighbours_coeffs(n)
                         
                         !** Kwak prolongation (KP) ONLY for 2D and 3D
-                            if (neighbours_distance(n) == dimensions) then
-                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
-                                    !# Neumann boundary
-                                    neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
-                                else
-                                    !# Dirichlet boundary
-                                    neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
-                                end if
-                            else if (neighbours_distance(n) == dimensions - 1) then
-                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
-                                    if (neighbours_distance(nn(1)) == dimensions) then
-                                        !# Neumann boundary
-                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))
-                                    else
-                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))
-                                    end if
-                                else
-                                    !# Dirichlet boundary
-                                    if (neighbours_distance(nn(1)) == dimensions) then
-                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))
-                                    else
-                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))
-                                    end if
-                                end if
-                            else
-                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
-                                    !# Neumann boundary
-                                    neighbours_coeffs(n) = 0.0_dp
-                                else
-                                    !# Dirichlet boundary
-                                    neighbours_coeffs(n) = 0.0_dp
-                                end if
-                            end if
-                        
-                            
-                            neighbours_coeffs(n) = 1.0_dp / 4.0_dp * neighbours_coeffs(n)
+                            !if (neighbours_distance(n) == dimensions) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                            !        !# Neumann boundary
+                            !        neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
+                            !    end if
+                            !else if (neighbours_distance(n) == dimensions - 1) then
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                            !        if (neighbours_distance(nn(1)) == dimensions) then
+                            !            !# Neumann boundary
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))
+                            !        else
+                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))
+                            !        end if
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        if (neighbours_distance(nn(1)) == dimensions) then
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))
+                            !        else
+                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))
+                            !        end if
+                            !    end if
+                            !else
+                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                            !        !# Neumann boundary
+                            !        neighbours_coeffs(n) = 0.0_dp
+                            !    else
+                            !        !# Dirichlet boundary
+                            !        neighbours_coeffs(n) = 0.0_dp
+                            !    end if
+                            !end if
+                            !
+                            !
+                            !neighbours_coeffs(n) = 1.0_dp / 4.0_dp * neighbours_coeffs(n)
                         end if
                             
                     if (dimensions == 3) then
@@ -5368,7 +5368,25 @@ contains
 		class(fds_solver)	,intent(in)		:: this
 
 		get_time = this%time
-	end function
+    end function
+    
+    pure function my_findloc(neighbours_shifts, n)
+        integer,        dimension(3)                           :: my_findloc
+        integer                                 ,intent(in)    :: n
+        integer,        dimension(0:1,0:1,0:1)  ,intent(in)    :: neighbours_shifts 
+        integer :: i,j,k
+        
+        do i = 1,2
+        do j = 1,2
+        do k = 1,2
+            if (neighbours_shifts(i-1,j-1,k-1) == n) then
+                my_findloc = (/i, j, k/)
+            end if
+        end do
+        end do
+        end do
+        
+    end function
 end module
 	
 !subroutine Weighted_Jacobi_solver_MG(cell_size,max_iter,u,r,f,bc,boundary_types)
