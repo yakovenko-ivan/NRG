@@ -11,6 +11,8 @@ computing_module/debug_seq
 computing_module/release_seq
 computing_module/computing_module.u2d
 computing_module/computing_module.vfproj
+package_interface/src/
+!package_interface/src/tests/classic_tests
 package_library/package_library
 package_library/debug_MPI
 package_library/release_MPI
@@ -18,6 +20,7 @@ package_library/debug_OMP
 package_library/release_OMP
 package_library/debug_seq
 package_library/release_seq
+package_library/x64
 NRG_GIT_stable_1/
 package_utilities/package_utilities
 package_utilities/debug_MPI
@@ -26,6 +29,7 @@ package_utilities/debug_OMP
 package_utilities/release_OMP
 package_utilities/debug_seq
 package_utilities/release_seq
+package_utilities/x64
 *.bak
 *.u2d
 *.vfproj
