@@ -1,5 +1,5 @@
 # Add the source files
-set(package_interface_src ${SRC_INTERFACE}/src/classic_tests/1D_laminar_velocity.f90)
+set(package_interface_src ${SRC_INTERFACE}/src/tests/classic_tests/1D_laminar_velocity.f90)
 
 # Define the executable in terms of the source files
 add_executable(${INTERFACE} ${package_interface_src})
