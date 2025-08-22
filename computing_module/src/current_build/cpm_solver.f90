@@ -115,10 +115,9 @@ module cpm_solver_class
 
 contains
 
-	type(cpm_solver)	function constructor(manager,problem_data_io, problem_solver_options)
+	type(cpm_solver)	function constructor(manager,problem_data_io)
 		type(data_manager)						,intent(inout)	:: manager
 		type(data_io)							,intent(inout)	:: problem_data_io
-		type(solver_options)					,intent(in)		:: problem_solver_options
 
 		real(dp)	:: calculation_time
 		
@@ -136,29 +135,29 @@ contains
 		
         integer	,dimension(3,2)	:: cons_allocation_bounds
 
-		constructor%diffusion_flag			= problem_solver_options%get_molecular_diffusion_flag()
-		constructor%viscosity_flag			= problem_solver_options%get_viscosity_flag()
-		constructor%heat_trans_flag			= problem_solver_options%get_heat_transfer_flag()
-		constructor%reactive_flag			= problem_solver_options%get_chemical_reaction_flag()
-		constructor%hydrodynamics_flag		= problem_solver_options%get_hydrodynamics_flag()
-		constructor%courant_fraction		= problem_solver_options%get_CFL_condition_coefficient()
-		constructor%CFL_condition_flag		= problem_solver_options%get_CFL_condition_flag()
+		constructor%diffusion_flag			= manager%solver_options%get_molecular_diffusion_flag()
+		constructor%viscosity_flag			= manager%solver_options%get_viscosity_flag()
+		constructor%heat_trans_flag			= manager%solver_options%get_heat_transfer_flag()
+		constructor%reactive_flag			= manager%solver_options%get_chemical_reaction_flag()
+		constructor%hydrodynamics_flag		= manager%solver_options%get_hydrodynamics_flag()
+		constructor%courant_fraction		= manager%solver_options%get_CFL_condition_coefficient()
+		constructor%CFL_condition_flag		= manager%solver_options%get_CFL_condition_flag()
 		constructor%perturbed_velocity		= .false.
         
-        constructor%g                       = problem_solver_options%get_grav_acc()
+        constructor%g                       = manager%solver_options%get_grav_acc()
 
-		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
-		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()
+		constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()
+		constructor%additional_droplets_phases_number	= manager%solver_options%get_additional_droplets_phases_number()
 		
 		
 		constructor%domain				= manager%domain
 		constructor%mpi_support			= manager%mpi_communications		
 		constructor%chem%chem_ptr		=> manager%chemistry%chem_ptr
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
-		constructor%boundary%bc_ptr	=> manager%boundary_conditions_pointer%bc_ptr
+		constructor%boundary%bc_ptr	    => manager%boundary_conditions_pointer%bc_ptr
 		constructor%mesh%mesh_ptr		=> manager%computational_mesh_pointer%mesh_ptr
         
-        cons_allocation_bounds		= manager%domain%get_local_utter_cells_bounds()
+        cons_allocation_bounds		    = manager%domain%get_local_utter_cells_bounds()
 
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr					=> scal_ptr%s_ptr
@@ -231,7 +230,7 @@ contains
 			allocate(constructor%v_prod_droplets(constructor%additional_droplets_phases_number))
 			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
 			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-				droplets_params = problem_solver_options%get_droplets_params(droplets_phase_counter)
+				droplets_params = manager%solver_options%get_droplets_params(droplets_phase_counter)
 !				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
 				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
@@ -257,7 +256,7 @@ contains
 			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
 			do particles_phase_counter = 1, constructor%additional_particles_phases_number
-				particles_params = problem_solver_options%get_particles_params(particles_phase_counter)
+				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
 !				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Lagrangian particles solver
 				constructor%particles_solver(particles_phase_counter)	= particles_solver_c(manager, particles_params, particles_phase_counter)				!# Continuum particles solver
 				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
@@ -320,9 +319,9 @@ contains
 		call constructor%mpi_support%exchange_boundary_conditions_markers(constructor%boundary%bc_ptr)
 		call constructor%mpi_support%exchange_mesh(constructor%mesh%mesh_ptr)
 
-		constructor%time		=	calculation_time
-		constructor%time_step	=	problem_solver_options%get_initial_time_step()
-		constructor%initial_time_step = problem_solver_options%get_initial_time_step()
+		constructor%time		        =   calculation_time
+		constructor%time_step	        =   manager%solver_options%get_initial_time_step()
+		constructor%initial_time_step   =   manager%solver_options%get_initial_time_step()
 
         allocate(flame_front_coords(cons_allocation_bounds(2,1):cons_allocation_bounds(2,2)))
         

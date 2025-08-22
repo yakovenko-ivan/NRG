@@ -348,15 +348,15 @@ contains
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 
-		associate(  T                       => this%T%s_ptr                            , &
-					p						=> this%p%s_ptr							, &
-					rho						=> this%rho%s_ptr							, &
-					D						=> this%D%v_ptr							, &
-					mol_mix_conc            => this%mol_mix_conc%s_ptr                 , &
+		associate(  T                       => this%T%s_ptr                                 , &
+					p						=> this%p%s_ptr							        , &
+					rho						=> this%rho%s_ptr							    , &
+					D						=> this%D%v_ptr							        , &
+					mol_mix_conc            => this%mol_mix_conc%s_ptr                      , &
 					Y						=> this%Y%v_ptr									, &
 					potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
 					molar_masses            => this%thermo%thermo_ptr%molar_masses			, &
-                bc                      => this%boundary%bc_ptr		, &
+                    bc                      => this%boundary%bc_ptr		                    , &
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter)
 
 	!$omp parallel default(shared)  private(i,j,k,sum1,sum2,mol_frac,reduced_temperature,reduced_collision_diameter,inv_reduced_molar_mass,average_molar_mass,accumulation_value,specie_mass_density,mixture_mass_density,omega_1_1,D_binary,specie_number1,specie_number2) !, &

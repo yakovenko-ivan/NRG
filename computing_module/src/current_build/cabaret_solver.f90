@@ -120,10 +120,9 @@ module cabaret_solver_class
 
 contains
 
-	type(cabaret_solver)	function constructor(manager,problem_data_io, problem_solver_options)
+	type(cabaret_solver)	function constructor(manager,problem_data_io)
 		type(data_manager)						,intent(inout)	:: manager
 		type(data_io)							,intent(inout)	:: problem_data_io
-		type(solver_options)					,intent(in)		:: problem_solver_options
 
 		real(dp)								:: calculation_time
 		
@@ -155,18 +154,18 @@ contains
 		
 		cell_size				= manager%computational_mesh_pointer%mesh_ptr%get_cell_edges_length()
 		
-		constructor%diffusion_flag		= problem_solver_options%get_molecular_diffusion_flag()
-		constructor%viscosity_flag		= problem_solver_options%get_viscosity_flag()
-		constructor%heat_trans_flag		= problem_solver_options%get_heat_transfer_flag()
-		constructor%reactive_flag		= problem_solver_options%get_chemical_reaction_flag()
-		constructor%hydrodynamics_flag	= problem_solver_options%get_hydrodynamics_flag()
-		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
-		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
+		constructor%diffusion_flag		= manager%solver_options%get_molecular_diffusion_flag()
+		constructor%viscosity_flag		= manager%solver_options%get_viscosity_flag()
+		constructor%heat_trans_flag		= manager%solver_options%get_heat_transfer_flag()
+		constructor%reactive_flag		= manager%solver_options%get_chemical_reaction_flag()
+		constructor%hydrodynamics_flag	= manager%solver_options%get_hydrodynamics_flag()
+		constructor%courant_fraction	= manager%solver_options%get_CFL_condition_coefficient()
+		constructor%CFL_condition_flag	= manager%solver_options%get_CFL_condition_flag()
 		constructor%sources_flag		= .false.
         
-        constructor%g                       = problem_solver_options%get_grav_acc()
+        constructor%g                       = manager%solver_options%get_grav_acc()
 
-        constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()        
+        constructor%additional_droplets_phases_number	= manager%solver_options%get_additional_droplets_phases_number()        
         
 		constructor%domain				= manager%domain
 		constructor%mpi_support			= manager%mpi_communications
@@ -252,7 +251,7 @@ contains
 			allocate(constructor%v_prod_droplets(constructor%additional_droplets_phases_number))
 			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
 			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-				droplets_params = problem_solver_options%get_droplets_params(droplets_phase_counter)
+				droplets_params = manager%solver_options%get_droplets_params(droplets_phase_counter)
 				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
 !				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
@@ -590,9 +589,9 @@ contains
 		end do
 	
 
-		constructor%time		= calculation_time
-		constructor%time_step	=	problem_solver_options%get_initial_time_step()
-		constructor%initial_time_step = problem_solver_options%get_initial_time_step()
+		constructor%time		        =   calculation_time
+		constructor%time_step	        =   manager%solver_options%get_initial_time_step()
+		constructor%initial_time_step   =   manager%solver_options%get_initial_time_step()
 		
 		call constructor%state_eq%apply_state_equation_flow_variables_for_IC()
 

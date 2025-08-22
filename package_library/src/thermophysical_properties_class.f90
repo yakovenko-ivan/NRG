@@ -17,8 +17,7 @@ module thermophysical_properties_class
 	end type
 
 	type    :: thermophysical_properties
-	
-		character(len=30)								::	thermo_data_file_name, transport_data_file_name, molar_masses_data_file_name
+		character(len=30)                           ::	thermo_data_file_name, transport_data_file_name, molar_masses_data_file_name
 		real(dp) ,dimension(:)       ,allocatable    ::  potential_well_depth, collision_diameter, molar_masses
 		real(dp) ,dimension(:,:,:)   ,allocatable    ::  a_coeffs
 	contains

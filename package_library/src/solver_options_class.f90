@@ -8,8 +8,8 @@ module solver_options_class
 	private
 	public  solid_particles_phase
 	public  liquid_droplets_phase
-	public  solver_options ,solver_options_c
-	
+	public  solver_options, solver_options_c
+    
 	type	:: solid_particles_phase
 		real(dp)	:: diameter, material_heat_capacity, material_density
 	end type

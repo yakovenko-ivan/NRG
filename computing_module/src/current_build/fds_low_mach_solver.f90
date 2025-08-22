@@ -66,13 +66,13 @@ module fds_low_mach_solver_class
 	end type
 
 	type fds_solver
-		logical			:: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag, perturbed_velocity
-		real(dp)		:: courant_fraction
-		real(dp)		:: time, time_step, initial_time_step
+		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag, perturbed_velocity
+		real(dp)		            :: courant_fraction
+		real(dp)		            :: time, time_step, initial_time_step
         real(dp)    , dimension(3)  :: g
-		integer			:: additional_particles_phases_number, additional_droplets_phases_number
+		integer			            :: additional_particles_phases_number, additional_droplets_phases_number
 		
-		logical			:: perturbed_velocity_flag, stabilizing_inlet_flag, igniter_flag 
+		logical			            :: perturbed_velocity_flag, stabilizing_inlet_flag, igniter_flag 
         
 		type(viscosity_solver)				:: visc_solver
 		type(heat_transfer_solver)			:: heat_trans_solver
@@ -154,10 +154,9 @@ module fds_low_mach_solver_class
 
 contains
 	
-	type(fds_solver)	function constructor(manager,problem_data_io, problem_solver_options)
+	type(fds_solver)	function constructor(manager,problem_data_io)
 		type(data_manager)						,intent(inout)	:: manager
 		type(data_io)							,intent(inout)	:: problem_data_io
-		type(solver_options)					,intent(in)		:: problem_solver_options
 
 		real(dp)						:: calculation_time		
 		
@@ -201,23 +200,23 @@ contains
 		integer :: cells_number
 		
 		constructor%calc_time           = 0.0_dp
-		constructor%diffusion_flag		= problem_solver_options%get_molecular_diffusion_flag()
-		constructor%viscosity_flag		= problem_solver_options%get_viscosity_flag()
-		constructor%heat_trans_flag		= problem_solver_options%get_heat_transfer_flag()
-		constructor%reactive_flag		= problem_solver_options%get_chemical_reaction_flag()
-		constructor%hydrodynamics_flag	= problem_solver_options%get_hydrodynamics_flag()
-		constructor%courant_fraction	= problem_solver_options%get_CFL_condition_coefficient()
-		constructor%CFL_condition_flag	= problem_solver_options%get_CFL_condition_flag()
+		constructor%diffusion_flag		= manager%solver_options%get_molecular_diffusion_flag()
+		constructor%viscosity_flag		= manager%solver_options%get_viscosity_flag()
+		constructor%heat_trans_flag		= manager%solver_options%get_heat_transfer_flag()
+		constructor%reactive_flag		= manager%solver_options%get_chemical_reaction_flag()
+		constructor%hydrodynamics_flag	= manager%solver_options%get_hydrodynamics_flag()
+		constructor%courant_fraction	= manager%solver_options%get_CFL_condition_coefficient()
+		constructor%CFL_condition_flag	= manager%solver_options%get_CFL_condition_flag()
         
         !# sub solver options
 		    constructor%perturbed_velocity_flag	= .false.
             constructor%stabilizing_inlet_flag	= .false.
 		    constructor%igniter_flag	        = .false.
             
-        constructor%g                       = problem_solver_options%get_grav_acc()
+        constructor%g                   = manager%solver_options%get_grav_acc()
         
-		constructor%additional_droplets_phases_number	= problem_solver_options%get_additional_droplets_phases_number()		
-		constructor%additional_particles_phases_number	= problem_solver_options%get_additional_particles_phases_number()
+		constructor%additional_droplets_phases_number	= manager%solver_options%get_additional_droplets_phases_number()		
+		constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()
 		
 		constructor%domain				= manager%domain
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr		
@@ -348,7 +347,7 @@ contains
 			allocate(constructor%v_prod_droplets(constructor%additional_droplets_phases_number))
 			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
 			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-				droplets_params = problem_solver_options%get_droplets_params(droplets_phase_counter)
+				droplets_params = manager%solver_options%get_droplets_params(droplets_phase_counter)
 				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
 !				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
 				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
@@ -374,7 +373,7 @@ contains
 			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
 			do particles_phase_counter = 1, constructor%additional_particles_phases_number
-				particles_params = problem_solver_options%get_particles_params(particles_phase_counter)
+				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
 				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)	!# Lagrangian particles solver
 !				constructor%particles_solver(particles_phase_counter)	= particles_solver_c(manager, particles_params, particles_phase_counter)			!# Continuum particles solver
 				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
@@ -479,14 +478,14 @@ contains
  		if(constructor%load_counter == 1) then
 			call constructor%state_eq%apply_state_equation_for_initial_conditions()
         else
-			call constructor%state_eq%apply_state_equation_low_mach_fds(problem_solver_options%get_initial_time_step(),predictor=.true.)
+			call constructor%state_eq%apply_state_equation_low_mach_fds(manager%solver_options%get_initial_time_step(),predictor=.true.)
 			call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
         end if	       
 
         cell_size						= constructor%mesh%mesh_ptr%get_cell_edges_length()
 		
 		constructor%time				= calculation_time
-		constructor%initial_time_step	= problem_solver_options%get_initial_time_step()
+		constructor%initial_time_step	= manager%solver_options%get_initial_time_step()
 		constructor%time_step			= constructor%initial_time_step
 
 		constructor%rho_0				= constructor%rho%s_ptr%cells(cons_inner_loop(1,2),cons_inner_loop(2,2) ,1)!constructor%rho%s_ptr%cells(1,1,1)
@@ -1610,15 +1609,15 @@ contains
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
 							end if
 
-							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
-							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * (0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * (0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
                         else
 							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
 							end if
 								
-							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
-							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * (0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * (0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
 						end if
 					end if
 				end do
@@ -1962,7 +1961,10 @@ contains
 											!R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
                                         case('inlet')
 										!	farfield_velocity = farfield_velocity_array(factor * j)
-											farfield_velocity = farfield_velocity_array(1)
+										!	farfield_velocity = farfield_velocity_array(1)
+                                            
+                                            farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                            
 											if(predictor) then
 												R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
 																				- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
@@ -2098,7 +2100,10 @@ contains
 												
                                                 case('inlet')
 												!	farfield_velocity = farfield_velocity_array(factor * j)
-													farfield_velocity = farfield_velocity_array(1)
+												!	farfield_velocity = farfield_velocity_array(1)
+                                                    
+                                                    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                                    
 													if(predictor) then
 														R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
 																						- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
@@ -2288,7 +2293,10 @@ contains
 											
                                             case('inlet')
 											!	farfield_velocity = farfield_velocity_array(factor * j)
-												farfield_velocity = farfield_velocity_array(1)
+											!	farfield_velocity = farfield_velocity_array(1)
+                                                
+                                                farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                                
 												if(predictor) then
 													R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
 																					- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
@@ -2384,7 +2392,10 @@ contains
 												
                                                 case('inlet')
 												!	farfield_velocity = farfield_velocity_array(factor * j)
-													farfield_velocity = farfield_velocity_array(1)
+												!	farfield_velocity = farfield_velocity_array(1)
+                                                    
+                                                    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                                    
 													if(predictor) then
 														R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
 																						- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
@@ -2546,11 +2557,13 @@ contains
 												end if
 											end if
 												
-										case('inlet')
+                                        case('inlet')
 	 
 										!	farfield_velocity = farfield_velocity_array(factor * j)
-											farfield_velocity = farfield_velocity_array(1)
+										!	farfield_velocity = farfield_velocity_array(1)
 												
+                                            farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                            
 											if (predictor) then
 												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i,j,k)														&
 																												- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))					&
@@ -2869,8 +2882,9 @@ contains
 											end if
 										end do
 									case('inlet')
-										farfield_velocity		=  farfield_velocity_array(j)
-
+										!farfield_velocity		=  farfield_velocity_array(j)
+                                        farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                        
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  farfield_velocity
@@ -4041,8 +4055,9 @@ contains
 											end if	
 										end if
 										
-										farfield_velocity		=  farfield_velocity_array(j)
-
+										! farfield_velocity		=  farfield_velocity_array(j)
+                                        farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                        
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  farfield_velocity
@@ -4704,10 +4719,12 @@ contains
                         end do
                     
                         !** Piecewise constant prolongation (CP)
-                        if (neighbours_distance(n) == dimensions) then
-                            neighbours_coeffs(n) = 1.0_dp
-                        else
-                            neighbours_coeffs(n) = 0.0_dp
+                        if (dimensions == 1) then
+                            if (neighbours_distance(n) == dimensions) then
+                                neighbours_coeffs(n) = 1.0_dp
+                            else
+                                neighbours_coeffs(n) = 0.0_dp
+                            end if
                         end if
                         !
                         !** for high-order prolongations there should not be Neumann boundary in the corner cell (cell with highest distance from the fine cell). 
@@ -4751,42 +4768,42 @@ contains
                             !neighbours_coeffs(n) = 1.0_dp / 16.0_dp * neighbours_coeffs(n)
                         
                         !** Kwak prolongation (KP) ONLY for 2D and 3D
-                            !if (neighbours_distance(n) == dimensions) then
-                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
-                            !        !# Neumann boundary
-                            !        neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
-                            !    else
-                            !        !# Dirichlet boundary
-                            !        neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
-                            !    end if
-                            !else if (neighbours_distance(n) == dimensions - 1) then
-                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
-                            !        if (neighbours_distance(nn(1)) == dimensions) then
-                            !            !# Neumann boundary
-                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))
-                            !        else
-                            !            neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))
-                            !        end if
-                            !    else
-                            !        !# Dirichlet boundary
-                            !        if (neighbours_distance(nn(1)) == dimensions) then
-                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))
-                            !        else
-                            !            neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))
-                            !        end if
-                            !    end if
-                            !else
-                            !    if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
-                            !        !# Neumann boundary
-                            !        neighbours_coeffs(n) = 0.0_dp
-                            !    else
-                            !        !# Dirichlet boundary
-                            !        neighbours_coeffs(n) = 0.0_dp
-                            !    end if
-                            !end if
-                            !
-                            !
-                            !neighbours_coeffs(n) = 1.0_dp / 4.0_dp * neighbours_coeffs(n)
+                            if (neighbours_distance(n) == dimensions) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                                    !# Neumann boundary
+                                    neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
+                                else
+                                    !# Dirichlet boundary
+                                    neighbours_coeffs(n) = (2.0_dp + neighbours_bound(nn(1)) + neighbours_bound(nn(2)))
+                                end if
+                            else if (neighbours_distance(n) == dimensions - 1) then
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                                    if (neighbours_distance(nn(1)) == dimensions) then
+                                        !# Neumann boundary
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(1)))
+                                    else
+                                        neighbours_coeffs(n) = (1.0_dp - neighbours_bound(nn(2)))
+                                    end if
+                                else
+                                    !# Dirichlet boundary
+                                    if (neighbours_distance(nn(1)) == dimensions) then
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(1)))
+                                    else
+                                        neighbours_coeffs(n) = (1.0_dp + neighbours_bound(nn(2)))
+                                    end if
+                                end if
+                            else
+                                if ((neighbours_bound(nn(1)) == 1).or.(neighbours_bound(nn(2)) == 1)) then
+                                    !# Neumann boundary
+                                    neighbours_coeffs(n) = 0.0_dp
+                                else
+                                    !# Dirichlet boundary
+                                    neighbours_coeffs(n) = 0.0_dp
+                                end if
+                            end if
+                            
+                            
+                            neighbours_coeffs(n) = 1.0_dp / 4.0_dp * neighbours_coeffs(n)
                         end if
                             
                     if (dimensions == 3) then
@@ -5219,20 +5236,17 @@ contains
 		integer		,save		:: iteration = 0
 
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()		
-		!delay	= 5.0e-03_dp
 		delay	= 0.0e-03_dp
-		duration = 800.0e-06_dp
+		duration = 5000.0e-06_dp
 		
-		associate (	rho	=> this%rho%s_ptr)
-			if ((time <= delay + duration)) then !if ((time > delay).and. (iteration == 0)) then !(time <= delay + duration)) then !(time <= delay + relax)) then
+		associate (rho	=> this%rho%s_ptr)
+			if ((time <= delay + duration)) then 
 				iteration = iteration + 1
 				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				!	if ((i-128.5)**2 + (j-40)**2 < 157) then
-                    if ((abs(j-256.5) <= 13).and.(i <= 2)) then
+                    if (( (j - 5)**2 + (i - 200)**2 <= 5)) then
 						rho%cells(i,j,:)	= 0.1_dp * this%rho_0 !- this%rho_0*18.5_dp/20.0_dp! *(time-delay)/relax
-						!T%cells(i,j,:)	= 1500.0_dp
 					end if
 				end do
 				end do

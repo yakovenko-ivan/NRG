@@ -515,7 +515,7 @@ contains
 			current_time = ((day*24+h)*60+m)
 			
 			if (processor_rank == 0) then
-                print *, 'Current time = ', day, h, m, s, t
+!                print *, 'Current time = ', day, h, m, s, t
 				print *, 'Time left = ', this%start_time + this%output_time - current_time, ' min'
 			end if
 

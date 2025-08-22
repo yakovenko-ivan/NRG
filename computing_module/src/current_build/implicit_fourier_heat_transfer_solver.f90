@@ -176,11 +176,11 @@ contains
 	end function
 
 	subroutine	heat_transfer_solver_additional_constructor(this, manager)
-		class(implicit_heat_transfer_solver) ,intent(inout)	:: this
-		type(data_manager)					,intent(inout)	:: manager
+		class(implicit_heat_transfer_solver)    ,intent(inout)	:: this
+		type(data_manager)					    ,intent(inout)	:: manager
 		
 		integer		,dimension(3,2)	:: cons_inner_loop
-		integer		:: i,j,k		
+		integer		                :: i,j,k
 		
 		type(field_scalar_cons_pointer)	:: scal_ptr
 		type(field_vector_cons_pointer)	:: vect_ptr
