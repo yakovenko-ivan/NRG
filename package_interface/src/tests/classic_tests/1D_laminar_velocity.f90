@@ -75,11 +75,11 @@ program package_interface
 	
 	ierr = getcwd(initial_work_dir)
 	
-	do task1 = 2, 2
+	do task1 = 1, 1
 	do task2 = 1, 1
-	do task3 = 2, 2
-    do task4 = 12, 12
-	do task5 = 4, 4
+	do task3 = 1, 1
+    do task4 = 9, 9
+	do task5 = 2, 2
         
 	
 		work_dir = '1D_laminar_burning_velocity_test'

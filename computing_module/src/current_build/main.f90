@@ -171,10 +171,10 @@ program computing_module
 	
 	problem_mpi_support		= mpi_communications_c(problem_domain)
 
-	problem_manager			= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics)
-
 	problem_solver_options	= solver_options_c()
-	
+
+	problem_manager			= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics,problem_solver_options)
+    
 	call problem_manager%create_boundary_conditions(problem_boundaries)
 	call problem_manager%create_computational_mesh(problem_mesh)
 	call problem_manager%create_scalar_field(p				,'pressure'						,'P')
@@ -191,16 +191,13 @@ program computing_module
 	select case(problem_solver_options%get_solver_name())
 		case('cpm')
 			problem_cpm_solver = cpm_solver_c(	problem_manager,  &
-												problem_data_io			= problem_data_io		,	&
-												problem_solver_options	= problem_solver_options)
+												problem_data_io			= problem_data_io)
 		case('CABARET')
 			problem_cabaret_solver = cabaret_solver_c(	problem_manager,  &
-														problem_data_io			= problem_data_io		,	&
-														problem_solver_options	= problem_solver_options)
+														problem_data_io			= problem_data_io)
 		case('fds_low_mach')											
 			problem_fds_solver = fds_solver_c(	problem_manager,  &
-												problem_data_io			= problem_data_io		,	&
-												problem_solver_options	= problem_solver_options)																		
+												problem_data_io			= problem_data_io)																		
 	end select
 
 	problem_data_save			= data_save_c(problem_manager)

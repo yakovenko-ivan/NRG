@@ -9,8 +9,9 @@ module lagrangian_droplets_solver_class
 	use computational_domain_class
 	use thermophysical_properties_class
 	use chemical_properties_class
+    
 	use solver_options_class
-	
+    
 	use mpi_communications_class
 
 	implicit none
@@ -54,7 +55,8 @@ module lagrangian_droplets_solver_class
 		type(liquid_droplets_phase)			:: droplets_params
 
 		real(dp)							:: droplet_mass
-        		
+        real(dp)    , dimension(3)          :: g
+                
 		type(lagrangian_droplet)	,dimension(:)	,allocatable	:: droplets	
 		
 		integer								:: droplets_number
@@ -79,7 +81,7 @@ contains
 
 	subroutine pre_constructor(this,number_of_phases)
 		class(lagrangian_droplets_solver)	,intent(inout)	:: this	
-		integer					,intent(in)		:: number_of_phases
+		integer					            ,intent(in)		:: number_of_phases
 		
 		allocate(	E_f_prod_d(number_of_phases), rho_prod_d(number_of_phases), &
 					v_prod_d(number_of_phases), Y_prod_d(number_of_phases))	
@@ -105,7 +107,7 @@ contains
 		character(len=100)		:: system_command
 		character(len=40)		:: var_name, var_short_name
 		character(len=100)		:: file_name
-		
+        
 		integer	:: drop, dim
 		
 		cons_allocation_bounds		= manager%domain%get_local_utter_cells_bounds()
@@ -159,14 +161,16 @@ contains
 		call manager%create_vector_field(Y_prod_d(phase_number),	var_name,	var_short_name,	'chemical')
 		constructor%Y_prod%v_ptr		=> Y_prod_d(phase_number)        
 
-		constructor%phase_number    = phase_number
+		constructor%phase_number        = phase_number
 
-		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr
-		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
+		constructor%mesh%mesh_ptr	    => manager%computational_mesh_pointer%mesh_ptr
+		constructor%boundary%bc_ptr     => manager%boundary_conditions_pointer%bc_ptr
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
-		constructor%chem%chem_ptr	=> manager%chemistry%chem_ptr
-		constructor%domain			= manager%domain
+		constructor%chem%chem_ptr	    => manager%chemistry%chem_ptr
+		constructor%domain			    = manager%domain
 		
+        constructor%g                   = manager%solver_options%get_grav_acc()
+        
 		system_command = 'mkdir data_save_droplets'
 		call system(system_command)		
 		
@@ -217,7 +221,7 @@ contains
 
         this%droplets(1)%coords(1)			= 0.5_dp * (lengths(1,2) + cell_size(1))
         this%droplets(1)%coords(2)			= 0.5_dp * (lengths(2,2) + cell_size(1))
-        this%droplets(1)%coords(3)			= 0.5_dp * (lengths(3,2) + cell_size(1))
+        this%droplets(1)%coords(3)			= 0.5_dp * (cell_size(1)) !0.5_dp * (lengths(3,2) + cell_size(1))
         
         this%droplets(1)%outside_domain		= .false. 
         this%droplets(1)%temperature		= 300.0_dp
@@ -431,13 +435,13 @@ contains
 				!# Interpolate gas velocity to the droplet location using linear interpolation
 					gas_velocity = 0.0_dp
 					do dim = 1, dimensions
-						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dp*cell_size(dim)
+ 						lower_face	= mesh%mesh(dim,i,j,k) - 0.5_dp*cell_size(dim)
 						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dp*cell_size(dim)
 					
-						b = (v_f%pr(dim)%cells(dim,i,j,k)*higher_face - v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*lower_face) / (higher_face - lower_face) 
-						a = (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_f%pr(dim)%cells(dim,i,j,k)) / (higher_face - lower_face) 
-					
-						gas_velocity(dim) = a * this%droplets(drop)%coords(dim) + b
+                        a = (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - v_f%pr(dim)%cells(dim,i,j,k)) / cell_size(dim)
+						b = v_f%pr(dim)%cells(dim,i,j,k)
+
+						gas_velocity(dim) = a * (this%droplets(drop)%coords(dim) - lower_face) + b
 					end do
 				
 					abs_relative_velocity = 0.0_dp
@@ -477,22 +481,10 @@ contains
                         
 						do dim = 1, dimensions
 							
-                            
-                            
-                            this%droplets(drop)%velocity(dim)	= gas_velocity(dim) + (this%droplets(drop)%velocity(dim) - gas_velocity(dim))*exp(-beta_p * droplet_time_step)
+                            this%droplets(drop)%velocity(dim)	= gas_velocity(dim) + (this%droplets(drop)%velocity(dim) - gas_velocity(dim) - this%g(dim) / beta_p)*exp(-beta_p * droplet_time_step) + this%g(dim) / beta_p
                             this%droplets(drop)%coords(dim)		= this%droplets(drop)%coords(dim) + 0.5_dp * droplet_time_step*(this%droplets(drop)%velocity(dim) + old_velocity(dim))
                             
-                            !this%droplets(drop)%coords(dim) =	this%droplets(drop)%coords(dim) + (this%droplets(drop)%velocity(dim) + alpha_p * gas_velocity(dim)) * droplet_time_step / (1.0_dp + alpha_p) + &
-							!									alpha_p * log(1.0_dp + beta_p*droplet_time_step) / beta_p / (1.0_dp + alpha_p) * relative_velocity(dim)
-							!							
-							!this%droplets(drop)%velocity(dim)	= (this%droplets(drop)%velocity(dim) + (this%droplets(drop)%velocity(dim) + alpha_p*gas_velocity(dim)) * beta_p * droplet_time_step / (1.0_dp + alpha_p)) / (1.0_dp + beta_p*droplet_time_step)	
-					 
-!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dp/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
-!							droplet_acceleration(dim) = droplet_acceleration(dim) + 1.0_dp/(cell_volume * rhog_old) * (m_liq*(gas_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step + this%droplets(drop)%dm * relative_velocity(dim)) 
-							
-                            F_a(dim) = F_a(dim) + 1.0_dp/(cell_volume * rhog_old) * (m_liq*(old_velocity(dim) - this%droplets(drop)%velocity(dim))/time_step) ! 1/rho_g*f_b (4.43 FDS guide)
-
-                            !F_a(dim) = 1000.0_dp * 1.0_dp / (cell_volume * rhog_old) * ( -m_liq * (this%droplets(drop)%velocity(dim) - old_velocity(dim)) / droplet_time_step + this%droplets(drop)%dm * (this%droplets(drop)%velocity(dim) - old_velocity(dim)))
+                            F_a(dim) = 1.0_dp / (cell_volume) * ( this%g(dim) - m_liq * (this%droplets(drop)%velocity(dim) - old_velocity(dim)) / droplet_time_step + this%droplets(drop)%dm * (this%droplets(drop)%velocity(dim) - old_velocity(dim)))
                             
 						end do 
 					end if
@@ -509,21 +501,17 @@ contains
 						higher_face	= mesh%mesh(dim,i,j,k) + 0.5_dp*cell_size(dim)
 						
 						a = this%droplets(drop)%coords(dim) - lower_face
-						
 						b = higher_face - this%droplets(drop)%coords(dim) 
 					
-						v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dp - a/cell_size(dim)) * F_a(dim) 
-						v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (1.0_dp - b/cell_size(dim)) * F_a(dim) 
+						v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (a/cell_size(dim)) * F_a(dim) 
+						v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (b/cell_size(dim)) * F_a(dim) 
 						
-                        
-					!	v_prod%pr(dim)%cells(dim,i,j,k)										= v_prod%pr(dim)%cells(dim,i,j,k)									- (1.0_dp - this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
-					!	v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= v_prod%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- (this%droplets(drop)%coords(dim)) * droplet_acceleration(dim) 
                     end do
 			
                     !# Heat and evaporate droplet, account energy transfer
                     
                     !# Temperature dependence of latent heat of water
-					H_v	= 3.133e+06_dp - 2316.0_dp*Tp_old     !!2440622.73496162! droplet%material_latent_heat
+					H_v	= 3.133e+06_dp - 2316.0_dp*Tp_old     
 			        dH_v_dT = -2316_dp
                     
 					mol_mix_w = 0.0_dp
