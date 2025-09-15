@@ -35,14 +35,12 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/current_build/chemical_kinetics_solver.f90
 	${SRC_COMPUTE}/src/current_build/coarse_particles_method.f90
 	${SRC_COMPUTE}/src/current_build/cpm_solver.f90
-	${SRC_COMPUTE}/src/current_build/droplets_solver.f90
 	${SRC_COMPUTE}/src/current_build/fds_low_mach_solver.f90
 	${SRC_COMPUTE}/src/current_build/fickean_diffusion_solver.f90
 	${SRC_COMPUTE}/src/current_build/fourier_heat_transfer_solver.f90
-	${SRC_COMPUTE}/src/current_build/lagrangian_droplets_solver.f90
 	${SRC_COMPUTE}/src/current_build/lagrangian_particles_solver.f90
 	${SRC_COMPUTE}/src/current_build/main.f90
-	${SRC_COMPUTE}/src/current_build/particles_solver.f90
+	${SRC_COMPUTE}/src/current_build/continuous_particles_solver.f90
 	${SRC_COMPUTE}/src/current_build/riemann_solver.f90
 	${SRC_COMPUTE}/src/current_build/table_approximated_real_gas.f90
 	${SRC_COMPUTE}/src/current_build/viscosity_solver.f90
