@@ -1,4 +1,4 @@
-module droplets_solver_class
+module continuous_particles_solver_class
 
 	use kind_parameters
 	use global_data
@@ -20,16 +20,16 @@ module droplets_solver_class
 #endif
 
 	private
-	public	:: droplets_solver, droplets_solver_c
+	public	:: continuous_particles_solver, continuous_particles_solver_c
 
 	type(field_scalar_cons)	,dimension(:)	,allocatable	,target	:: T_d, T_d_int, rho_d, mass_d, numdens_d, E_f_prod_d, rho_prod_d, Esurf
 	type(field_scalar_flow)	,dimension(:)	,allocatable	,target	:: m_flux_d, numdens_flux_d
-	type(field_vector_cons)	,dimension(:)	,allocatable	,target	:: v_d, v_d_int, v_prod_d, Y_prod_d	
+	type(field_vector_cons)	,dimension(:)	,allocatable	,target	:: v_p, v_p_int, v_prod_d, Y_prod_d	
 
-	type	:: droplets_solver
+	type	:: continuous_particles_solver
 		type(field_scalar_cons_pointer)		:: T_d, T_d_int, rho_d, mass_d, numdens_d, T, rho, nu, kappa, E_f_prod, rho_prod, Esurf, foam_marker, p, time_boil, time_decay, werhop, werhop2
 		type(field_scalar_flow_pointer)		:: m_flux_d, numdens_flux_d
-		type(field_vector_cons_pointer)		:: v_d, v_d_int, v, v_prod, Y_prod	
+		type(field_vector_cons_pointer)		:: v_p, v_p_int, v, v_prod, Y_prod	
 		type(computational_domain)			:: domain
 
 		type(boundary_conditions_pointer)	:: boundary
@@ -37,41 +37,39 @@ module droplets_solver_class
 		type(chemical_properties_pointer)	:: chem
 		type(thermophysical_properties_pointer)		:: thermo
 		
-		type(liquid_droplets_phase)			:: droplets_params
-
-		real(dp)							:: droplet_mass
-        
+		type(particles_phase)			    :: particles_params
+		real(dp)							:: particle_mass
         integer                             :: phase_number
 	contains
 		procedure				::  set_initial_distributions
-		procedure				::	droplets_euler_step_v_E
-		procedure				::	droplets_lagrange_step
-		procedure				::	droplets_final_step
+		procedure				::	particles_euler_step_v_E
+		procedure				::	particles_lagrange_step
+		procedure				::	particles_final_step
 		procedure				::  apply_boundary_conditions_main
-		procedure				::  apply_boundary_conditions_interm_v_d
+		procedure				::  apply_boundary_conditions_interm_v_p
 		procedure				::	pre_constructor
 	end type
 
-	interface	droplets_solver_c
+	interface	continuous_particles_solver_c
 		module procedure	constructor
 	end interface
 
 contains
 
 	subroutine pre_constructor(this,number_of_phases)
-		class(droplets_solver)	,intent(inout)	:: this	
+		class(continuous_particles_solver)	,intent(inout)	:: this	
 		integer					,intent(in)		:: number_of_phases
 		
 		allocate(	T_d(number_of_phases), T_d_int(number_of_phases), rho_d(number_of_phases), mass_d(number_of_phases), numdens_d(number_of_phases), E_f_prod_d(number_of_phases), rho_prod_d(number_of_phases), &
-					m_flux_d(number_of_phases), numdens_flux_d(number_of_phases), v_d(number_of_phases), v_d_int(number_of_phases), v_prod_d(number_of_phases), Y_prod_d(number_of_phases), Esurf(number_of_phases))	
+					m_flux_d(number_of_phases), numdens_flux_d(number_of_phases), v_p(number_of_phases), v_p_int(number_of_phases), v_prod_d(number_of_phases), Y_prod_d(number_of_phases), Esurf(number_of_phases))	
 	
 	end subroutine
 
-	type(droplets_solver)	function constructor(manager,liquid_droplets,phase_number)
+	type(continuous_particles_solver)	function constructor(manager, particles ,phase_number)
 
-		type(data_manager)			, intent(inout)	:: manager
-		type(liquid_droplets_phase)	, intent(in)	:: liquid_droplets
-		integer						, intent(in)	:: phase_number
+		type(data_manager)			    , intent(inout)	:: manager
+		type(particles_phase)	        , intent(in)	:: particles
+		integer						    , intent(in)	:: phase_number
 
 		type(field_scalar_cons_pointer)	:: scal_ptr
 		type(field_vector_cons_pointer)	:: vect_ptr
@@ -86,7 +84,7 @@ contains
 		flow_allocation_bounds		= manager%domain%get_local_utter_faces_bounds()
 		dimensions					= manager%domain%get_domain_dimensions()   		
 		
-		constructor%droplets_params	= liquid_droplets
+		constructor%particles_params	= particles
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr			=> scal_ptr%s_ptr
@@ -112,67 +110,67 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
 		constructor%v%v_ptr				=> vect_ptr%v_ptr		
 		
-		write(var_name,'(A,I2.2)')		'temperature_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'temperature_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'T_d', phase_number
 		call manager%create_scalar_field(T_d(phase_number),	var_name,	var_short_name)
 		constructor%T_d%s_ptr		=> T_d(phase_number)
 		
-		write(var_name,'(A,I2.2)')		'temperature_droplets_interm', phase_number
+		write(var_name,'(A,I2.2)')		'temperature_particles_interm', phase_number
 		write(var_short_name,'(A,I2.2)')	'T_d_int', phase_number
 		call manager%create_scalar_field(T_d_int(phase_number),	var_name,	var_short_name)
 		constructor%T_d_int%s_ptr		=> T_d_int(phase_number)
 		
-		write(var_name,'(A,I2.2)')		'density_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'density_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'rho_d', phase_number
 		call manager%create_scalar_field(rho_d(phase_number),	var_name,	var_short_name)
 		constructor%rho_d%s_ptr		=> rho_d(phase_number)
 
-		write(var_name,'(A,I2.2)')		'mass_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'mass_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'mass_d', phase_number
 		call manager%create_scalar_field(mass_d(phase_number),	var_name,	var_short_name)
 		constructor%mass_d%s_ptr		=> mass_d(phase_number)        
     
-		write(var_name,'(A,I2.2)')		'number_density_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'number_density_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'numdens_d', phase_number
 		call manager%create_scalar_field(numdens_d(phase_number),	var_name,	var_short_name)
 		constructor%numdens_d%s_ptr		=> numdens_d(phase_number)    
         
-		write(var_name,'(A,I2.2)')		'velocity_droplets', phase_number
-		write(var_short_name,'(A,I2.2)')	'v_d', phase_number		
-		call manager%create_vector_field(v_d(phase_number),	var_name,	var_short_name,	'spatial')
-		constructor%v_d%v_ptr		=> v_d(phase_number)		
+		write(var_name,'(A,I2.2)')		'velocity_particles', phase_number
+		write(var_short_name,'(A,I2.2)')	'v_p', phase_number		
+		call manager%create_vector_field(v_p(phase_number),	var_name,	var_short_name,	'spatial')
+		constructor%v_p%v_ptr		=> v_p(phase_number)		
 		
-		write(var_name,'(A,I2.2)')		'velocity_droplets_interm', phase_number
-		write(var_short_name,'(A,I2.2)')	'v_d_int', phase_number		
-		call manager%create_vector_field(v_d_int(phase_number),	var_name,	var_short_name,	'spatial')
-		constructor%v_d_int%v_ptr		=> v_d_int(phase_number)			
+		write(var_name,'(A,I2.2)')		'velocity_particles_interm', phase_number
+		write(var_short_name,'(A,I2.2)')	'v_p_int', phase_number		
+		call manager%create_vector_field(v_p_int(phase_number),	var_name,	var_short_name,	'spatial')
+		constructor%v_p_int%v_ptr		=> v_p_int(phase_number)			
 		
-		write(var_name,'(A,I2.2)')		'mass_flux_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'mass_flux_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'm_flux_d', phase_number		
 		call manager%create_scalar_field(m_flux_d(phase_number),		var_name,	var_short_name)
 		constructor%m_flux_d%s_ptr		=> m_flux_d(phase_number)		
 	
-		write(var_name,'(A,I2.2)')		'number_density_flux_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'number_density_flux_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'm_flux_d', phase_number		
 		call manager%create_scalar_field(numdens_flux_d(phase_number),		var_name,	var_short_name)
 		constructor%numdens_flux_d%s_ptr		=> numdens_flux_d(phase_number)	        
  
-		write(var_name,'(A,I2.2)')		'density_production_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'density_production_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'rho_prod_d', phase_number
 		call manager%create_scalar_field(rho_prod_d(phase_number),	var_name,	var_short_name)
 		constructor%rho_prod%s_ptr		=> rho_prod_d(phase_number)        
         
-		write(var_name,'(A,I2.2)')		'energy_production_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'energy_production_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'E_f_prod_d', phase_number
 		call manager%create_scalar_field(E_f_prod_d(phase_number),	var_name,	var_short_name)
 		constructor%E_f_prod%s_ptr		=> E_f_prod_d(phase_number)
 
-		write(var_name,'(A,I2.2)')		'velocity_production_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'velocity_production_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'v_prod_d', phase_number		
 		call manager%create_vector_field(v_prod_d(phase_number),	var_name,	var_short_name,	'spatial')
 		constructor%v_prod%v_ptr		=> v_prod_d(phase_number)
         
-		write(var_name,'(A,I2.2)')		'concentration_production_droplets', phase_number
+		write(var_name,'(A,I2.2)')		'concentration_production_particles', phase_number
 		write(var_short_name,'(A,I2.2)')	'Y_prod_d', phase_number		
 		call manager%create_vector_field(Y_prod_d(phase_number),	var_name,	var_short_name,	'chemical')
 		constructor%Y_prod%v_ptr		=> Y_prod_d(phase_number)        
@@ -193,7 +191,7 @@ contains
 	end function
 
 	subroutine set_initial_distributions(this)
-		class(droplets_solver)	,intent(inout)	:: this
+		class(continuous_particles_solver)	,intent(inout)	:: this
 
 		integer		,dimension(3,2)	:: cons_inner_loop
 
@@ -207,7 +205,7 @@ contains
                     Esurf       => this%Esurf%s_ptr         , &
             		T_d			=> this%T_d%s_ptr			, &
 					T			=> this%T%s_ptr				, &
-					droplet 	=> this%droplets_params	    , &
+					particle 	=> this%particles_params	    , &
 					mesh		=> this%mesh%mesh_ptr		, &
 					bc			=> this%boundary%bc_ptr)	
 		
@@ -216,7 +214,7 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)	
 			if(bc%bc_markers(i,j,k) == 0) then
-                mass_d%cells(i,j,k)     = Pi*droplet%diameter**3 / 6.0_dp * droplet%material_density
+                mass_d%cells(i,j,k)     = Pi*particle%diameter**3 / 6.0_dp * particle%material_density
                 numdens_d%cells(i,j,k)  = rho_d%cells(i,j,k)/mass_d%cells(i,j,k)
 				T_d%cells(i,j,k)	    = 300.0_dp 
                 Esurf%cells(i,j,k)      = 0.03_dp * 4.0 * Pi * 0.0001_dp * 0.0001_dp * numdens_d%cells(i,j,k) 
@@ -229,9 +227,9 @@ contains
 	end subroutine
 	
 	
-	subroutine droplets_euler_step_v_E(this,time_step)
+	subroutine particles_euler_step_v_E(this,time_step)
 
-		class(droplets_solver)	,intent(inout)	:: this
+		class(continuous_particles_solver)	,intent(inout)	:: this
 		real(dp)				,intent(in)		:: time_step
 		real(dp)								:: F_stokes, Q_stokes, Nusselt
 		
@@ -269,15 +267,15 @@ contains
 					p			=> this%p%s_ptr			, &
                     numdens_d   => this%numdens_d%s_ptr , &
                     v			=> this%v%v_ptr			, &
-					v_d			=> this%v_d%v_ptr		, &
-					v_d_int		=> this%v_d_int%v_ptr	, &
+					v_p			=> this%v_p%v_ptr		, &
+					v_p_int		=> this%v_p_int%v_ptr	, &
 					kappa		=> this%kappa%s_ptr		, &
 					nu			=> this%nu%s_ptr		, &
                     rho_prod    => this%rho_prod%s_ptr	, &
 					E_f_prod	=> this%E_f_prod%s_ptr	, &
 					v_prod		=> this%v_prod%v_ptr	, &
                     Y_prod		=> this%Y_prod%v_ptr	, &		
-					droplet	    => this%droplets_params	, &
+					particle	    => this%particles_params	, &
                     chem        => this%chem%chem_ptr   , &
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
@@ -292,26 +290,26 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
                 
-                local_diameter = 6.0_dp * mass_d%cells(i,j,k) / Pi / droplet%material_density 
+                local_diameter = 6.0_dp * mass_d%cells(i,j,k) / Pi / particle%material_density 
                 local_diameter = local_diameter ** 0.3333333_dp
 
 				F_stokes = 0.0_dp
 				
 				do dim = 1,dimensions
-					F_stokes			= 3.0_dp * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_d%pr(dim)%cells(i,j,k)) ! [m/s^2]
+					F_stokes			= 3.0_dp * Pi * local_diameter * nu%cells(i,j,k) / mass_d%cells(i,j,k) * ( v%pr(dim)%cells(i,j,k) - v_p%pr(dim)%cells(i,j,k)) ! [m/s^2]
 			
 					v_prod%pr(dim)%cells(i,j,k)		= - F_stokes * rho_d%cells(i,j,k) / rho%cells(i,j,k)					! [m/s^2]
-					v_d_int%pr(dim)%cells(i,j,k)	= v_d%pr(dim)%cells(i,j,k) + F_stokes * time_step						
+					v_p_int%pr(dim)%cells(i,j,k)	= v_p%pr(dim)%cells(i,j,k) + F_stokes * time_step						
 
 					E_f_prod%cells(i,j,k)			= - F_stokes * v%pr(dim)%cells(i,j,k) * rho_d%cells(i,j,k)				! [J/m^3/s]
 				end do		
 					
-				Q_stokes					= 3.0_dp * kappa%cells(i,j,k) * Nusselt / (0.5_dp * local_diameter ** 2 * droplet%material_heat_capacity * droplet%material_density) * (T%cells(i,j,k) - T_d%cells(i,j,k))
+				Q_stokes					= 3.0_dp * kappa%cells(i,j,k) * Nusselt / (0.5_dp * local_diameter ** 2 * particle%material_heat_capacity * particle%material_density) * (T%cells(i,j,k) - T_d%cells(i,j,k))
 
-				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_d%cells(i,j,k) * droplet%material_heat_capacity ! [J/m^3/s]
+				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_d%cells(i,j,k) * particle%material_heat_capacity ! [J/m^3/s]
 				T_d_int%cells(i,j,k)		= T_d%cells(i,j,k) + Q_stokes * time_step
 
-                if (droplet%combustible .eqv. .false.) then
+                if (particle%evaporating == .false.) then
 					temp_cr = 373.15
                 else
 					temp_cr = 371.55    
@@ -320,8 +318,8 @@ contains
 				if (T_d_int%cells(i,j,k) > temp_cr) T_d_int%cells(i,j,k) = temp_cr
                 
                 if (T%cells(i,j,k) >= temp_cr) then
-                    evaporation_rate = 2.0_dp * local_diameter * Pi * kappa%cells(i,j,k)/droplet%material_heat_capacity  &
-                                     * log(1.0_dp+droplet%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/droplet%material_latent_heat)/mass_d%cells(i,j,k)	! [1/s]
+                    evaporation_rate = 2.0_dp * local_diameter * Pi * kappa%cells(i,j,k)/particle%material_heat_capacity  &
+                                     * log(1.0_dp+particle%material_heat_capacity*(T%cells(i,j,k) - T_d%cells(i,j,k))/particle%material_latent_heat)/mass_d%cells(i,j,k)	! [1/s]
                     
                     if (j > cons_inner_loop(2,2) - 2)  evaporation_rate = 0.0_dp
                     
@@ -342,17 +340,17 @@ contains
 
 !						rho%cells(i,j,k)    =   rho%cells(i,j,k) + evaporation_rate*rho_d%cells(i,j,k)*time_step
                         
-						if (droplet%combustible .eqv. .false.) then
+						if (particle%evaporating .eqv. .false.) then
 							Y_prod%pr(H2O_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)	! [kg/m^3/s]
 						else
 							Y_prod%pr(C7H16_index)%cells(i,j,k)	= evaporation_rate*rho_d%cells(i,j,k)
 						end if
 
 						do dim = 1,dimensions
-							v_prod%pr(dim)%cells(i,j,k)     = v_prod%pr(dim)%cells(i,j,k)	+ evaporation_rate*rho_d%cells(i,j,k)/rho%cells(i,j,k)*v_d%pr(dim)%cells(i,j,k)	! [m/s^2]
+							v_prod%pr(dim)%cells(i,j,k)     = v_prod%pr(dim)%cells(i,j,k)	+ evaporation_rate*rho_d%cells(i,j,k)/rho%cells(i,j,k)*v_p%pr(dim)%cells(i,j,k)	! [m/s^2]
 						end do
 
-						E_f_prod%cells(i,j,k)			    = E_f_prod%cells(i,j,k) - evaporation_rate*droplet%material_latent_heat*rho_d%cells(i,j,k)		! [J/m^3/s]
+						E_f_prod%cells(i,j,k)			    = E_f_prod%cells(i,j,k) - evaporation_rate*particle%material_latent_heat*rho_d%cells(i,j,k)		! [J/m^3/s]
                         
 					else
 						evaporation_rate    = 0.0_dp
@@ -370,9 +368,9 @@ contains
 	end subroutine
 
 	
-	subroutine droplets_lagrange_step(this,time_step)
+	subroutine particles_lagrange_step(this,time_step)
  
-		class(droplets_solver)	,intent(inout)	:: this
+		class(continuous_particles_solver)	,intent(inout)	:: this
 		real(dp)				,intent(in)		:: time_step
  
 		real(dp)	:: av_velocity, dif_velocity
@@ -401,7 +399,7 @@ contains
                     mass_d      => this%mass_d%s_ptr    , &
 					numdens_d	=> this%numdens_d%s_ptr	, &		
 					rho_d		=> this%rho_d%s_ptr		, &
-					v_d_int		=> this%v_d_int%v_ptr	, &
+					v_p_int		=> this%v_p_int%v_ptr	, &
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
 					
@@ -431,8 +429,8 @@ contains
 							if(dim==1) cell_surface_area(dim) = cell_surface_area(dim) * (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2	
 					end select				
 		
-                    av_velocity     = 0.5_dp *(v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_d_int%pr(dim)%cells(i,j,k))
-                    dif_velocity    = time_step *(v_d_int%pr(dim)%cells(i,j,k) - v_d_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(dim)
+                    av_velocity     = 0.5_dp *(v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_p_int%pr(dim)%cells(i,j,k))
+                    dif_velocity    = time_step *(v_p_int%pr(dim)%cells(i,j,k) - v_p_int%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(dim)
                     if( av_velocity >= 0 ) then
                         m_flux_d%cells(dim,i,j,k)       = rho_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	* av_velocity * (cell_surface_area(dim) ) * time_step / (1.0_dp + dif_velocity)
                         if (mass_d%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) /= 0.0_dp) then 
@@ -478,9 +476,9 @@ contains
 		continue 
 	end subroutine
 
-	subroutine droplets_final_step(this,time_step)
+	subroutine particles_final_step(this,time_step)
  
-		class(droplets_solver)	,intent(inout)	:: this
+		class(continuous_particles_solver)	,intent(inout)	:: this
 		real(dp)				,intent(in)		:: time_step
  
 		real(dp)	:: D11, D12, D21, D22, rho_d_old, av_velocity1, av_velocity2
@@ -508,8 +506,8 @@ contains
 					rho_d		=> this%rho_d%s_ptr		, &
 					T_d			=> this%T_d%s_ptr		, &
 					T_d_int		=> this%T_d_int%s_ptr	, &
-					v_d			=> this%v_d%v_ptr		, &
-					v_d_int		=> this%v_d_int%v_ptr	, &
+					v_p			=> this%v_p%v_ptr		, &
+					v_p_int		=> this%v_p_int%v_ptr	, &
 					mesh		=> this%mesh%mesh_ptr	, &
 					bc			=> this%boundary%bc_ptr)
  
@@ -547,7 +545,7 @@ contains
 				T_d%cells(i,j,k)	= T_d_int%cells(i,j,k)  * rho_d_old / rho_d%cells(i,j,k)
 
 				do dim = 1,dimensions
-					v_d%pr(dim)%cells(i,j,k)	= v_d_int%pr(dim)%cells(i,j,k) * rho_d_old / rho_d%cells(i,j,k)
+					v_p%pr(dim)%cells(i,j,k)	= v_p_int%pr(dim)%cells(i,j,k) * rho_d_old / rho_d%cells(i,j,k)
 				end do
 
  
@@ -564,8 +562,8 @@ contains
 					k_ind1 = k - I_m(dim2,3)
 					k_ind2 = k + I_m(dim2,3)
  
-                    av_velocity1 = v_d_int%pr(dim2)%cells(i_ind1,j_ind1,k_ind1) + v_d_int%pr(dim2)%cells(i,j,k)
-                    av_velocity2 = v_d_int%pr(dim2)%cells(i_ind2,j_ind2,k_ind2) + v_d_int%pr(dim2)%cells(i,j,k)
+                    av_velocity1 = v_p_int%pr(dim2)%cells(i_ind1,j_ind1,k_ind1) + v_p_int%pr(dim2)%cells(i,j,k)
+                    av_velocity2 = v_p_int%pr(dim2)%cells(i_ind2,j_ind2,k_ind2) + v_p_int%pr(dim2)%cells(i,j,k)
  
                     if(av_velocity1 > 0.0) then
 						D11 = 1.0_dp
@@ -585,10 +583,10 @@ contains
 															-  D22 * T_d_int%cells(i,j,k)				 * abs(m_flux_d%cells(dim2,i_ind2,j_ind2,k_ind2))) /  rho_d%cells(i,j,k)  /(cell_volume)
  
 					do dim1 = 1,dimensions
-						v_d%pr(dim1)%cells(i,j,k) = v_d%pr(dim1)%cells(i,j,k)	+ (D11 * v_d_int%pr(dim1)%cells(i_ind1,j_ind1,k_ind1)	* abs(m_flux_d%cells(dim2,i,j,k)) &
-																				+  D21 * v_d_int%pr(dim1)%cells(i_ind2,j_ind2,k_ind2)	* abs(m_flux_d%cells(dim2,i_ind2,j_ind2,k_ind2)) &
-																				-  D12 * v_d_int%pr(dim1)%cells(i,j,k)				* abs(m_flux_d%cells(dim2,i,j,k)) &
-																				-  D22 * v_d_int%pr(dim1)%cells(i,j,k)				* abs(m_flux_d%cells(dim2,i_ind2,j_ind2,k_ind2))) / rho_d%cells(i,j,k) / (cell_volume)
+						v_p%pr(dim1)%cells(i,j,k) = v_p%pr(dim1)%cells(i,j,k)	+ (D11 * v_p_int%pr(dim1)%cells(i_ind1,j_ind1,k_ind1)	* abs(m_flux_d%cells(dim2,i,j,k)) &
+																				+  D21 * v_p_int%pr(dim1)%cells(i_ind2,j_ind2,k_ind2)	* abs(m_flux_d%cells(dim2,i_ind2,j_ind2,k_ind2)) &
+																				-  D12 * v_p_int%pr(dim1)%cells(i,j,k)				* abs(m_flux_d%cells(dim2,i,j,k)) &
+																				-  D22 * v_p_int%pr(dim1)%cells(i,j,k)				* abs(m_flux_d%cells(dim2,i_ind2,j_ind2,k_ind2))) / rho_d%cells(i,j,k) / (cell_volume)
 					end do
  
                 end do
@@ -603,9 +601,9 @@ contains
 		end associate
 	end subroutine
 
-	subroutine apply_boundary_conditions_interm_v_d(this)
+	subroutine apply_boundary_conditions_interm_v_p(this)
 
-		class(droplets_solver)		,intent(inout)		:: this
+		class(continuous_particles_solver)		,intent(inout)		:: this
 
 		integer	:: dimensions
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -619,7 +617,7 @@ contains
 				
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
 		
-		associate(  v_d_int			=> this%v_d_int%v_ptr		, &
+		associate(  v_p_int			=> this%v_p_int%v_ptr		, &
 					bc				=> this%boundary%bc_ptr	, &
 					mesh			=> this%mesh%mesh_ptr)
 
@@ -640,9 +638,9 @@ contains
 
 								do dim1 = 1, dimensions
 									if(dim1 == dim) then
-										v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v_d_int%pr(dim1)%cells(i,j,k)
+										v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v_p_int%pr(dim1)%cells(i,j,k)
 									else
-										v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
+										v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p_int%pr(dim1)%cells(i,j,k)
 									end if
 								end do
 								
@@ -650,11 +648,11 @@ contains
 								select case(boundary_type_name)
 									case ('inlet')
 										do dim1 = 1, dimensions
-											if(dim1 == dim)	v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
+											if(dim1 == dim)	v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p_int%pr(dim1)%cells(i,j,k)
 										end do
 									case ('outlet')
 										do dim1 = 1, dimensions
-											if(dim1 == dim)	v_d_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d_int%pr(dim1)%cells(i,j,k)
+											if(dim1 == dim)	v_p_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p_int%pr(dim1)%cells(i,j,k)
 										end do
 								end select
 
@@ -675,8 +673,8 @@ contains
 	
 	subroutine apply_boundary_conditions_main(this, time)
 
-		class(droplets_solver)		,intent(inout)		:: this
-		real(dp)					,intent(in)			:: time
+		class(continuous_particles_solver)		,intent(inout)		:: this
+		real(dp)					            ,intent(in)			:: time
 
 		character(len=20)		:: boundary_type_name
 		real(dp)				:: farfield_density, farfield_pressure, farfield_rhod, wall_temperature
@@ -699,8 +697,8 @@ contains
 		associate(  T_d				=> this%T_d%s_ptr			, &
 					rho_d			=> this%rho_d%s_ptr			, &
 					mass_d          => this%mass_d%s_ptr        , &
-					v_d				=> this%v_d%v_ptr			, &
-					droplet			=> this%droplets_params	    , &
+					v_p				=> this%v_p%v_ptr			, &
+					particle        => this%particles_params	    , &
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
@@ -725,9 +723,9 @@ contains
 
 								do dim1 = 1, dimensions
 									if(dim1 == dim) then
-										v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v_d%pr(dim1)%cells(i,j,k)
+										v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v_p%pr(dim1)%cells(i,j,k)
 									else
-										v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+										v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p%pr(dim1)%cells(i,j,k)
 									end if
 								end do								
 								
@@ -741,7 +739,7 @@ contains
 										if(.not.bc%boundary_types(bound_number)%is_slip()) then
 											do dim1 = 1, dimensions
 												if (dim1 /= dim) then	
-													v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
+													v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
 												end if
 											end do
 										end if
@@ -757,17 +755,17 @@ contains
 										end if
 										
 										T_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= 300.0_dp
-										mass_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))     = Pi*droplet%diameter**3 / 6.0_dp * droplet%material_density
+										mass_d%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))     = Pi*particle%diameter**3 / 6.0_dp * particle%material_density
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-												v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+												v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p%pr(dim1)%cells(i,j,k)
 											else
-												v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+												v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p%pr(dim1)%cells(i,j,k)
 											end if
 										end do									
 									case ('outlet')
 										do dim1 = 1, dimensions
-											if(dim1 == dim)	v_d%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_d%pr(dim1)%cells(i,j,k)
+											if(dim1 == dim)	v_p%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_p%pr(dim1)%cells(i,j,k)
 										end do
 								end select
 								

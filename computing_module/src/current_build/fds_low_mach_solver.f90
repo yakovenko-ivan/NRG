@@ -16,9 +16,8 @@ module fds_low_mach_solver_class
 	use viscosity_solver_class
 	use fourier_heat_transfer_solver_class
 	use fickean_diffusion_solver_class
-	use lagrangian_droplets_solver_class
 	use lagrangian_particles_solver_class
-	use droplets_solver_class
+	use continuous_particles_solver_class
 	
 	use solver_options_class
     
@@ -70,7 +69,7 @@ module fds_low_mach_solver_class
 		real(dp)		            :: courant_fraction
 		real(dp)		            :: time, time_step, initial_time_step
         real(dp)    , dimension(3)  :: g
-		integer			            :: additional_particles_phases_number, additional_droplets_phases_number
+		integer			            :: additional_particles_phases_number
 		
 		logical			            :: perturbed_velocity_flag, stabilizing_inlet_flag, igniter_flag 
         
@@ -80,11 +79,8 @@ module fds_low_mach_solver_class
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(table_approximated_real_gas)	:: state_eq
 
-		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver			!# Lagrangian droplets solver
-!		type(droplets_solver)			, dimension(:)	    ,allocatable	:: droplets_solver			!# Continuum droplets solver
-		
 		type(lagrangian_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
-!		type(particles_solver)			, dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
+!		type(continuum_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
 		
 		type(computational_domain)					:: domain
 		type(thermophysical_properties_pointer)		:: thermo		
@@ -103,14 +99,9 @@ module fds_low_mach_solver_class
 		type(field_vector_cons_pointer)	:: D
 		type(field_vector_flow_pointer)	:: v_f		, v_f_old
 		
-		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	::  rho_prod_droplets, E_f_prod_droplets, E_f_prod_particles
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_droplets		
-		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Lagrangian droplets solver
-!		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Continuum droplets solver
-		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_particles			!# Lagrangian particles solver
-!		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_particles			!# Continuum particles solver		
-
-
+		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	::  rho_prod_particles, E_f_prod_particles
+		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_particles, v_prod_particles		
+        
 		real(dp)	,dimension(:,:,:,:)	,allocatable	:: vorticity, grad_F_a, grad_F_b
 		real(dp)	,dimension(:,:,:)	,allocatable	:: p_old
 		
@@ -171,11 +162,10 @@ contains
 		integer	,dimension(3,2)	:: cons_utter_loop, cons_inner_loop
 		integer	,dimension(3,2)	:: flow_inner_loop, loop
 		
-		integer				:: species_number
+		integer				    :: species_number
 
-		type(liquid_droplets_phase)     :: droplets_params
-		type(solid_particles_phase)     :: particles_params
-		integer				:: particles_phase_counter, droplets_phase_counter		
+		type(particles_phase)   :: particles_params
+		integer				    :: particles_phase_counter
 		
 		character(len=40)	:: var_name
 		
@@ -215,7 +205,6 @@ contains
             
         constructor%g                   = manager%solver_options%get_grav_acc()
         
-		constructor%additional_droplets_phases_number	= manager%solver_options%get_additional_droplets_phases_number()		
 		constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()
 		
 		constructor%domain				= manager%domain
@@ -339,53 +328,31 @@ contains
 			constructor%v_prod_sources%v_ptr	=> v_prod_sources
         end if
         
-		if(constructor%additional_droplets_phases_number /= 0) then
-			allocate(constructor%droplets_solver(constructor%additional_droplets_phases_number))
-			call constructor%droplets_solver(1)%pre_constructor(constructor%additional_droplets_phases_number)
-			allocate(constructor%rho_prod_droplets(constructor%additional_droplets_phases_number))
-			allocate(constructor%E_f_prod_droplets(constructor%additional_droplets_phases_number))
-			allocate(constructor%v_prod_droplets(constructor%additional_droplets_phases_number))
-			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
-			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-				droplets_params = manager%solver_options%get_droplets_params(droplets_phase_counter)
-				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
-!				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
-				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%E_f_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr
-				write(var_name,'(A,I2.2)') 'density_production_droplets', droplets_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%rho_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
-				write(var_name,'(A,I2.2)') 'velocity_production_droplets', droplets_phase_counter						
-				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian droplets solver
-				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian droplets solver
-!				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum droplets solver								
-!				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum droplets solver
-				write(var_name,'(A,I2.2)') 'concentration_production_droplets', droplets_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%Y_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
-			end do		
-		end if   
-		
 		if(constructor%additional_particles_phases_number /= 0) then
 			allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
 			call constructor%particles_solver(1)%pre_constructor(constructor%additional_particles_phases_number)
+			allocate(constructor%rho_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
+			allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
 			do particles_phase_counter = 1, constructor%additional_particles_phases_number
 				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
-				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)	!# Lagrangian particles solver
-!				constructor%particles_solver(particles_phase_counter)	= particles_solver_c(manager, particles_params, particles_phase_counter)			!# Continuum particles solver
+				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Lagrangian particles solver
+!				constructor%particles_solver(particles_phase_counter)	= continuous_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Continuum particles solver
 				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
 				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_ptr%s_ptr
+				write(var_name,'(A,I2.2)') 'density_production_particles', particles_phase_counter
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
+				constructor%rho_prod_particles(particles_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
 				write(var_name,'(A,I2.2)') 'velocity_production_particles', particles_phase_counter						
-				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian particles solver
-				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian particles solver
-!				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum particles solver								
-!				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum particles solver
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)                        !# Lagrangian particles solver
+				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Lagrangian particles solver
+    			write(var_name,'(A,I2.2)') 'concentration_production_particles', particles_phase_counter
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
+				constructor%Y_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
 			end do		
-		end if
+		end if   
 		
 		if (constructor%reactive_flag) then
 			constructor%chem_kin_solver		= chemical_kinetics_solver_c(manager)
@@ -461,13 +428,7 @@ contains
 			call problem_data_io%add_io_scalar_cons_field(constructor%div_v)
 		
 			constructor%p_dyn%s_ptr%cells		= 0.0_dp 
-	
-			if(constructor%additional_droplets_phases_number /= 0) then
-				do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-					call constructor%droplets_solver(droplets_phase_counter)%set_initial_distributions()
-				end do
-			end if  
-			
+
 			if(constructor%additional_particles_phases_number /= 0) then
 				do particles_phase_counter = 1, constructor%additional_particles_phases_number
 					call constructor%particles_solver(particles_phase_counter)%set_initial_distributions()
@@ -713,7 +674,7 @@ contains
 		integer				,intent(in)		:: iteration
         logical				,intent(inout)	:: stop_flag
 		
-		integer	:: droplets_phase_counter, particles_phase_counter
+		integer	:: particles_phase_counter
 		integer	:: specie
 
 		logical	:: stabilized_flag
@@ -747,18 +708,7 @@ contains
         call fds_heattransfer_timer%toc(new_iter=.true.)
  
 		if (this%perturbed_velocity_flag)		call this%perturb_velocity_field(this%time_step)
-        
-		if(this%additional_droplets_phases_number /= 0) then
-			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
-				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main(this%time)    !# Continuum droplets solver
-				!call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
-				!call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
-				!call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
-				!call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)			!# Continuum droplets solver		
-			end do		
-		end if  	
-		
+
 		if(this%additional_particles_phases_number /= 0) then
 			do particles_phase_counter = 1, this%additional_particles_phases_number
 				call this%particles_solver(particles_phase_counter)%particles_solve(this%time_step)				!# Lagrangian particles solver
@@ -843,10 +793,10 @@ contains
 		integer	,dimension(3,2)	:: cons_inner_loop
 		
 		real(dp), dimension (3,3)	:: lame_coeffs
-		character(len=20)				:: coordinate_system
+		character(len=20)			:: coordinate_system
 		
 		integer	:: bound_number
-		integer :: i,j,k,dim,spec,droplets_phase_counter
+		integer :: i,j,k,dim,spec,particles_phase_counter
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -857,18 +807,18 @@ contains
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
 
-		associate (	rho				=> this%rho%s_ptr			, &
-					rho_int			=> this%rho_int%s_ptr		, &
-                    rho_old         => this%rho_old%s_ptr		, &
-					v_f				=> this%v_f%v_ptr			, &
-					Y				=> this%Y%v_ptr				, &
-					Y_int			=> this%Y_int%v_ptr			, &
-					Y_prod_diff		=> this%Y_prod_diff%v_ptr	, &
-					Y_prod_chem		=> this%Y_prod_chem%v_ptr	, &
-					Y_prod_droplets	=> this%Y_prod_droplets	, &
-                    Y_old           => this%Y_old%v_ptr         , &
-					mesh			=> this%mesh%mesh_ptr		, &
-					bc				=> this%boundary%bc_ptr)
+		associate (	rho				    => this%rho%s_ptr			, &
+					rho_int			    => this%rho_int%s_ptr		, &
+                    rho_old             => this%rho_old%s_ptr		, &
+					v_f				    => this%v_f%v_ptr			, &
+					Y				    => this%Y%v_ptr				, &
+					Y_int			    => this%Y_int%v_ptr			, &
+					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &
+					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &
+					Y_prod_particles	=> this%Y_prod_particles	, &
+                    Y_old               => this%Y_old%v_ptr         , &
+					mesh			    => this%mesh%mesh_ptr		, &
+					bc				    => this%boundary%bc_ptr)
 					
 			!$omp parallel default(shared)  private(i,j,k,dim,spec,spec_summ,rhs,flux_right,flux_left,lame_coeffs) !, &
 			!!$omp& firstprivate(this)
@@ -940,9 +890,9 @@ contains
 						if (this%diffusion_flag)	Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_diff%pr(spec)%cells(i,j,k) * time_step	![kg/m^3]
 						if (this%reactive_flag)		Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_chem%pr(spec)%cells(i,j,k) * time_step	![kg/m^3]		
 						
-						if (this%additional_droplets_phases_number /= 0) then
-							do droplets_phase_counter = 1, this%additional_droplets_phases_number
-								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_droplets(droplets_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step		![kg/m^3]
+						if (this%additional_particles_phases_number /= 0) then
+							do particles_phase_counter = 1, this%additional_particles_phases_number
+								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step		![kg/m^3]
 							end do		
 						end if						
 						
@@ -1026,7 +976,7 @@ contains
 		integer	,dimension(3,2)	:: cons_inner_loop
 
 		integer	:: bound_number, plus, sign
-		integer :: i,j,k,dim,spec,droplets_phase_counter
+		integer :: i,j,k,dim,spec,particles_phase_counter
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -1054,26 +1004,26 @@ contains
         
     !	print *, '2', div_v_int%cells(50,20,1),T%cells(50,20,1),D_sum,P_sum
 		
-		associate (	div_v_int		=> this%div_v_int%s_ptr		, &
-					T				=> this%T%s_ptr				, &
-					rho				=> this%rho%s_ptr			, &
-					p_stat			=> this%p_stat%s_ptr		, &
-					gamma			=> this%gamma%s_ptr			, &
-					h_s				=> this%h_s%s_ptr			, &
-					dp_stat_dt		=> this%dp_stat_dt%s_ptr	, &
-					v_f				=> this%v_f%v_ptr			, &
-					Y				=> this%Y%v_ptr				, &
-					Y_prod_diff		=> this%Y_prod_diff%v_ptr	, &	
-					Y_prod_chem		=> this%Y_prod_chem%v_ptr	, &	
-					E_f_prod_chem 	=> this%E_f_prod_chem%s_ptr	, &
-					E_f_prod_heat	=> this%E_f_prod_heat%s_ptr	, &
-					E_f_prod_gd 	=> this%E_f_prod_gd%s_ptr	, &
-					E_f_prod_visc	=> this%E_f_prod_visc%s_ptr	, &
-					E_f_prod_diff	=> this%E_f_prod_diff%s_ptr	, &	
-					E_f_prod_droplets	=> this%E_f_prod_droplets, &
-					thermo			=> this%thermo%thermo_ptr	, &
-					mesh			=> this%mesh%mesh_ptr		, &
-					bc				=> this%boundary%bc_ptr)
+		associate (	div_v_int		    => this%div_v_int%s_ptr		, &
+					T				    => this%T%s_ptr				, &
+					rho				    => this%rho%s_ptr			, &
+					p_stat			    => this%p_stat%s_ptr		, &
+					gamma			    => this%gamma%s_ptr			, &
+					h_s				    => this%h_s%s_ptr			, &
+					dp_stat_dt		    => this%dp_stat_dt%s_ptr	, &
+					v_f				    => this%v_f%v_ptr			, &
+					Y				    => this%Y%v_ptr				, &
+					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &	
+					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &	
+					E_f_prod_chem 	    => this%E_f_prod_chem%s_ptr	, &
+					E_f_prod_heat	    => this%E_f_prod_heat%s_ptr	, &
+					E_f_prod_gd 	    => this%E_f_prod_gd%s_ptr	, &
+					E_f_prod_visc	    => this%E_f_prod_visc%s_ptr	, &
+					E_f_prod_diff	    => this%E_f_prod_diff%s_ptr	, &	
+					E_f_prod_particles	=> this%E_f_prod_particles  , &
+					thermo			    => this%thermo%thermo_ptr	, &
+					mesh			    => this%mesh%mesh_ptr		, &
+					bc				    => this%boundary%bc_ptr)
 
 			!$omp parallel default(shared)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs, average_molar_mass, mol_mix_conc) !, &
 			!!$omp& firstprivate(this)
@@ -1126,9 +1076,9 @@ contains
 						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mol_mix_conc / thermo%molar_masses(spec)
 					end do		
 
-					if (this%additional_droplets_phases_number /= 0) then
-						do droplets_phase_counter = 1, this%additional_droplets_phases_number
-							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + E_f_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)	![J/m^3/s]
+					if (this%additional_particles_phases_number /= 0) then
+						do particles_phase_counter = 1, this%additional_particles_phases_number
+							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)	![J/m^3/s]
 						end do		
 					end if
 					
@@ -1320,7 +1270,7 @@ contains
 		character(len=20)		:: boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3
 		real(dp)				:: bc_coeff
 		
-		integer	:: droplets_phase_counter, particles_phase_counter
+		integer	:: particles_phase_counter
 		integer	:: sign, bound_number, bound_number1, bound_number2, bound_number3
 		integer :: i,j,k,dim,dim1,dim2,spec,plus
 
@@ -1365,21 +1315,20 @@ contains
 			r_summ1			= 0.0_dp
             r_summ2			= 0.0_dp
             
-            associate ( rho_old			=> this%rho_old%s_ptr		, &
-                        rho_int			=> this%rho_int%s_ptr		, &
-                        div_v_int		=> this%div_v_int%s_ptr		, &
-                        ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
-                        F_a				=> this%F_a%s_ptr			, &
-                        vorticity		=> this%vorticity			, &
-                        grad_F_a		=> this%grad_F_a			, &
-                        v_f				=> this%v_f%v_ptr			, &
-                        v_f_old			=> this%v_f_old%v_ptr		, &
-                        v_prod_visc		=> this%v_prod_visc%v_ptr	, &
-                        v_prod_droplets	=> this%v_prod_droplets		, &
-                        v_prod_particles=> this%v_prod_particles	, &
-                        v_prod_sources	=> this%v_prod_sources%v_ptr , &
-                        mesh			=> this%mesh%mesh_ptr		, &
-                        bc				=> this%boundary%bc_ptr		)
+            associate ( rho_old			    => this%rho_old%s_ptr		    , &
+                        rho_int			    => this%rho_int%s_ptr		    , &
+                        div_v_int		    => this%div_v_int%s_ptr		    , &
+                        ddiv_v_dt		    => this%ddiv_v_dt%s_ptr		    , &
+                        F_a				    => this%F_a%s_ptr			    , &
+                        vorticity		    => this%vorticity			    , &
+                        grad_F_a		    => this%grad_F_a			    , &
+                        v_f				    => this%v_f%v_ptr			    , &
+                        v_f_old			    => this%v_f_old%v_ptr		    , &
+                        v_prod_visc		    => this%v_prod_visc%v_ptr	    , &
+                        v_prod_particles    => this%v_prod_particles	    , &
+                        v_prod_sources	    => this%v_prod_sources%v_ptr    , &
+                        mesh			    => this%mesh%mesh_ptr		    , &
+                        bc				    => this%boundary%bc_ptr		)
 
 			!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity,sign,bound_number,bound_number1,bound_number2,bound_number3,plus,boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3,bc_coeff) !, &
 			!!$omp& firstprivate(this)
@@ -1611,6 +1560,15 @@ contains
 
 							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * (0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
 							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * (0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+						    
+                            if (this%additional_particles_phases_number /= 0) then
+							    do particles_phase_counter = 1, this%additional_particles_phases_number
+								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k)  + (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * (0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))	![m/s^2]						!# Lagrangian particles solver
+								    !if (bc%bc_markers(i,j,k) == 0) then
+								    !	F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum particles solver
+								    !end if
+							    end do		
+						    end if
                         else
 							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
@@ -1618,6 +1576,14 @@ contains
 								
 							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * (0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
 							if (this%perturbed_velocity)	F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * (0.5_dp*(v_prod_sources%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
+                            if (this%additional_particles_phases_number /= 0) then
+							    do particles_phase_counter = 1, this%additional_particles_phases_number
+								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k)  + (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * (0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))	![m/s^2]						!# Lagrangian particles solver
+								    !if (bc%bc_markers(i,j,k) == 0) then
+								    !	F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum particles solver
+								    !end if
+							    end do		
+						    end if
 						end if
 					end if
 				end do
@@ -1642,33 +1608,16 @@ contains
 				do i = loop(1,1),loop(1,2)
 				
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then 
-						if (this%additional_droplets_phases_number /= 0) then
-							do droplets_phase_counter = 1, this%additional_droplets_phases_number
-                                F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)	![m/s^2]						!# Lagrangian droplets solver
-								if (bc%bc_markers(i,j,k) == 0) then
-!									F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_droplets(droplets_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum droplets solver
-								end if
-							end do		
-						end if
-							
-						if (this%additional_particles_phases_number /= 0) then
-							do particles_phase_counter = 1, this%additional_particles_phases_number
-								F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k)	![m/s^2]						!# Lagrangian particles solver
-								!if (bc%bc_markers(i,j,k) == 0) then
-								!	F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) + 0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) ![m/s^2] !# Continuum particles solver
-								!end if
-							end do		
-						end if							
 							
 						do dim1 = 1, 3
 						do dim2 = 1, dimensions
 								if ((dim1 /= dim).and.(dim2 /= dim1).and.(dim2 /= dim)) then
 								if(((dim-dim1) == 1).or.((dim-dim1) == -2)) then
 									F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - 0.25_dp * (	vorticity(dim1,i,j,k)										* (v_f%pr(dim2)%cells(dim2,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_f%pr(dim2)%cells(dim2,i,j,k)) + &
-																										vorticity(dim1,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))	* (v_f%pr(dim2)%cells(dim2,i-I_m(dim,1)+I_m(dim2,1),j-I_m(dim,2)+I_m(dim2,2),k-I_m(dim,3)+I_m(dim2,3)) + v_f%pr(dim2)%cells(dim2,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))))
+																									vorticity(dim1,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))	* (v_f%pr(dim2)%cells(dim2,i-I_m(dim,1)+I_m(dim2,1),j-I_m(dim,2)+I_m(dim2,2),k-I_m(dim,3)+I_m(dim2,3)) + v_f%pr(dim2)%cells(dim2,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))))
 								else
 									F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) + 0.25_dp * (	vorticity(dim1,i,j,k)										* (v_f%pr(dim2)%cells(dim2,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v_f%pr(dim2)%cells(dim2,i,j,k)) + &
-																										vorticity(dim1,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))	* (v_f%pr(dim2)%cells(dim2,i-I_m(dim,1)+I_m(dim2,1),j-I_m(dim,2)+I_m(dim2,2),k-I_m(dim,3)+I_m(dim2,3)) + v_f%pr(dim2)%cells(dim2,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))))
+																									vorticity(dim1,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))	* (v_f%pr(dim2)%cells(dim2,i-I_m(dim,1)+I_m(dim2,1),j-I_m(dim,2)+I_m(dim2,2),k-I_m(dim,3)+I_m(dim2,3)) + v_f%pr(dim2)%cells(dim2,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))))
 								end if
 								end if
 						end do
@@ -3002,7 +2951,7 @@ contains
 		character(len=20)	:: coordinate_system
 		
 		integer	:: bound_number
-		integer	:: i,j,k,dim,spec,droplets_phase_counter
+		integer	:: i,j,k,dim,spec,particles_phase_counter
 
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -3013,18 +2962,18 @@ contains
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
-		associate (	rho				=> this%rho%s_ptr			, &
-					rho_int			=> this%rho_int%s_ptr		, &
-            		rho_old			=> this%rho_old%s_ptr		, &	
-					v_f				=> this%v_f%v_ptr			, &
-					Y				=> this%Y%v_ptr				, &
-					Y_int			=> this%Y_int%v_ptr			, &
-            		Y_old			=> this%Y_old%v_ptr			, &
-					Y_prod_diff		=> this%Y_prod_diff%v_ptr	, &
-					Y_prod_chem		=> this%Y_prod_chem%v_ptr	, &
-					Y_prod_droplets	=> this%Y_prod_droplets	, &
-					mesh			=> this%mesh%mesh_ptr		, &
-					bc				=> this%boundary%bc_ptr)
+		associate (	rho				    => this%rho%s_ptr			, &
+					rho_int			    => this%rho_int%s_ptr		, &
+            		rho_old			    => this%rho_old%s_ptr		, &	
+					v_f				    => this%v_f%v_ptr			, &
+					Y				    => this%Y%v_ptr				, &
+					Y_int			    => this%Y_int%v_ptr			, &
+            		Y_old			    => this%Y_old%v_ptr			, &
+					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &
+					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &
+					Y_prod_particles	=> this%Y_prod_particles	, &
+					mesh			    => this%mesh%mesh_ptr		, &
+					bc				    => this%boundary%bc_ptr)
 
 			!$omp parallel default(shared)  private(i,j,k,dim,spec,spec_summ,rhs,flux_right,flux_left,lame_coeffs) !, &
 			!!$omp& firstprivate(this)
@@ -3094,9 +3043,9 @@ contains
 						
 						if (this%reactive_flag)		Y_rho_int(spec) = Y_rho_int(spec) + 0.5_dp * Y_prod_chem%pr(spec)%cells(i,j,k) * time_step
 						
-						if (this%additional_droplets_phases_number /= 0) then
-							do droplets_phase_counter = 1, this%additional_droplets_phases_number
-								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_droplets(droplets_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step
+						if (this%additional_particles_phases_number /= 0) then
+							do particles_phase_counter = 1, this%additional_particles_phases_number
+								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step
 							end do		
 						end if									
 						

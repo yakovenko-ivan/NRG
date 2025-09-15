@@ -17,7 +17,8 @@ module cabaret_solver_class
 	use fourier_heat_transfer_solver_class
 	use chemical_kinetics_solver_class
 
-	use lagrangian_droplets_solver_class    
+	use lagrangian_particles_solver_class
+	use continuous_particles_solver_class
     
 	use mpi_communications_class
 
@@ -56,7 +57,7 @@ module cabaret_solver_class
 		real(dp)		            :: courant_fraction
 		real(dp)		            :: time, time_step, initial_time_step
 		real(dp)    , dimension(3)  :: g
-		integer			:: additional_particles_phases_number, additional_droplets_phases_number
+		integer			:: additional_particles_phases_number
         
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(diffusion_solver)				:: diff_solver
@@ -64,9 +65,10 @@ module cabaret_solver_class
 		type(viscosity_solver)				:: viscosity_solver	
 		type(table_approximated_real_gas)	:: state_eq
 
-		type(lagrangian_droplets_solver), dimension(:)	    ,allocatable	:: droplets_solver			!# Lagrangian droplets solver
-      
-		type(computational_domain)				:: domain
+		type(lagrangian_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
+		!type(continuous_particles_solver)   , dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
+
+        type(computational_domain)				:: domain
 		type(mpi_communications)				:: mpi_support
 		type(chemical_properties_pointer)		:: chem
 		type(thermophysical_properties_pointer)	:: thermo
@@ -83,11 +85,9 @@ module cabaret_solver_class
 		
 		type(field_vector_cons_pointer)	:: Y_prod_chem, Y_prod_diff
 
-		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: rho_prod_droplets, E_f_prod_droplets
-		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: E_f_prod_particles 
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: Y_prod_droplets
-		
-		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	::  v_prod_droplets				!# Lagrangian droplets solver        
+		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: rho_prod_particles, E_f_prod_particles
+		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: Y_prod_particles
+		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: v_prod_particles				!# Lagrangian particles solver        
         
 		! Conservative variables
 		real(dp) ,dimension(:,:,:)	,allocatable    :: rho_old, p_old, E_f_old, e_i_old, E_f_prod, rho_prod, v_s_old, gamma_old
@@ -133,8 +133,8 @@ contains
 		type(field_scalar_flow_pointer)	:: scal_f_ptr		
 		type(field_vector_flow_pointer)	:: vect_f_ptr
 		
-        type(liquid_droplets_phase)     :: droplets_params
-		integer							:: droplets_phase_counter		
+        type(particles_phase)           :: particles_params
+		integer							:: particles_phase_counter		
         
         character(len=40)       :: var_name
         
@@ -165,7 +165,7 @@ contains
         
         constructor%g                       = manager%solver_options%get_grav_acc()
 
-        constructor%additional_droplets_phases_number	= manager%solver_options%get_additional_droplets_phases_number()        
+        constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()        
         
 		constructor%domain				= manager%domain
 		constructor%mpi_support			= manager%mpi_communications
@@ -243,31 +243,29 @@ contains
         
 		constructor%state_eq	=	table_approximated_real_gas_c(manager)        
         
-		if(constructor%additional_droplets_phases_number /= 0) then
-			allocate(constructor%droplets_solver(constructor%additional_droplets_phases_number))
-			call constructor%droplets_solver(1)%pre_constructor(constructor%additional_droplets_phases_number)
-			allocate(constructor%rho_prod_droplets(constructor%additional_droplets_phases_number))
-			allocate(constructor%E_f_prod_droplets(constructor%additional_droplets_phases_number))
-			allocate(constructor%v_prod_droplets(constructor%additional_droplets_phases_number))
-			allocate(constructor%Y_prod_droplets(constructor%additional_droplets_phases_number))
-			do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-				droplets_params = manager%solver_options%get_droplets_params(droplets_phase_counter)
-				constructor%droplets_solver(droplets_phase_counter)	= lagrangian_droplets_solver_c(manager, droplets_params, droplets_phase_counter)		!# Lagrangian droplets solver
-!				constructor%droplets_solver(droplets_phase_counter)	= droplets_solver_c(manager, droplets_params, droplets_phase_counter)					!# Continuum droplets solver
-				write(var_name,'(A,I2.2)') 'energy_production_droplets', droplets_phase_counter
+		if(constructor%additional_particles_phases_number /= 0) then
+			allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
+			call constructor%particles_solver(1)%pre_constructor(constructor%additional_particles_phases_number)
+			allocate(constructor%rho_prod_particles(constructor%additional_particles_phases_number))
+			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
+			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
+			allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
+			do particles_phase_counter = 1, constructor%additional_particles_phases_number
+				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
+				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Lagrangian particles solver
+!				constructor%particles_solver(particles_phase_counter)	= particles_solver_c(manager, particles_params, particles_phase_counter)                !# Continuum particles solver
+				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%E_f_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr
-				write(var_name,'(A,I2.2)') 'density_production_droplets', droplets_phase_counter
+				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_ptr%s_ptr
+				write(var_name,'(A,I2.2)') 'density_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%rho_prod_droplets(droplets_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
-				write(var_name,'(A,I2.2)') 'velocity_production_droplets', droplets_phase_counter						
-				call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,var_name)								!# Lagrangian droplets solver
-				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_f_ptr%v_ptr						!# Lagrangian droplets solver
-!				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum droplets solver								
-!				constructor%v_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum droplets solver
-				write(var_name,'(A,I2.2)') 'concentration_production_droplets', droplets_phase_counter
+				constructor%rho_prod_particles(particles_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
+				write(var_name,'(A,I2.2)') 'velocity_production_particles', particles_phase_counter						
+				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum particles solver								
+				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum particles solver
+				write(var_name,'(A,I2.2)') 'concentration_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%Y_prod_droplets(droplets_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
+				constructor%Y_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
 			end do		
 		end if
 	
@@ -301,9 +299,9 @@ contains
 			call problem_data_io%add_io_vector_flow_field(constructor%Y_f_new)
 			call problem_data_io%add_io_vector_flow_field(constructor%v_f_new)
             
-            if(constructor%additional_droplets_phases_number /= 0) then
-				do droplets_phase_counter = 1, constructor%additional_droplets_phases_number
-					call constructor%droplets_solver(droplets_phase_counter)%set_initial_distributions()
+            if(constructor%additional_particles_phases_number /= 0) then
+				do particles_phase_counter = 1, constructor%additional_particles_phases_number
+					call constructor%particles_solver(particles_phase_counter)%set_initial_distributions()
 				end do
 			end if  
 		end if		
@@ -699,7 +697,7 @@ call manager%create_timer(cabaret_timer                 ,'CABARET solver time'  
 		integer	,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_utter_loop, flow_inner_loop
 		integer	,dimension(3,2)	:: loop
 		real(dp)	,dimension(3)	:: cell_size
-        integer     	:: droplets_phase_counter
+        integer     	:: particles_phase_counter
 
 		integer			:: i,j,k,plus,dim,dim1,dim2,spec,iter		
 
@@ -1405,7 +1403,7 @@ call manager%create_timer(cabaret_timer                 ,'CABARET solver time'  
 		call this%mpi_support%exchange_flow_scalar_field(rho_f_new)
 		call this%mpi_support%exchange_flow_scalar_field(p_f_new)
 
-end associate
+        end associate
 
         associate(	v			=> this%v%v_ptr	            , &
 					Y			=> this%Y%v_ptr	            , &
@@ -1762,9 +1760,9 @@ end associate
         
         call cabaret_gas_dynamics_timer%toc()
 
-		if(this%additional_droplets_phases_number /= 0) then
-			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-    			call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_main()
+		if(this%additional_particles_phases_number /= 0) then
+			do particles_phase_counter = 1, this%additional_particles_phases_number
+    			call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_main(this%time)
 			end do	            
         end if
                 
@@ -1785,13 +1783,13 @@ end associate
         call cabaret_chemistry_timer%toc(new_iter=.true.)
         
 
-		if(this%additional_droplets_phases_number /= 0) then
-			do droplets_phase_counter = 1, this%additional_droplets_phases_number
-				call this%droplets_solver(droplets_phase_counter)%droplets_solve(this%time_step)				!# Lagrangian droplets solver
-!				call this%droplets_solver(droplets_phase_counter)%droplets_euler_step_v_E(this%time_step)		!# Continuum droplets solver
-!				call this%droplets_solver(droplets_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum droplets solver
-!				call this%droplets_solver(droplets_phase_counter)%droplets_lagrange_step(this%time_step)		!# Continuum droplets solver
-!				call this%droplets_solver(droplets_phase_counter)%droplets_final_step(this%time_step)			!# Continuum droplets solver		
+		if(this%additional_particles_phases_number /= 0) then
+			do particles_phase_counter = 1, this%additional_particles_phases_number
+				call this%particles_solver(particles_phase_counter)%particles_solve(this%time_step)				!# Lagrangian particles solver
+!				call this%particles_solver(particles_phase_counter)%particles_euler_step_v_E(this%time_step)	!# Continuum particles solver
+!				call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum particles solver
+!				call this%particles_solver(particles_phase_counter)%particles_lagrange_step(this%time_step)		!# Continuum particles solver
+!				call this%particles_solver(particles_phase_counter)%particles_final_step(this%time_step)		!# Continuum particles solver		
 			end do		
 		end if 	        
         
@@ -1825,10 +1823,12 @@ end associate
 					v_prod			=> this%v_prod				, &
 					Y_prod			=> this%Y_prod				, &
 					rho_prod		=> this%rho_prod			, &
+            
        
-					rho_prod_droplets   => this%rho_prod_droplets	, &
-					E_f_prod_droplets => this%E_f_prod_droplets		, &
-					Y_prod_droplets	=> this%Y_prod_droplets			, &
+					rho_prod_particles  => this%rho_prod_particles	, &
+					E_f_prod_particles  => this%E_f_prod_particles	, &
+                    v_prod_particles	=> this%v_prod_particles	, &
+					Y_prod_particles	=> this%Y_prod_particles	, &
 
 					bc				=> this%boundary%bc_ptr         , &
 					mesh			=> this%mesh%mesh_ptr)
@@ -1903,13 +1903,16 @@ end associate
 					v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) + v_prod(dim,i,j,k) /rho%cells(i,j,k)
                 end do					
                 
-                if (this%additional_droplets_phases_number /= 0) then
+                if (this%additional_particles_phases_number /= 0) then
                     spec_summ = 0.0_dp
-					do droplets_phase_counter = 1, this%additional_droplets_phases_number
-						E_f%cells(i,j,k)	= E_f%cells(i,j,k) + E_f_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)
-                        rho%cells(i,j,k)    = rho%cells(i,j,k) + rho_prod_droplets(droplets_phase_counter)%s_ptr%cells(i,j,k)
+					do particles_phase_counter = 1, this%additional_particles_phases_number
+						E_f%cells(i,j,k)	= E_f%cells(i,j,k) + E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)
+                        rho%cells(i,j,k)    = rho%cells(i,j,k) + rho_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)
+                        do dim = 1, dimensions
+                            v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k)
+                        end do
                         do spec = 1, species_number
-							Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod_droplets(droplets_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
+							Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
                             spec_summ = spec_summ + Y%pr(spec)%cells(i,j,k)
 						end do	
 					end do		
