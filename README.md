@@ -29,6 +29,6 @@ mkdir build
 
 cd build
 
-cmake .. -G"Unix Makefiles" -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=DEBUG
+cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_BUILD_TYPE=DEBUG
 
 cmake --build . --target computing_module
