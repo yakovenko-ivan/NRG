@@ -14,24 +14,23 @@ Fortran compiler with 2003 standard features support.
 Installation guide in pdf format can be found in docs folder. 
 
 **CMakeBuild tool installation (gfortran, makefile generator):**
-`
-mkdir build
 
-cd build
+`mkdir build`
 
-cmake .. -G"Unix Makefiles" -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=DEBUG
+`cd build`
 
-cmake --build . --target computing_module
-`
+`cmake .. -G"Unix Makefiles" -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=DEBUG`
+
+`cmake --build . --target computing_module`
+
 
 **CMakeBuild tool installation (ifx, visual studio generator):**
 
-`
-mkdir build
+`mkdir build`
 
-cd build
+`cd build`
 
-cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_BUILD_TYPE=DEBUG
+`cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_BUILD_TYPE=DEBUG`
 
-cmake --build . --target computing_module
-`
+`cmake --build . --target computing_module`
+
