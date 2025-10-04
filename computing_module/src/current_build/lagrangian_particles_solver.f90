@@ -617,7 +617,7 @@ contains
                                 !pause
                             end if
                             
-                            F_a(dim) = 1.0_dp / (cell_volume) * m_liq * ( this%g(dim) - (this%particles(part)%velocity(dim) - old_velocity(dim)) / particle_time_step + this%particles(part)%dm * (this%particles(part)%velocity(dim) - old_velocity(dim)))
+                            F_a(dim) = 1.0_dp / (cell_volume) * m_liq * ( - this%g(dim) - (this%particles(part)%velocity(dim) - old_velocity(dim)) / particle_time_step - this%particles(part)%dm * (this%particles(part)%velocity(dim) - gas_velocity(dim)))
 						end do 
 					end if
 					

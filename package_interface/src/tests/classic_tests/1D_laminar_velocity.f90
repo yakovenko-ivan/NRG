@@ -183,11 +183,24 @@ program package_interface
 																thermo_data_file_name		= thermo_file			,	&
 																transport_data_file_name	= transdata_file		,	&
 																molar_masses_data_file_name	= 'molar_masses.dat')
-	
+
+		problem_solver_options = solver_options_c(	solver_name					= solver_name   , &
+													hydrodynamics_flag			= .true.		, &
+													heat_transfer_flag			= .true.		, &
+													molecular_diffusion_flag	= .true.		, &
+													viscosity_flag				= .true.		, &
+													chemical_reaction_flag		= .false.		, & 
+                                                    grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/)    , &
+													additional_particles_phases	= 0				, &
+													CFL_flag					= .true.		, &
+													CFL_coefficient				= 0.25_dp		, &
+													initial_time_step			= 1e-06_dp)													
+
+
 		problem_mpi_support		= mpi_communications_c(problem_domain)
 
-		problem_data_manager	= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics)
-
+		problem_data_manager	= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics,problem_solver_options)
+		
 			call problem_data_manager%create_boundary_conditions(	problem_boundaries				, &	
 																	number_of_boundary_types	= 4	, &
 																	default_boundary			= 1)
@@ -457,18 +470,6 @@ program package_interface
 			end select	
 			
 			!***********************************************************************************************
-	
-		problem_solver_options = solver_options_c(	solver_name					= solver_name, &
-													hydrodynamics_flag			= .true.		, &
-													heat_transfer_flag			= .true.		, &
-													molecular_diffusion_flag	= .true.		, &
-													viscosity_flag				= .true.		, &
-													chemical_reaction_flag		= .true.		, &
-													grav_acc					= (/0.0_dp, 0.0_dp, 0.0_dp/)	, &
-													additional_droplets_phases	= 0				, &
-													CFL_flag					= .true.		, &
-													CFL_coefficient				= 0.25_dp	, &
-													initial_time_step			= 1e-08_dp)													
 										
 		!****************************** Writing problem short description ******************************
 	
