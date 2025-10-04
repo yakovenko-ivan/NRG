@@ -1,3 +1,10 @@
+![Fortran](https://img.shields.io/badge/Fortran-2003-brightgreen?logo=fortran&labelColor=734f96)
+![CMake](https://img.shields.io/badge/CMake-4.0.0-brightgreen?logo=cmake&labelColor=royalblue)
+![GitHub repo size](https://img.shields.io/github/repo-size/yakovenko-ivan/NRG)
+![Static Badge](https://img.shields.io/badge/stability-stable-brightgreen?style=flat)
+![Static Badge](https://img.shields.io/badge/version-1.1.0-royalblue?style=flat)
+
+
 # NRG project
 
 Welcome to Numerical Reactive Gas-dynamics software package. 
