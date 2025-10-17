@@ -78,8 +78,9 @@ program package_interface
 	do task1 = 1, 1
 	do task2 = 1, 1
 	do task3 = 1, 1
-    do task4 = 9, 9
-	do task5 = 2, 2
+	do task4 = 1, 1
+    do task5 = 9, 9
+	do task6 = 2, 2
         
 	
 		work_dir = '1D_laminar_burning_velocity_test'
@@ -92,15 +93,29 @@ program package_interface
 				setup = 'counter_flow'
 			case(2)
 				work_dir = trim(work_dir) // trim(fold_sep) //'counter_flow_precInc'
-				setup = 'counter_flow_precInc'                
+				setup = 'counter_flow_precInc'
 			case(3)
 				work_dir = trim(work_dir) // trim(fold_sep) //'near_wall'
 				setup = 'near_wall'
+        end select		
+            
+        ierr = system('mkdir '// work_dir)
+	
+		select case(task2)
+			case(1)
+				work_dir = trim(work_dir) // trim(fold_sep) //'cartesian'
+				coordinate_system = 'cartesian'
+			case(2)
+				work_dir = trim(work_dir) // trim(fold_sep) //'cylindrical'
+				coordinate_system = 'cylindrical'
+			case(3)
+				work_dir = trim(work_dir) // trim(fold_sep) //'spherical'
+				coordinate_system = 'spherical'
 		end select		
 		
 		ierr = system('mkdir '// work_dir)	
 		
-		select case(task2)
+		select case(task3)
 			case(1)
 				work_dir = trim(work_dir) // trim(fold_sep) // 'fds_low_mach'
 				solver_name = 'fds_low_mach'
@@ -109,12 +124,12 @@ program package_interface
 				solver_name = 'cpm'
 			case(3)
 				work_dir = trim(work_dir) // trim(fold_sep) // 'CABARET'
-				solver_name = 'CABARET'				
+				solver_name = 'CABARET'
         end select		
             
         ierr = system('mkdir '// work_dir)   
             
-        select case(task3)
+        select case(task4)
 			case(1)
 				work_dir = trim(work_dir) // trim(fold_sep) // 'KEROMNES'
 				mech_file		= 'KEROMNES.txt'
@@ -129,19 +144,19 @@ program package_interface
 		
 		ierr = system('mkdir '// work_dir)			
 
-        X_H2		= task4 * 1.0_dp
+        X_H2		= task5 * 1.0_dp
         work_dir	= trim(work_dir) // trim(fold_sep) //  trim(str_r(X_H2)) //'_pcnt'
         nu			= (100.0 - X_H2) / X_H2 / 4.762_dp
 
 		ierr = system('mkdir '// work_dir)			
 		
-		select case(task5)
+		select case(task6)
 			case(0)
 				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_4.0e-04'
-				delta_x	 = 4.0e-04_dp            
+				delta_x	 = 4.0e-04_dp
 			case(1)
 				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_2.0e-04'
-				delta_x	 = 2.0e-04_dp		
+				delta_x	 = 2.0e-04_dp
 			case(2)
 				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_1.0e-04'
 				delta_x	 = 1.0e-04_dp
@@ -156,7 +171,7 @@ program package_interface
 				delta_x	 = 1.25e-05_dp
 			case(6)
 				work_dir = trim(work_dir) // trim(fold_sep) //  'dx_6.25e-06'
-				delta_x	 = 6.25e-06_dp		
+				delta_x	 = 6.25e-06_dp
 		end select
 
 		ierr = system('mkdir '// work_dir)			
@@ -168,16 +183,16 @@ program package_interface
 			
 		domain_length	=	0.0256_dp
 		
-		problem_domain			= computational_domain_c(	dimensions 			=	1,						&
-															cells_number 		=	(/int(domain_length/delta_x),1,1/),		&											
-															coordinate_system	=	'cartesian'	,			&													
-															lengths				=	reshape((/	0.0_dp,0.000_dp,0.0_dp,						&
-																								domain_length,0.0025_dp,0.0025_dp/),(/3,2/)),	&	 
+		problem_domain			= computational_domain_c(	dimensions 			=	1                                                           ,	&
+															cells_number 		=	(/int(domain_length/delta_x),1,1/)                          ,	&											
+															coordinate_system	=	coordinate_system                                           ,	&													
+															lengths				=	reshape((/	0.0_dp,0.000_dp,0.0_dp                          ,	&
+																								domain_length,0.0025_dp,0.0025_dp/),(/3,2/))    ,	&	 
 															axis_names			=	(/'x','y','z'/))
 	
-		problem_chemistry		= chemical_properties_c(chemical_mechanism_file_name	= mech_file			,	&
-														default_enhanced_efficiencies	= 1.0_dp			,	&
-														E_act_units						= 'cal.mol')
+		problem_chemistry		= chemical_properties_c(    chemical_mechanism_file_name	= mech_file			,	&
+														    default_enhanced_efficiencies	= 1.0_dp			,	&
+														    E_act_units						= 'cal.mol')
 					
 		problem_thermophysics	= thermophysical_properties_c(	chemistry					= problem_chemistry		,	&
 																thermo_data_file_name		= thermo_file			,	&
@@ -189,7 +204,7 @@ program package_interface
 													heat_transfer_flag			= .true.		, &
 													molecular_diffusion_flag	= .true.		, &
 													viscosity_flag				= .true.		, &
-													chemical_reaction_flag		= .false.		, & 
+													chemical_reaction_flag		= .true.		, & 
                                                     grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/)    , &
 													additional_particles_phases	= 0				, &
 													CFL_flag					= .true.		, &
@@ -206,9 +221,9 @@ program package_interface
 																	default_boundary			= 1)
 																
 			call problem_data_manager%create_computational_mesh(problem_mesh)
-			call problem_data_manager%create_scalar_field(p		,'pressure'						, 'p')
-			call problem_data_manager%create_scalar_field(T		,'temperature'					, 'T')
-			call problem_data_manager%create_scalar_field(rho	,'density'						, 'rho')
+			call problem_data_manager%create_scalar_field(p		,'pressure'						,'p')
+			call problem_data_manager%create_scalar_field(T		,'temperature'					,'T')
+			call problem_data_manager%create_scalar_field(rho	,'density'						,'rho')
 	
 			call problem_data_manager%create_vector_field(v		,'velocity'						,'v'		,'spatial')
 			call problem_data_manager%create_vector_field(Y		,'specie_molar_concentration'	,'Y'		,'chemical')	
@@ -218,36 +233,26 @@ program package_interface
 			
 			transducer_offset	= 0.005 / cell_size(1)
 		
-			observation_slice(:,1)		= (/1,1,1/)
+			observation_slice(:,1)		= (/1, 1, 1/)
 			observation_slice(:,2)		= (/int(domain_length/delta_x),1,1/)			
 			
 			summation_region(:,1)	= (/-transducer_offset,1,1/)
 			summation_region(:,2)	= (/transducer_offset,1,1/)		
 		
-			problem_post_proc_manager = post_processor_manager_c(problem_data_manager,number_post_processors = 0)
+			problem_post_proc_manager = post_processor_manager_c(problem_data_manager,number_post_processors = 1)
 
-			!call problem_post_proc_manager%create_post_processor(problem_data_manager			,	&
-			!													post_processor_name = "proc1"	,	&
-			!													operations_number	= 7			,	&
-			!													save_time			= 1.0_dp	,	&
-			!													save_time_units		= 'microseconds')
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'						,'min_grad'		,operation_area = observation_slice	,grad_projection = 1)		
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'pressure'						,'transducer'	,operation_area_distance = (/transducer_offset,0,0/))
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'pressure'						,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'density'							,'transducer'	,operation_area_distance = (/transducer_offset,0,0/))
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'density'							,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'						,'transducer'	,operation_area_distance = (/transducer_offset,0,0/))
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'						,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
-   !
-			!call problem_post_proc_manager%create_post_processor(problem_data_manager			,	&
-			!													post_processor_name = "proc2"	,	&
-			!													operations_number	= 3			,	&
-			!													save_time			= 1.0_dp	,	&
-			!													save_time_units		= 'microseconds')
-			!	call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,2,'pressure'						,'transducer'	,operation_area_distance = (/int(domain_lenght/delta_x),1,1/))
-   !             call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,2,'temperature'						,'transducer'	,operation_area_distance = (/int(domain_lenght/delta_x),1,1/))
-   !             call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,2,'specie_molar_concentration(H2)'	,'transducer'	,operation_area_distance = (/int(domain_lenght/delta_x),1,1/))	               
-		
+			call problem_post_proc_manager%create_post_processor(problem_data_manager			,	&
+																post_processor_name = "proc1"	,	&
+																operations_number	= 7			,	&
+																save_time			= 1.0_dp	,	&
+																save_time_units		= 'microseconds')
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'	,'min_grad'		,operation_area = observation_slice	,grad_projection = 1)		
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'pressure'	,'transducer'	,operation_area_distance = (/transducer_offset,0,0/))
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'pressure'	,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'density'		,'transducer'	,operation_area_distance = (/transducer_offset,0,0/))
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'density'		,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'	,'transducer'	,operation_area_distance = (/transducer_offset,0,0/))
+				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'	,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
 		
 			problem_data_save	= data_save_c(	problem_data_manager	,	&
 												visible_fields_names	= (/'pressure'						,&
