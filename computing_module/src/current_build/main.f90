@@ -70,7 +70,7 @@ program computing_module
 	
 	integer		:: error
 
-    character(len=*), parameter :: VERSION = '1.0'
+    character(len=*), parameter :: VERSION = '1.1.0'
     character(len=32)           :: arg, sub_arg
     integer                     :: eq_index, arg_val
     integer                     :: i
