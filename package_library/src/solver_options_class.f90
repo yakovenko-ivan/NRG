@@ -193,16 +193,16 @@ contains
 		integer					,intent(in)	:: log_unit	
 		
 		write(log_unit,'(A)')		'************************************************************************************* '
-		write(log_unit,'(A)')		' Solver setup : '
-		write(log_unit,'(A,A)')		' Solver name			: ',	this%solver_name
-		write(log_unit,'(A,L)')		' Hydrodynamics			: ',	this%hydrodynamics_flag
-		write(log_unit,'(A,L)')     ' Heat transfer			: ',	this%heat_transfer_flag
-		write(log_unit,'(A,L)')     ' Molecular diffusion	: ',	this%molecular_diffusion_flag
-		write(log_unit,'(A,L)')     ' Viscosity				: ',	this%viscosity_flag
-		write(log_unit,'(A,L)')     ' Chemical reaction		: ',	this%chemical_reaction_flag
-		write(log_unit,'(A,L)')     ' Gravitational accel.	: ',	this%grav_acc
-		write(log_unit,'(A,L)')     ' Suspended phases      : ',	this%additional_particles_phases
-		write(log_unit,'(A,L)')     ' Courant-Freidrichs-Lewy condition		: ',	this%CFL_flag
+		write(log_unit,'(A)')		    ' Solver setup : '
+		write(log_unit,'(A,A)')		    ' Solver name			: ',	this%solver_name
+		write(log_unit,'(A,L)')		    ' Hydrodynamics			: ',	this%hydrodynamics_flag
+		write(log_unit,'(A,L)')         ' Heat transfer			: ',	this%heat_transfer_flag
+		write(log_unit,'(A,L)')         ' Molecular diffusion	: ',	this%molecular_diffusion_flag
+		write(log_unit,'(A,L)')         ' Viscosity				: ',	this%viscosity_flag
+		write(log_unit,'(A,L)')         ' Chemical reaction		: ',	this%chemical_reaction_flag
+		write(log_unit,'(A,3E14.7)')    ' Gravitational accel.	: ',	this%grav_acc
+		write(log_unit,'(A,I2)')        ' Suspended phases      : ',	this%additional_particles_phases
+		write(log_unit,'(A,L)')         ' Courant-Freidrichs-Lewy condition		: ',	this%CFL_flag
 		write(log_unit,'(A,E14.7)')     ' Courant-Freidrichs-Lewy coefficient	: ',	this%CFL_coefficient
 		write(log_unit,'(A,E14.7)')     ' Initial time step		: ',	this%initial_time_step
 		write(log_unit,'(A)')		'************************************************************************************* '

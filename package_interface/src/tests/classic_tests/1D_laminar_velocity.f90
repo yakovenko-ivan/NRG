@@ -69,13 +69,13 @@ program package_interface
 
 	
 	integer	:: i, j, spec
-	integer	:: task1, task2, task3, task4, task5
+	integer	:: task1, task2, task3, task4, task5, task6
 	integer	:: flamelet_pos
 	integer	:: ierr, io_unit
 	
 	ierr = getcwd(initial_work_dir)
 	
-	do task1 = 1, 1
+	do task1 = 3, 3
 	do task2 = 1, 1
 	do task3 = 1, 1
 	do task4 = 1, 1
@@ -83,19 +83,19 @@ program package_interface
 	do task6 = 2, 2
         
 	
-		work_dir = '1D_laminar_burning_velocity_test'
+		work_dir = '1D_LBV_test'
 		
         ierr = system('mkdir '// work_dir)
 	
 		select case(task1)
 			case(1)
-				work_dir = trim(work_dir) // trim(fold_sep) //'counter_flow'
+				work_dir = trim(work_dir) // trim(fold_sep) //'cf'
 				setup = 'counter_flow'
 			case(2)
-				work_dir = trim(work_dir) // trim(fold_sep) //'counter_flow_precInc'
+				work_dir = trim(work_dir) // trim(fold_sep) //'cf_prcInc'
 				setup = 'counter_flow_precInc'
 			case(3)
-				work_dir = trim(work_dir) // trim(fold_sep) //'near_wall'
+				work_dir = trim(work_dir) // trim(fold_sep) //'nw'
 				setup = 'near_wall'
         end select		
             
@@ -117,10 +117,10 @@ program package_interface
 		
 		select case(task3)
 			case(1)
-				work_dir = trim(work_dir) // trim(fold_sep) // 'fds_low_mach'
+				work_dir = trim(work_dir) // trim(fold_sep) // 'FDS'
 				solver_name = 'fds_low_mach'
 			case(2)
-				work_dir = trim(work_dir) // trim(fold_sep) // 'cpm'
+				work_dir = trim(work_dir) // trim(fold_sep) // 'CPM'
 				solver_name = 'cpm'
 			case(3)
 				work_dir = trim(work_dir) // trim(fold_sep) // 'CABARET'
@@ -501,7 +501,8 @@ program package_interface
 	end do		
 	end do
 	end do
-	end do	
+    end do	
+	end do
 
 end program
     
