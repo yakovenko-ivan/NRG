@@ -50,8 +50,6 @@ contains
 		character(len=*)					,intent(in)				:: field_name_long
 		character(len=*)					,intent(in)				:: field_name_short
 
-		integer	:: specie, dim
-
 		constructor%name_short	= field_name_short
 		constructor%name_long	= field_name_long
 	end function

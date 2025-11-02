@@ -24,8 +24,11 @@ module field_pointers
 	end type field_vector_flow_pointer	
 	
 	type 	:: field_tensor_cons_pointer
-		type(field_tensor)	,pointer	:: t_ptr
+		type(field_tensor_cons)	,pointer	:: t_ptr
 	end type field_tensor_cons_pointer	
 	
-
+	type 	:: field_tensor_flow_pointer
+		type(field_tensor_flow)	,pointer	:: t_ptr
+    end type field_tensor_flow_pointer	
+    
 end module

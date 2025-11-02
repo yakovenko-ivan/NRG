@@ -429,7 +429,7 @@ contains
 
     subroutine exchange_conservative_tensor_field(this, tens_ptr)
         class(mpi_communications)   ,target     ,intent(inout)  :: this
-        type(field_tensor)	        ,target     ,intent(inout)  :: tens_ptr
+        type(field_tensor_cons)	    ,target     ,intent(inout)  :: tens_ptr
 
         real(dp) ,pointer    ,dimension(:) :: buffer_ptr
 

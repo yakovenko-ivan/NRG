@@ -19,7 +19,7 @@ module computational_mesh_class
 		real(dp)						:: cell_volume
 		real(dp)	,dimension(3)		:: cell_surface_area
 
-		real(sp)	,dimension(:,:,:,:)	,allocatable	,public	:: mesh
+		real(dp)	,dimension(:,:,:,:)	,allocatable	,public	:: mesh
 	contains
 
 		procedure	,private	:: generate_uniform_mesh

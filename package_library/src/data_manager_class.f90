@@ -35,7 +35,8 @@ module data_manager_class
 
 		type(field_scalar_flow_pointer)	,dimension(100)	:: scalar_field_flow_pointers
 		type(field_vector_flow_pointer)	,dimension(100)	:: vector_field_flow_pointers
-		
+		type(field_tensor_flow_pointer)	,dimension(100)	:: tensor_field_flow_pointers
+
         type(timer_pointer)             ,dimension(100) :: timers
  
 		integer		:: number_of_cons_scalar_fields
@@ -44,6 +45,7 @@ module data_manager_class
 		
 		integer		:: number_of_flow_scalar_fields
 		integer		:: number_of_flow_vector_fields
+        integer		:: number_of_flow_tensor_fields
 		
         integer     :: number_of_timers
         
@@ -97,6 +99,7 @@ contains
 		
 		constructor%number_of_flow_scalar_fields = 0
 		constructor%number_of_flow_vector_fields = 0
+        constructor%number_of_flow_tensor_fields = 0
         
         constructor%number_of_timers            = 0
 
@@ -178,16 +181,21 @@ contains
 	end subroutine
 
 	subroutine create_tensor_field(this,field_instance,field_name,field_short_name)
-		type(field_tensor)	,target	,intent(inout)	:: field_instance
+		class(field_tensor)	,target	,intent(inout)	:: field_instance
 		class(data_manager)			,intent(inout)	:: this
 		character(len=*)			,intent(in)		:: field_name
 		character(len=*)			,intent(in)		:: field_short_name
 
-		this%number_of_cons_tensor_fields = this%number_of_cons_tensor_fields + 1
-
-		field_instance = field_tensor_c(field_name, field_short_name, this%domain)
-
-		this%tensor_field_cons_pointers(this%number_of_cons_tensor_fields)%t_ptr => field_instance
+        select type (field_instance)
+			type is (field_tensor_cons)	
+				this%number_of_cons_tensor_fields = this%number_of_cons_tensor_fields + 1
+		        this%tensor_field_cons_pointers(this%number_of_cons_tensor_fields)%t_ptr => field_instance
+				field_instance = field_tensor_cons_c(field_name, field_short_name, this%domain)
+			type is (field_tensor_flow)
+				this%number_of_flow_tensor_fields = this%number_of_flow_tensor_fields + 1
+				this%tensor_field_flow_pointers(this%number_of_flow_tensor_fields)%t_ptr => field_instance
+				field_instance = field_tensor_flow_c(field_name, field_short_name, this%domain)
+		end select
 	end subroutine
 
     subroutine create_timer(this,timer_instance,description,short_description)
@@ -305,17 +313,19 @@ contains
 		end select
 	end subroutine
 
-	subroutine get_flow_field_pointer_by_name(this,scal_ptr,vect_ptr,field_name)
+	subroutine get_flow_field_pointer_by_name(this,scal_ptr,vect_ptr,tens_ptr,field_name)
 		type(field_scalar_flow_pointer)	,intent(out)	:: scal_ptr
 		type(field_vector_flow_pointer)	,intent(out)	:: vect_ptr
+		type(field_tensor_flow_pointer)	,intent(out)	:: tens_ptr
 		class(data_manager)			,intent(in)		:: this
 		character(len=*)			,intent(in)		:: field_name
 
-		integer	:: field_counter, dim
+		integer	:: field_counter, dim, dim1, dim2
 
 		scal_ptr%s_ptr => NULL()
 		vect_ptr%v_ptr => NULL()
-
+        tens_ptr%t_ptr => NULL()
+        
 		do field_counter = 1,this%number_of_flow_scalar_fields
 			if(trim(this%scalar_field_flow_pointers(field_counter)%s_ptr%name_long) == trim(field_name)) then
 				scal_ptr = this%scalar_field_flow_pointers(field_counter)
@@ -332,25 +342,43 @@ contains
 					end if
 				end do
 			end if
-		end do
+        end do
 
+        do field_counter = 1,this%number_of_flow_tensor_fields
+			if(trim(this%tensor_field_flow_pointers(field_counter)%t_ptr%name_long) == trim(field_name)) then
+				tens_ptr = this%tensor_field_flow_pointers(field_counter)
+			else
+				do dim1 = 1,size(this%tensor_field_flow_pointers(field_counter)%t_ptr%pr,1)
+				do dim2 = 1,size(this%tensor_field_flow_pointers(field_counter)%t_ptr%pr,2)
+					if(trim(this%tensor_field_flow_pointers(field_counter)%t_ptr%pr(dim1,dim2)%name_long) == trim(field_name)) then
+						scal_ptr%s_ptr => this%tensor_field_flow_pointers(field_counter)%t_ptr%pr(dim1,dim2)
+					end if
+				end do
+				end do
+			end if
+		end do
+        
 	end subroutine
 
-	subroutine get_flow_field_pointer_by_number(this,scal_ptr,vect_ptr,field_type,field_number)
+	subroutine get_flow_field_pointer_by_number(this,scal_ptr,vect_ptr,tens_ptr,field_type,field_number)
 		type(field_scalar_flow_pointer)	,intent(out)	:: scal_ptr
 		type(field_vector_flow_pointer)	,intent(out)	:: vect_ptr
+        type(field_tensor_flow_pointer)	,intent(out)	:: tens_ptr
 		class(data_manager)			,intent(in)		:: this
 		character(len=*)			,intent(in)		:: field_type
 		integer						,intent(in)		:: field_number
 
 		scal_ptr%s_ptr => NULL()
 		vect_ptr%v_ptr => NULL()
-
+		tens_ptr%t_ptr => NULL()
+        
 		select case (field_type)
 			case('scalar')
 				scal_ptr = this%scalar_field_flow_pointers(field_number)
 			case('vector')
 				vect_ptr = this%vector_field_flow_pointers(field_number)
+			case('tensor')
+				tens_ptr = this%tensor_field_flow_pointers(field_number)
 		end select
 	end subroutine
 
