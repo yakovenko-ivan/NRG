@@ -104,12 +104,13 @@ contains
 		type(particles_phase)	, intent(in)	:: particles
 		integer					, intent(in)	:: phase_number
 
-		type(field_scalar_cons_pointer)	:: scal_ptr
-		type(field_vector_cons_pointer)	:: vect_ptr
-		type(field_tensor_cons_pointer)	:: tens_ptr
+		type(field_scalar_cons_pointer)	:: scal_c_ptr
+		type(field_vector_cons_pointer)	:: vect_c_ptr
+		type(field_tensor_cons_pointer)	:: tens_c_ptr		
 
-		type(field_scalar_flow_pointer)	:: scal_f_ptr
-		type(field_vector_flow_pointer)	:: vect_f_ptr			
+		type(field_scalar_flow_pointer)	:: scal_f_ptr		
+		type(field_vector_flow_pointer)	:: vect_f_ptr
+		type(field_tensor_flow_pointer)	:: tens_f_ptr			
 		
  		integer					:: dimensions       
  		integer	,dimension(3,2)	:: cons_allocation_bounds, flow_allocation_bounds   
@@ -126,27 +127,27 @@ contains
 		
 		constructor%particles_params	= particles
 		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
-		constructor%rho%s_ptr				=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
-		constructor%T%s_ptr					=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'pressure')
-		constructor%p%s_ptr					=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
-		constructor%Y%v_ptr					=> vect_ptr%v_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'sensible_enthalpy')
-		constructor%h_s%s_ptr				=> scal_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'density')
+		constructor%rho%s_ptr				=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'temperature')
+		constructor%T%s_ptr					=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure')
+		constructor%p%s_ptr					=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		constructor%Y%v_ptr					=> vect_c_ptr%v_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
+		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'sensible_enthalpy')
+		constructor%h_s%s_ptr				=> scal_c_ptr%s_ptr		
 		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'viscosity')
-		constructor%nu%s_ptr			=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'thermal_conductivity')
-		constructor%kappa%s_ptr			=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'diffusivity')
-		constructor%D%v_ptr				=> vect_ptr%v_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'viscosity')
+		constructor%nu%s_ptr			=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'thermal_conductivity')
+		constructor%kappa%s_ptr			=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'diffusivity')
+		constructor%D%v_ptr				=> vect_c_ptr%v_ptr		
 		
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'velocity_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'velocity_flow')
 		constructor%v_f%v_ptr			=> vect_f_ptr%v_ptr		
 		
 		write(var_name,'(A,I2.2)')		'density_production_particles', phase_number

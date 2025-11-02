@@ -70,10 +70,11 @@ contains
 
 		type(field_scalar_cons_pointer)	:: scal_c_ptr
 		type(field_vector_cons_pointer)	:: vect_c_ptr
-		type(field_tensor_cons_pointer)	:: tens_c_ptr
-		
-		type(field_scalar_flow_pointer)	:: scal_f_ptr
-		type(field_vector_flow_pointer)	:: vect_f_ptr		
+		type(field_tensor_cons_pointer)	:: tens_c_ptr		
+
+		type(field_scalar_flow_pointer)	:: scal_f_ptr		
+		type(field_vector_flow_pointer)	:: vect_f_ptr
+		type(field_tensor_flow_pointer)	:: tens_f_ptr		
 
 		integer	:: species_number
 
@@ -96,17 +97,17 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure_static_change')
 		constructor%dp_stat_dt%s_ptr			=> scal_c_ptr%s_ptr		
 		
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'density_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'density_flow')
 		constructor%rho_f%s_ptr					=> scal_f_ptr%s_ptr
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'pressure_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'pressure_flow')
 		constructor%p_f%s_ptr					=> scal_f_ptr%s_ptr
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'full_energy_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'full_energy_flow')
 		constructor%E_f_f%s_ptr					=> scal_f_ptr%s_ptr			
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'internal_energy_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'internal_energy_flow')
 		constructor%e_i_f%s_ptr					=> scal_f_ptr%s_ptr
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'velocity_of_sound_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'velocity_of_sound_flow')
 		constructor%v_s_f%s_ptr					=> scal_f_ptr%s_ptr
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'temperature_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'temperature_flow')
 		constructor%T_f%s_ptr					=> scal_f_ptr%s_ptr		
 		
 		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
@@ -127,9 +128,9 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
 		constructor%Y%v_ptr				=> vect_c_ptr%v_ptr
 
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'velocity_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'velocity_flow')
 		constructor%v_f%v_ptr			=> vect_f_ptr%v_ptr		
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'specie_molar_concentration_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'specie_molar_concentration_flow')
 		constructor%Y_f%v_ptr			=> vect_f_ptr%v_ptr		
 		
 		call manager%create_scalar_field(gamma_f	,'adiabatic_index_flow'	,'gamma_flow')

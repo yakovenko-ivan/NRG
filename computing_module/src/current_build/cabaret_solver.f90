@@ -126,13 +126,14 @@ contains
 
 		real(dp)								:: calculation_time
 		
-		type(field_scalar_cons_pointer)	:: scal_ptr
-		type(field_vector_cons_pointer)	:: vect_ptr
-		type(field_tensor_cons_pointer)	:: tens_ptr		
+		type(field_scalar_cons_pointer)	:: scal_c_ptr
+		type(field_vector_cons_pointer)	:: vect_c_ptr
+		type(field_tensor_cons_pointer)	:: tens_c_ptr		
 
 		type(field_scalar_flow_pointer)	:: scal_f_ptr		
 		type(field_vector_flow_pointer)	:: vect_f_ptr
-		
+		type(field_tensor_flow_pointer)	:: tens_f_ptr	
+        
         type(particles_phase)           :: particles_params
 		integer							:: particles_phase_counter		
         
@@ -174,18 +175,18 @@ contains
 		constructor%mesh%mesh_ptr		=> manager%computational_mesh_pointer%mesh_ptr
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
         
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
-		constructor%rho%s_ptr				=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
-		constructor%T%s_ptr					=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'pressure')
-		constructor%p%s_ptr					=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'full_energy')
-		constructor%E_f%s_ptr				=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'internal_energy')
-		constructor%e_i%s_ptr				=> scal_ptr%s_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'density')
+		constructor%rho%s_ptr				=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'temperature')
+		constructor%T%s_ptr					=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure')
+		constructor%p%s_ptr					=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'full_energy')
+		constructor%E_f%s_ptr				=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'internal_energy')
+		constructor%e_i%s_ptr				=> scal_c_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
+		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr		
 		
 		call manager%create_scalar_field(rho_f_new	,'density_flow'				,'rho_f_new')
 		constructor%rho_f_new%s_ptr 	=> rho_f_new		
@@ -205,39 +206,39 @@ contains
 		call manager%create_vector_field(v_f_new,'velocity_flow'					,'v_f_new',	'spatial')
 		constructor%v_f_new%v_ptr => v_f_new	
 		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
-		constructor%v%v_ptr				=> vect_ptr%v_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
-		constructor%Y%v_ptr				=> vect_ptr%v_ptr	
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
+		constructor%v%v_ptr				=> vect_c_ptr%v_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		constructor%Y%v_ptr				=> vect_c_ptr%v_ptr	
 		
 		if (constructor%reactive_flag) then
 			constructor%chem_kin_solver		= chemical_kinetics_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_chemistry')
-			constructor%E_f_prod_chem%s_ptr			=> scal_ptr%s_ptr
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_production_chemistry')
-			constructor%Y_prod_chem%v_ptr			=> vect_ptr%v_ptr
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_chemistry')
+			constructor%E_f_prod_chem%s_ptr			=> scal_c_ptr%s_ptr
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_production_chemistry')
+			constructor%Y_prod_chem%v_ptr			=> vect_c_ptr%v_ptr
 		end if
 
 		if (constructor%diffusion_flag) then
 			constructor%diff_solver			= diffusion_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_diffusion')
-			constructor%E_f_prod_diff%s_ptr			=> scal_ptr%s_ptr			
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_production_diffusion')
-			constructor%Y_prod_diff%v_ptr			=> vect_ptr%v_ptr
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_diffusion')
+			constructor%E_f_prod_diff%s_ptr			=> scal_c_ptr%s_ptr			
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_production_diffusion')
+			constructor%Y_prod_diff%v_ptr			=> vect_c_ptr%v_ptr
 		end if
 
 		if (constructor%heat_trans_flag) then
 			constructor%heat_trans_solver	= heat_transfer_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_heat_transfer')
-			constructor%E_f_prod_heat%s_ptr			=> scal_ptr%s_ptr
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_heat_transfer')
+			constructor%E_f_prod_heat%s_ptr			=> scal_c_ptr%s_ptr
 		end if
 
 		if(constructor%viscosity_flag) then
 			constructor%viscosity_solver			= viscosity_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_viscosity')
-			constructor%E_f_prod_visc%s_ptr			=> scal_ptr%s_ptr
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_viscosity')
-			constructor%v_prod_visc%v_ptr			=> vect_ptr%v_ptr
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_viscosity')
+			constructor%E_f_prod_visc%s_ptr			=> scal_c_ptr%s_ptr
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_production_viscosity')
+			constructor%v_prod_visc%v_ptr			=> vect_c_ptr%v_ptr
         end if			
 		
         
@@ -255,26 +256,26 @@ contains
 				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Lagrangian particles solver
 !				constructor%particles_solver(particles_phase_counter)	= particles_solver_c(manager, particles_params, particles_phase_counter)                !# Continuum particles solver
 				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_ptr%s_ptr
+				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
+				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr
 				write(var_name,'(A,I2.2)') 'density_production_particles', particles_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%rho_prod_particles(particles_phase_counter)%s_ptr	=> scal_ptr%s_ptr                
+				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
+				constructor%rho_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr                
 				write(var_name,'(A,I2.2)') 'velocity_production_particles', particles_phase_counter						
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)						!# Continuum particles solver								
-				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr						!# Continuum particles solver
+				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)						!# Continuum particles solver								
+				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_c_ptr%v_ptr						!# Continuum particles solver
 				write(var_name,'(A,I2.2)') 'concentration_production_particles', particles_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-				constructor%Y_prod_particles(particles_phase_counter)%v_ptr		=> vect_ptr%v_ptr                
+				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
+				constructor%Y_prod_particles(particles_phase_counter)%v_ptr		=> vect_c_ptr%v_ptr                
 			end do		
 		end if
 	
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,'adiabatic_index_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'adiabatic_index_flow')
 		constructor%gamma_f_new%s_ptr	=> scal_f_ptr%s_ptr				
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'adiabatic_index')
-		constructor%gamma%s_ptr			=> scal_ptr%s_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_of_sound')
-		constructor%v_s%s_ptr			=> scal_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'adiabatic_index')
+		constructor%gamma%s_ptr			=> scal_c_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_of_sound')
+		constructor%v_s%s_ptr			=> scal_c_ptr%s_ptr		
 		
 		problem_data_io				= data_io_c(manager,calculation_time)
 		
