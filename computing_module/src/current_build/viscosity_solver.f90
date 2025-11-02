@@ -24,7 +24,7 @@ module viscosity_solver_class
 	
 	type(field_scalar_cons)	,target	:: E_f_prod_visc, E_f_prod_visc_FDS, nu
 	type(field_vector_cons)	,target	:: v_prod_visc	
-	type(field_tensor)		,target	:: sigma
+	type(field_tensor_cons)	,target	:: sigma
 	
 	
 	
@@ -60,9 +60,9 @@ contains
 	
 		type(data_manager)	, intent(inout)	:: manager
 	
-		type(field_scalar_cons_pointer)	:: scal_ptr
-		type(field_vector_cons_pointer)	:: vect_ptr
-		type(field_tensor_cons_pointer)	:: tens_ptr	
+		type(field_scalar_cons_pointer)	:: scal_c_ptr
+		type(field_vector_cons_pointer)	:: vect_c_ptr
+		type(field_tensor_cons_pointer)	:: tens_c_ptr	
 	
 		character(len=20)	:: coordinate_system
 		integer	,dimension(3,2)	:: cons_allocation_bounds, flow_allocation_bounds 
@@ -70,12 +70,12 @@ contains
 		integer	:: dimensions
 		integer	:: dim
 		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
-		constructor%T%s_ptr				=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
-		constructor%rho%s_ptr					=> scal_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'temperature')
+		constructor%T%s_ptr				=> scal_c_ptr%s_ptr	
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
+		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'density')
+		constructor%rho%s_ptr					=> scal_c_ptr%s_ptr
 		
 		call manager%create_scalar_field(E_f_prod_visc		,'energy_production_viscosity'		,'E_f_prod_visc')
 		constructor%E_f_prod%s_ptr		=> E_f_prod_visc	
@@ -86,10 +86,10 @@ contains
 		call manager%create_scalar_field(nu				,'viscosity'					,'nu')
 		constructor%nu%s_ptr			=> nu
 		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
-		constructor%v%v_ptr				=> vect_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
-		constructor%Y%v_ptr				=> vect_ptr%v_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
+		constructor%v%v_ptr				=> vect_c_ptr%v_ptr
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		constructor%Y%v_ptr				=> vect_c_ptr%v_ptr
 		
 		call manager%create_vector_field(v_prod_visc	,'velocity_production_viscosity','v_prod_visc'	,'spatial')
 		constructor%v_prod%v_ptr		=> v_prod_visc
