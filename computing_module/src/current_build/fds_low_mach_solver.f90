@@ -89,7 +89,7 @@ module fds_low_mach_solver_class
 		type(boundary_conditions_pointer)			:: boundary
 
 		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mol_mix_conc
-		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff	, E_f_int		, h_s			, gamma
+		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_diff	, E_f_int		, h_s			, gamma
 		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_old			, R
 		type(field_scalar_cons_pointer)	:: nu		, kappa
 		type(field_scalar_flow_pointer)	:: F_a		, F_b
@@ -297,8 +297,6 @@ contains
         
  		if(constructor%viscosity_flag) then
 			constructor%visc_solver			= viscosity_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_viscosity_FDS')
-			constructor%E_f_prod_visc%s_ptr			=> scal_ptr%s_ptr
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_viscosity')
 			constructor%v_prod_visc%v_ptr			=> vect_ptr%v_ptr
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'viscosity')
@@ -1018,7 +1016,6 @@ contains
 					E_f_prod_chem 	    => this%E_f_prod_chem%s_ptr	, &
 					E_f_prod_heat	    => this%E_f_prod_heat%s_ptr	, &
 					E_f_prod_gd 	    => this%E_f_prod_gd%s_ptr	, &
-					E_f_prod_visc	    => this%E_f_prod_visc%s_ptr	, &
 					E_f_prod_diff	    => this%E_f_prod_diff%s_ptr	, &	
 					E_f_prod_particles	=> this%E_f_prod_particles  , &
 					thermo			    => this%thermo%thermo_ptr	, &
@@ -1058,7 +1055,7 @@ contains
 					div_v_int%cells(i,j,k) = 0.0_dp
 					
 					!if ((i > cons_inner_loop(1,1) + 1).and.(j > cons_inner_loop(2,1) + 1).and.(i < cons_inner_loop(1,2) - 1).and.(j < cons_inner_loop(2,2) - 1)) then
-					if (this%viscosity_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_visc%cells(i,j,k)	![J/m^3/s]
+					!if (this%viscosity_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_visc%cells(i,j,k)	![J/m^3/s]
 					if (this%heat_trans_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_heat%cells(i,j,k)	![J/m^3/s]
 					if (this%diffusion_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_diff%cells(i,j,k)	![J/m^3/s]
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)	![J/m^3/s]
@@ -1729,7 +1726,7 @@ contains
 			pressure_iteration	= 0
 			pressure_converged	= .false.
 			
-			do while ((.not.pressure_converged).and.(pressure_iteration < 200)) 
+			do while ((.not.pressure_converged).and.(pressure_iteration < 10)) 
 
                 associate (	p_dyn				=> this%p_dyn%s_ptr , &
                             p_old				=> this%p_old)
