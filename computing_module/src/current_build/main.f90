@@ -14,6 +14,7 @@ program computing_module
 	use boundary_conditions_class
 	use field_scalar_class
 	use field_vector_class
+	use field_tensor_class
 	use data_save_class
 	use data_io_class
 	use post_processor_manager_class

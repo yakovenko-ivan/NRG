@@ -209,12 +209,13 @@ contains
 					Y_prod2			=> this%Y_prod2%v_ptr						, &
 					molar_masses    => this%thermo%thermo_ptr%molar_masses		, &
 					enhanced_efficiencies    => this%chem%chem_ptr%enhanced_efficiencies	, &
-					mesh			=> this%mesh%mesh_ptr						, &
+					bc				=> this%boundary%bc_ptr                     , &
+                    mesh			=> this%mesh%mesh_ptr						, &
 					chem			=> this%chem%chem_ptr)
 					
 	!$omp parallel default(shared) private(i,j,k,i_react,i_specie,specie_enthalpy,N,NSTATE,NTASK,NROOT,IERROR,MINT,MITER,IMPL,MU,ML,MXORD,MXSTEP,LENW,LENIW,NDE,MATDIM,IERFLG,EPS,HMAX,TIN,TOUT,EWT) , &
-	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	, & 
-    !$omp& firstprivate(this)
+	!$omp& private(ITOL, RTOL, ATOL, ITASK, TOUT2, IER)	!, & 
+    !!$omp& firstprivate(this)
         
 	!!$omp& shared(this,time_step,cell_size,species_number,reactions_number,cons_inner_loop,acetylene_flag)
 
@@ -227,7 +228,7 @@ contains
 			if (		(T%cells(i,j,k) >= 305.0_dp) 	&
 				!.and.	(T%cells(i,j,k) <= 5000.0_dp)	&
 				!.and.	(Y%pr(2)%cells(i,j,k) >= 0.001_dkind)	&
-				.and.	(this%boundary%bc_ptr%bc_markers(i,j,k) == 0)) then
+				.and.	(bc%bc_markers(i,j,k) == 0)) then
 
 
 

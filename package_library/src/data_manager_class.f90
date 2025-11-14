@@ -10,6 +10,7 @@ module data_manager_class
 	use field_pointers
 	use field_scalar_class
 	use field_vector_class
+	use field_tensor_class
 	use solver_options_class
 
     use benchmarking

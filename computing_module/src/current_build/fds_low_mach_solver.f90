@@ -1726,7 +1726,7 @@ contains
 			pressure_iteration	= 0
 			pressure_converged	= .false.
 			
-			do while ((.not.pressure_converged).and.(pressure_iteration < 10)) 
+			do while ((.not.pressure_converged).and.(pressure_iteration < 200)) 
 
                 associate (	p_dyn				=> this%p_dyn%s_ptr , &
                             p_old				=> this%p_old)
@@ -2231,8 +2231,8 @@ contains
 										boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 										select case(boundary_type_name)
 											case('wall')
-												R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
-																				- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
+												R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		            &
+																				- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
 																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * 1.0_dp * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
 												
                                                 !R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
@@ -3923,8 +3923,8 @@ contains
 								
 								select case(boundary_type_name)
 									case('wall')
-										if(this%boundary%bc_ptr%boundary_types(bound_number)%is_conductive()) then
-											wall_temperature = this%boundary%bc_ptr%boundary_types(bound_number)%get_wall_temperature()
+										if(bc%boundary_types(bound_number)%is_conductive()) then
+											wall_temperature = bc%boundary_types(bound_number)%get_wall_temperature()
 											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = wall_temperature
 										else
 											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = T%cells(i,j,k)

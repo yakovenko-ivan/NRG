@@ -196,7 +196,8 @@ contains
 						mol_mix_conc    => this%mol_mix_conc%s_ptr	, &
 						v_s             => this%v_s%s_ptr			, &
 						Y               => this%Y%v_ptr				, &
-						v               => this%v%v_ptr)
+						v               => this%v%v_ptr             , &
+                        bc		        => this%boundary%bc_ptr)
 
 		dimensions		= this%domain%get_domain_dimensions()
 		utter_loop		= this%domain%get_local_utter_cells_bounds()
@@ -206,7 +207,7 @@ contains
 		do j = inner_loop(2,1),inner_loop(2,2)
 		do i = inner_loop(1,1),inner_loop(1,2)
 
-			if(this%boundary%bc_ptr%bc_markers(i,j,k) == 0) then
+			if(bc%bc_markers(i,j,k) == 0) then
 			
 				average_molar_mass = 0.0_dp
 				do specie_number = 1,species_number
@@ -307,8 +308,8 @@ contains
 					gamma_f	=> this%gamma_f%s_ptr	, &
 					bc		=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,cp,cv,h_s), &
-    !$omp& firstprivate(this)
+	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,cp,cv,h_s)!, &
+    !!$omp& firstprivate(this)
 	!!$omp& shared(e_i_f_old,c_v_f_old,flow_inner_loop,dimensions,species_number)
 	
 		do dim = 1, dimensions
@@ -404,8 +405,8 @@ contains
                     bc	    		=> this%boundary%bc_ptr , &
 					mesh			=> this%mesh%mesh_ptr)
 
-	!$omp parallel default(shared) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,h_s_Tref, average_molar_mass,T_iter) , &
-    !$omp& firstprivate(this)
+	!$omp parallel default(shared) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,h_s_Tref, average_molar_mass,T_iter)! , &
+    !!$omp& firstprivate(this)
 	!!$omp& shared(this,gamma,dimensions,cons_inner_loop,species_number)
         
 	!$omp do collapse(3) schedule(static)
@@ -518,8 +519,8 @@ contains
 					Y				=> this%Y%v_ptr			   , &
 					bc				=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass) , &
-    !$omp& firstprivate(this)
+	!$omp parallel default(shared) private(i,j,k,dim,specie_number,t_initial,t_final,e_internal,cp,cv,average_molar_mass) !, &
+    !!$omp& firstprivate(this)
 	!!$omp& shared(this,gamma,dimensions,cons_inner_loop,species_number)
 
 	!$omp do collapse(3) schedule(static)
@@ -610,8 +611,8 @@ contains
 					gamma           => this%gamma%s_ptr         , &
 					bc				=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared) private(i,j,k,dim,specie_number,cp,cv,average_molar_mass) , &
-    !$omp& firstprivate(this)                    
+	!$omp parallel default(shared) private(i,j,k,dim,specie_number,cp,cv,average_molar_mass) !, &
+    !!$omp& firstprivate(this)                    
 	!!$omp& shared(this,dimensions,cons_inner_loop,species_number,predictor,time_step)
 
 	!$omp do collapse(3) schedule(static)					
@@ -720,8 +721,8 @@ contains
 					mesh	=> this%mesh%mesh_ptr	, &
 					bc		=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,t_final,e_internal,cp,cv,h_s,T_old,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r) , &
-    !$omp& firstprivate(this)
+	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,t_final,e_internal,cp,cv,h_s,T_old,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r) !, &
+    !!$omp& firstprivate(this)
 	!!$omp& shared(this,e_i_f_old,c_v_f_old,flow_inner_loop,dimensions,species_number)
 	
         	
@@ -870,7 +871,8 @@ contains
 				
 		associate(  rho     => this%rho%s_ptr   , &
 					E_f		=> this%E_f%s_ptr	, &
-					Y		=> this%Y%v_ptr)	
+					Y		=> this%Y%v_ptr     , &
+                    bc		=> this%boundary%bc_ptr)	
 
 			dimensions		= this%domain%get_domain_dimensions()
 			inner_loop		= this%domain%get_local_inner_cells_bounds()				
@@ -879,7 +881,7 @@ contains
 			do j = inner_loop(2,1),inner_loop(2,2)
 			do i = inner_loop(1,1),inner_loop(1,2)					
 					
-				if(this%boundary%bc_ptr%bc_markers(i,j,k) == 0) then
+				if(bc%bc_markers(i,j,k) == 0) then
 
 					total_energy_error	= total_energy_error	- E_f%cells(i,j,k)
 					total_mass_error	= total_mass_error		- rho%cells(i,j,k)
@@ -936,7 +938,8 @@ contains
 						h_s				=> this%h_s%s_ptr			, &
 						v_s             => this%v_s%s_ptr			, &
 						Y               => this%Y%v_ptr				, &
-						v               => this%v%v_ptr)
+						v               => this%v%v_ptr             , &
+                        bc		        => this%boundary%bc_ptr)
 
 		dimensions		= this%domain%get_domain_dimensions()
 		utter_loop		= this%domain%get_local_utter_cells_bounds()
@@ -945,25 +948,25 @@ contains
 		do k = inner_loop(3,1),inner_loop(3,2)
 		do j = inner_loop(2,1),inner_loop(2,2)
 		do i = inner_loop(1,1),inner_loop(1,2)
-			if(this%boundary%bc_ptr%bc_markers(i,j,k) == 0) then
+			if(bc%bc_markers(i,j,k) == 0) then
 
 				do dim = 1,dimensions
 					if(	((I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= utter_loop(dim,1)).and.	&
 						((I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= utter_loop(dim,2)))  then
 						do plus	= 1, 2
 							sign		= (-1)**plus
-							bound_number	= this%boundary%bc_ptr%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 							if(bound_number /= 0) then
 
 								v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  v_s%cells(i,j,k)
 								rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  rho%cells(i,j,k)
 								E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  E_f%cells(i,j,k)
 
-								boundary_type_name = this%boundary%bc_ptr%boundary_types(bound_number)%get_type_name()
+								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 								select case(boundary_type_name)
 									case('wall')
-										if(this%boundary%bc_ptr%boundary_types(bound_number)%is_conductive()) then
-											wall_temperature = this%boundary%bc_ptr%boundary_types(bound_number)%get_wall_temperature()
+										if(bc%boundary_types(bound_number)%is_conductive()) then
+											wall_temperature = bc%boundary_types(bound_number)%get_wall_temperature()
 											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = wall_temperature
 										else
 											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = T%cells(i,j,k)
@@ -975,12 +978,12 @@ contains
 										
 									case('outlet','inlet')
 								
-										farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
-										farfield_temperature	= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_temperature()
-										farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
+										farfield_pressure		= bc%boundary_types(bound_number)%get_farfield_pressure()
+										farfield_temperature	= bc%boundary_types(bound_number)%get_farfield_temperature()
+										farfield_velocity		= bc%boundary_types(bound_number)%get_farfield_velocity()
 
-										call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
-										call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
+										call bc%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
+										call bc%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
 								
 										concs = 0.0_dp
 										do specie_number = 1, size(farfield_species_names)
@@ -1009,7 +1012,7 @@ contains
 										mol_mix_conc		=  average_molar_mass
 				
 										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * mol_mix_conc
-										call this%boundary%bc_ptr%boundary_types(bound_number)%set_farfield_density(farfield_density)
+										call bc%boundary_types(bound_number)%set_farfield_density(farfield_density)
 
 										do specie_number = 1,size(farfield_species_names)
 											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
@@ -1037,7 +1040,7 @@ contains
                                         v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	farfield_velocity
 
 										E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	farfield_E_f 
-										call this%boundary%bc_ptr%boundary_types(bound_number)%set_farfield_energy(farfield_E_f)
+										call bc%boundary_types(bound_number)%set_farfield_energy(farfield_E_f)
                                         
 										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)) / mol_mix_conc
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
