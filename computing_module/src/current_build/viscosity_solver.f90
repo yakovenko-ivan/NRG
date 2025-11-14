@@ -22,16 +22,18 @@ module viscosity_solver_class
 	private
 	public	:: viscosity_solver, viscosity_solver_c
 	
-	type(field_scalar_cons)	,target	:: E_f_prod_visc, E_f_prod_visc_FDS, nu
-	type(field_vector_cons)	,target	:: v_prod_visc	
-	type(field_tensor_cons)	,target	:: sigma
+	type(field_scalar_cons)	,target	:: E_f_prod_visc, nu
+	type(field_vector_cons)	,target	:: v_prod_visc
+    type(field_vector_flow) ,target :: sigma_dot_v
+	type(field_tensor_flow)	,target	:: sigma
 	
 	
 	
 	type	:: viscosity_solver
-		type(field_scalar_cons_pointer)				:: E_f_prod, E_f_prod_FDS, T, nu, rho, mol_mix_conc
+		type(field_scalar_cons_pointer)				:: E_f_prod, T, nu, rho, mol_mix_conc
 		type(field_vector_cons_pointer)				:: v, v_prod, Y
-		type(field_tensor_cons_pointer)				:: sigma
+        type(field_vector_flow_pointer)             :: sigma_dot_v
+		type(field_tensor_flow_pointer)				:: sigma
 		type(computational_domain)					:: domain
 		type(mpi_communications)					:: mpi_support
 		type(boundary_conditions_pointer)			:: boundary
@@ -60,9 +62,9 @@ contains
 	
 		type(data_manager)	, intent(inout)	:: manager
 	
-		type(field_scalar_cons_pointer)	:: scal_c_ptr
-		type(field_vector_cons_pointer)	:: vect_c_ptr
-		type(field_tensor_cons_pointer)	:: tens_c_ptr	
+		type(field_scalar_cons_pointer)	:: scal_ptr
+		type(field_vector_cons_pointer)	:: vect_ptr
+		type(field_tensor_cons_pointer)	:: tens_ptr	
 	
 		character(len=20)	:: coordinate_system
 		integer	,dimension(3,2)	:: cons_allocation_bounds, flow_allocation_bounds 
@@ -70,31 +72,31 @@ contains
 		integer	:: dimensions
 		integer	:: dim
 		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'temperature')
-		constructor%T%s_ptr				=> scal_c_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'density')
-		constructor%rho%s_ptr					=> scal_c_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
+		constructor%T%s_ptr				=> scal_ptr%s_ptr	
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
+		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
+		constructor%rho%s_ptr					=> scal_ptr%s_ptr
 		
 		call manager%create_scalar_field(E_f_prod_visc		,'energy_production_viscosity'		,'E_f_prod_visc')
 		constructor%E_f_prod%s_ptr		=> E_f_prod_visc	
-
-		call manager%create_scalar_field(E_f_prod_visc_FDS	,'energy_production_viscosity_FDS'	,'E_f_prod_visc_FDS')
-		constructor%E_f_prod_FDS%s_ptr	=> E_f_prod_visc_FDS	        
         
 		call manager%create_scalar_field(nu				,'viscosity'					,'nu')
 		constructor%nu%s_ptr			=> nu
 		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
-		constructor%v%v_ptr				=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
-		constructor%Y%v_ptr				=> vect_c_ptr%v_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
+		constructor%v%v_ptr				=> vect_ptr%v_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		constructor%Y%v_ptr				=> vect_ptr%v_ptr
 		
 		call manager%create_vector_field(v_prod_visc	,'velocity_production_viscosity','v_prod_visc'	,'spatial')
 		constructor%v_prod%v_ptr		=> v_prod_visc
+        
+        call manager%create_vector_field(sigma_dot_v	,'sigma_dot_v'						,'sigma_dot_v'		,'spatial')
+		constructor%sigma_dot_v%v_ptr => sigma_dot_v
 
-		call manager%create_tensor_field(sigma			,'stress'						,'sigma')
+		call manager%create_tensor_field(sigma			,'stress'				        ,'sigma')
 		constructor%sigma%t_ptr			=> sigma
 
 		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr
@@ -109,8 +111,7 @@ contains
 		dimensions = constructor%domain%get_domain_dimensions()
 		
 		constructor%E_f_prod%s_ptr%cells(:,:,:)		= 0.0_dp
-        constructor%E_f_prod_FDS%s_ptr%cells(:,:,:)	= 0.0_dp
-        
+       
 		do dim = 1, dimensions
 			constructor%v_prod%v_ptr%pr(dim)%cells(:,:,:) = 0.0_dp
 		end do
@@ -132,12 +133,12 @@ contains
 
 	subroutine	solve_viscosity(this,time_step)
 	
-		class(viscosity_solver) ,intent(inout) :: this
-		real(dp)				,intent(in)		:: time_step
+		class(viscosity_solver) ,intent(inout)  :: this
+		real(dp)				,intent(in)	    :: time_step
 		
-		real(dp)	:: div_sigma, v_div_sigma, sigma_dv
+		real(dp)	:: div_v, div_sigma, div_sigma_dot_v
         
-		character(len=20)				:: coordinate_system
+		character(len=20)			:: coordinate_system
 		real(dp), dimension (3,3)	:: lame_coeffs
 		
 		integer						:: dimensions
@@ -145,10 +146,10 @@ contains
 		real(dp)	,dimension(3)	:: cell_size			
 		
 		integer	:: sign
-		integer :: i,j,k,plus,dim1,dim2
+		integer :: i,j,k,plus,dim,dim1,dim2
 
 		call this%calculate_sigma()
-		call this%apply_boundary_conditions()
+		!call this%apply_boundary_conditions()
 
 		dimensions		= this%domain%get_domain_dimensions()
 
@@ -158,20 +159,19 @@ contains
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
-        associate(  sigma			=> this%sigma%t_ptr)
-		    call this%mpi_support%exchange_conservative_tensor_field(sigma)
-        end associate
+      !  associate(  sigma			=> this%sigma%t_ptr)
+		    !call this%mpi_support%exchange_conservative_tensor_field(sigma)
+      !  end associate
         
 		associate(  v_prod			=> this%v_prod%v_ptr		, &
 					v				=> this%v%v_ptr				, &
 					E_f_prod		=> this%E_f_prod%s_ptr		, &
-					E_f_prod_FDS	=> this%E_f_prod_FDS%s_ptr	, &
 					rho				=> this%rho%s_ptr			, &
 					sigma			=> this%sigma%t_ptr			, &
 					mesh			=> this%mesh%mesh_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared)  private(i,j,k,dim1,dim2,plus,sign,v_div_sigma,div_sigma,sigma_dv,lame_coeffs) !, &
+	!$omp parallel default(shared)  private(i,j,k,dim1,dim2,plus,sign,div_v,div_sigma,div_sigma_dot_v,lame_coeffs) !, &
     !!$omp& firstprivate(this)
 	!!$omp& shared(this,time_step,cons_inner_loop,dimensions,cell_size,coordinate_system) 
         
@@ -180,14 +180,10 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 		
-			E_f_prod%cells(i,j,k)	= 0.0_dp
-            E_f_prod_FDS%cells(i,j,k)	= 0.0_dp
+			E_f_prod%cells(i,j,k)	    = 0.0_dp
 		
 			if(bc%bc_markers(i,j,k) == 0) then
-                
-				v_div_sigma		= 0.0_dp
-				sigma_dv		= 0.0_dp
-                
+                                
 				lame_coeffs		= 1.0_dp				
 			
 				select case(coordinate_system)
@@ -195,47 +191,54 @@ contains
 						lame_coeffs			= 1.0_dp
 					case ('cylindrical')
 						! x -> z, y -> r
-						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp * cell_size(1)			
 						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + cell_size(1)	
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp * cell_size(1)	
 					
 					case ('spherical')
 						! x -> r
-						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
+						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp * cell_size(1))**2
 						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + cell_size(1))**2
-				end select							
+						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp * cell_size(1))**2
+                    end select							
 				
+                div_v = 0.0_dp
+                do dim = 1, dimensions
+                    div_v = div_v + (0.5_dp * (v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v%pr(dim)%cells(i,j,k)) * lame_coeffs(dim,3) - 0.5_dp * (v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim)%cells(i,j,k)) * lame_coeffs(dim,1)) / cell_size(dim) / lame_coeffs(dim,2)
+                end do
+                    
+                select case(coordinate_system)
+					case ('cylindrical')
+						this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k) - 2.0_dp/3.0_dp*div_v)
+					case ('spherical')
+						this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k) - 2.0_dp/3.0_dp*div_v) 
+                end select	 
 				
+                div_sigma_dot_v = 0.0_dp
 				do dim1 = 1,dimensions
-					div_sigma	= 0.0_dp
 					
-					do dim2 = 1,dimensions
-							
-						div_sigma	= div_sigma + (	sigma%pr(dim1,dim2)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) &
-												-	sigma%pr(dim1,dim2)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3)))/(2.0_dp * cell_size(dim2))
-                        
-                        sigma_dv	= sigma_dv + sigma%pr(dim1,dim2)%cells(i,j,k) * (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dp*cell_size(dim2))
+                    div_sigma       = 0.0_dp
+
+                    do dim2 = 1,dimensions
+						div_sigma       = div_sigma + (	sigma%pr(dim1,dim2)%cells(dim2,i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3))*lame_coeffs(dim2,3)    &
+										    		-	sigma%pr(dim1,dim2)%cells(dim2,i,j,k)*lame_coeffs(dim2,1))/(cell_size(dim2))/lame_coeffs(dim2,2)
                     end do
+                    
+                    div_sigma_dot_v = div_sigma_dot_v + (sigma_dot_v%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)*lame_coeffs(dim1,3))  &
+										    		-	sigma_dot_v%pr(dim1)%cells(dim1,i,j,k)*lame_coeffs(dim1,1))/(cell_size(dim1))/lame_coeffs(dim1,2)
                     
 					select case(coordinate_system)
 					case ('cylindrical')
-						if(dim1==1) div_sigma = div_sigma + (sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
-						if(dim1==2) div_sigma = div_sigma + (sigma%pr(1,2)%cells(i,j,k))/mesh%mesh(1,i,j,k)
+						if(dim1==1) div_sigma = div_sigma - this%sigma_theta_theta(i,j,k)/mesh%mesh(1,i,j,k)
 					case ('spherical')
-						if(dim1==1) div_sigma = div_sigma + 2.0_dp*(sigma%pr(1,1)%cells(i,j,k) - this%sigma_theta_theta(i,j,k))/mesh%mesh(1,i,j,k)
+						if(dim1==1) div_sigma = div_sigma - this%sigma_theta_theta(i,j,k)/mesh%mesh(1,i,j,k)
                     end select			
+									
+					v_prod%pr(dim1)%cells(i,j,k)	=  div_sigma 
+                end do
 				
-                    v_div_sigma	= v_div_sigma + div_sigma * v%pr(dim1)%cells(i,j,k)    
-					
-					v_prod%pr(dim1)%cells(i,j,k)	=  div_sigma !* time_step
-
-				end do
-				
-				E_f_prod%cells(i,j,k) = v_div_sigma + sigma_dv
+                E_f_prod%cells(i,j,k) = div_sigma_dot_v
                 
-                E_f_prod_FDS%cells(i,j,k) = sigma_dv
-
 			end if
 		end do
 		end do
@@ -247,10 +250,8 @@ contains
         end associate
                     
         associate(  v_prod			=> this%v_prod%v_ptr		, &
-					E_f_prod		=> this%E_f_prod%s_ptr		, &
-					E_f_prod_FDS	=> this%E_f_prod_FDS%s_ptr)
+					E_f_prod		=> this%E_f_prod%s_ptr)
 		call this%mpi_support%exchange_conservative_scalar_field(E_f_prod)
-        call this%mpi_support%exchange_conservative_scalar_field(E_f_prod_FDS)
 		call this%mpi_support%exchange_conservative_vector_field(v_prod)		
 		
 		end associate
@@ -260,15 +261,15 @@ contains
 	subroutine calculate_sigma(this)
 		class(viscosity_solver)	,intent(inout)	::	this
 		
-		integer         :: i, j, k, dim1, dim2, dim3
-        real(dp)     :: div_v, nu_node, dv1_dx2, dv2_dx1, v_face_h2, v_face_l2
+		integer     :: i, j, k, dim1, dim2, dim3
+        real(dp)    :: div_v, nu_face, dv1_dx2, dv2_dx1, v_node_h, v_node_l
 
 		real(dp), dimension (3,3)	:: lame_coeffs
-		character(len=20)				:: coordinate_system
+		character(len=20)			:: coordinate_system
 		
 		integer						:: dimensions
-		integer		,dimension(3,2)	:: cons_inner_loop, flow_inner_loop
-		real(dp)	,dimension(3)	:: cell_size		
+		integer		,dimension(3,2)	:: cons_inner_loop, flow_inner_loop, loop
+		real(dp)	,dimension(3)	:: cell_size
 		
 		call this%calculate_viscosity_coeff()
 		
@@ -286,76 +287,101 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(v)					
         end associate
 
-		associate(	v		=> this%v%v_ptr					, &
-					nu      => this%nu%s_ptr				, &
-					sigma   => this%sigma%t_ptr				, &
-					mesh    => this%mesh%mesh_ptr)
+		associate(	v		    => this%v%v_ptr					, &
+					nu          => this%nu%s_ptr				, &
+                    sigma_dot_v => this%sigma_dot_v%v_ptr       , &
+					sigma       => this%sigma%t_ptr				, &                    
+					mesh        => this%mesh%mesh_ptr)
 
-		!$omp parallel default(shared)  private(i,j,k,dim1,dim2,dim3,div_v,dv1_dx2,dv2_dx1,lame_coeffs) !, &
+		!$omp parallel default(shared)  private(i,j,k,dim1,dim2,dim3,loop,div_v,dv1_dx2,dv2_dx1,v_node_h,v_node_l,lame_coeffs,nu_face) !, &
+
         !!$omp& firstprivate(this)
 		!!$omp& shared(this,cons_inner_loop,flow_inner_loop,cell_size,dimensions,coordinate_system) 
 
+		do dim1 = 1, dimensions
+
+			loop = flow_inner_loop
+
+			do dim3 = 1, dimensions
+				loop(dim3,2) = flow_inner_loop(dim3,2) - (1 - I_m(dim3,dim1))	
+			end do	
 
 		!$omp do collapse(3) schedule(static)
-		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-		
-            do dim1 = 1,dimensions
-            do dim2 = 1,dimensions
-  
-                div_v = 0.0_dp
-			
-				lame_coeffs		= 1.0_dp				
-			
-				select case(coordinate_system)
-					case ('cartesian')	
-						lame_coeffs			= 1.0_dp
-					case ('cylindrical')
-						! x -> r, y -> z
-						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
-						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + cell_size(1)	
-
-					case ('spherical')
-						! x -> r
-						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
-						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + cell_size(1))**2
-				end select					
-
-                if (dim1 <= dim2) then
-                    if (dim1 == dim2) then
-                        do dim3 = 1,dimensions
-                            div_v = div_v + (v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) * lame_coeffs(dim3,3) - v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) * lame_coeffs(dim3,1))/(2.0_dp*cell_size(dim3)*lame_coeffs(dim3,2))
-                        end do
+			do k = loop(3,1),loop(3,2)
+			do j = loop(2,1),loop(2,2)
+			do i = loop(1,1),loop(1,2)
+	
+			lame_coeffs		= 1.0_dp				
+            
+        	select case(coordinate_system)
+				case ('cartesian')	
+                    lame_coeffs			= 1.0_dp
+                case ('cylindrical')
+					! x -> r, y -> z
+                    if (dim1==1) then
+					    lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - cell_size(1)			
+					    lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)	
+					    lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k)
                     else
-                        div_v = 0.0_dp
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp * cell_size(1)			
+						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp * cell_size(1)	
                     end if
+				case ('spherical')
+					! x -> r
+					lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - cell_size(1))**2
+					lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
+					lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k))**2
+            end select
+            
+            nu_face = 0.5_dp * (nu%cells(i,j,k) + nu%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)))
 
-                    dv1_dx2 = (v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) - v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3))) / (2.0_dp*cell_size(dim2))
-                    dv2_dx1 = (v%pr(dim2)%cells(i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)) - v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / (2.0_dp*cell_size(dim1))
+            do dim2 = 1,dimensions
 
-                    sigma%pr(dim1,dim2)%cells(i,j,k) = nu%cells(i,j,k) * (dv1_dx2 + dv2_dx1 - 2.0_dp/3.0_dp*div_v)
+                sigma%pr(dim2,dim1)%cells(dim1,i,j,k) = 0.0_dp
+                    
+                if (dim1 == dim2) then
+                    
+                    sigma%pr(dim2,dim1)%cells(dim1,i,j,k)  = sigma%pr(dim2,dim1)%cells(dim1,i,j,k) + nu_face * 2.0_dp * &
+                                                            (v%pr(dim1)%cells(i,j,k) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)))/cell_size(dim1)
+                    
+                    div_v = 0.0_dp
+                    
+                    do dim3 = 1, dimensions
+                        if (dim3 == dim1) then
+                            div_v = div_v + (v%pr(dim1)%cells(i,j,k) * lame_coeffs(dim1,3) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) * lame_coeffs(dim1,1)) / cell_size(dim1) / lame_coeffs(dim1,2)
+                        else
+                            v_node_h = 0.25_dp * (v%pr(dim3)%cells(i,j,k) + v%pr(dim3)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) + v%pr(dim3)%cells(i-I_m(dim1,1)+I_m(dim3,1),j-I_m(dim1,2)+I_m(dim3,2),k-I_m(dim1,3)+I_m(dim3,3)))
+                            v_node_l = 0.25_dp * (v%pr(dim3)%cells(i,j,k) + v%pr(dim3)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) + v%pr(dim3)%cells(i-I_m(dim1,1)-I_m(dim3,1),j-I_m(dim1,2)-I_m(dim3,2),k-I_m(dim1,3)-I_m(dim3,3)))
+                            
+                            div_v = div_v + (v_node_h * lame_coeffs(dim3,3) - v_node_l * lame_coeffs(dim3,1)) / cell_size(dim3) / lame_coeffs(dim3,2)
+                        end if
+                    end do
+                    
+                    sigma%pr(dim2,dim1)%cells(dim1,i,j,k)  = sigma%pr(dim2,dim1)%cells(dim1,i,j,k) - nu_face * 2.0_dp/3.0_dp * div_v
+                else
+                    
+                    v_node_h = 0.25_dp * (v%pr(dim1)%cells(i,j,k) + v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim1)%cells(i+I_m(dim2,1),j+I_m(dim2,2),k+I_m(dim2,3)) + v%pr(dim1)%cells(i-I_m(dim1,1)+I_m(dim2,1),j-I_m(dim1,2)+I_m(dim2,2),k-I_m(dim1,3)+I_m(dim2,3)))
+                    v_node_l = 0.25_dp * (v%pr(dim1)%cells(i,j,k) + v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim1)%cells(i-I_m(dim2,1),j-I_m(dim2,2),k-I_m(dim2,3)) + v%pr(dim1)%cells(i-I_m(dim1,1)-I_m(dim2,1),j-I_m(dim1,2)-I_m(dim2,2),k-I_m(dim1,3)-I_m(dim2,3)))
 
-                    select case(coordinate_system)
-						case ('cylindrical')
-							this%sigma_theta_theta(i,j,k) = -2.0_dp/3.0_dp*div_v
-							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k))
-						case ('spherical')
-							this%sigma_theta_theta(i,j,k) = -2.0_dp/3.0_dp*div_v
-							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (this%sigma_theta_theta(i,j,k) + 2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k)) 
-					end select						
-                
-					if (dim1 /= dim2) sigma%pr(dim2,dim1)%cells(i,j,k) = sigma%pr(dim1,dim2)%cells(i,j,k)
+                    dv1_dx2  = (v_node_h - v_node_l) / cell_size(dim2)
+
+                    dv2_dx1  = (v%pr(dim2)%cells(i,j,k) - v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3))) / cell_size(dim1)
+                    
+                    sigma%pr(dim2,dim1)%cells(dim1,i,j,k)  = sigma%pr(dim2,dim1)%cells(dim1,i,j,k) + nu_face * (dv1_dx2 + dv2_dx1)
                     
                 end if
+                
+                sigma_dot_v%pr(dim1)%cells(dim1,i,j,k) = sigma_dot_v%pr(dim1)%cells(dim1,i,j,k) + sigma%pr(dim2,dim1)%cells(dim1,i,j,k) * 0.5_dp * (v%pr(dim2)%cells(i,j,k) + v%pr(dim2)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)))
+                
 			end do
             end do
-        end do
-        end do
-        end do
-		!$omp end do nowait
+            end do
+            end do
+            
+		    !$omp end do nowait
+            end do
+
 
 		!$omp end parallel
 					
@@ -461,8 +487,10 @@ contains
 					nu%cells(i,j,k)      = 0.0_dp
 				else
 					nu%cells(i,j,k)      = 0.5_dp * (sum1 + 1.0_dp / sum2)
-				end if
+                end if
 				
+                !nu%cells(i,j,k)      = 100.0_dp * nu%cells(i,j,k)
+                
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1,dimensions
 						do plus = 1,2
@@ -527,9 +555,9 @@ contains
 								do dim1 = 1,dimensions
 								do dim2 = 1,dimensions
 									if (dim1 == dim2) then
-										sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= sigma%pr(dim1,dim2)%cells(i,j,k)
+!										sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= sigma%pr(dim1,dim2)%cells(i,j,k)
                                     else 
-                                        sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sigma%pr(dim1,dim2)%cells(i,j,k)
+!                                        sigma%pr(dim1,dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sigma%pr(dim1,dim2)%cells(i,j,k)
 									end if
 								end do
 								end do
