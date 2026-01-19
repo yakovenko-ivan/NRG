@@ -96,7 +96,7 @@ This method uses GNU tools (`gfortran`, `make`) via the Equation.com installer a
     ```bash
     # Ubuntu/Debian
     sudo apt install gfortran cmake make
-    # Fedora/RHER
+    # Fedora/RHEL
     sudo dnf install gcc-gfortran cmake make
     ```
 
@@ -143,20 +143,29 @@ The Intel `ifx` compiler is **not available** for macOS. The classic `ifort` com
 
 ---
 
-## Troubleshooting Common Issues
+## Building Different Problem Setups (Package Interface)
 
-*   **CMake Error: "No CMAKE_Fortran_COMPILER could be found."**
-    *   **Windows (Option A)**: Ensure you are using the **"x64 Native Tools Command Prompt"**, not a regular one.
-    *   **Linux (Option A)**: Ensure you have sourced the oneAPI environment (`source /opt/intel/oneapi/setvars.sh`).
-    *   **General**: Verify your compiler is installed and in your system's PATH (`ifx --version` or `gfortran --version`).
+The `package_interface` executable is used to generate initial conditions for specific problems. You can build it from different source files located in `package_interface/src/`.
 
-*   **Build fails with compilation errors**
-    *   Try building in `Debug` mode first, which may have fewer aggressive optimizations: `cmake .. -DCMAKE_BUILD_TYPE=Debug`
+### Steps to Build a Specific Interface:
+1.  **Re-configure CMake** with the `-DPACKAGE_INTERFACE_SOURCE` flag set to your desired `.f90` file (path relative to `package_interface/`).
+2.  **Build** the `package_interface` target.
 
-*   **"Permission denied" error on Linux/macOS**
-    ```bash
-    chmod +x build/computing_module
-    ```
+**Example: Building the '1D_laminar_velocity' interface**
+```bash
+cd build
+cmake .. -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/1D_laminar_velocity.f90
+cmake --build . --target package_interface
+```
+
+## Troubleshooting
+
+| Issue | Solution |
+| :--- | :--- |
+| **CMake Error: "No CMAKE_Fortran_COMPILER could be found."** | **Windows (Option 1)**: Ensure you are using the **"x64 Native Tools Command Prompt"**. <br> **Linux (Option 1)**: Run `source /opt/intel/oneapi/setvars.sh`. <br> **General**: Verify your compiler installation with `ifx --version` or `gfortran --version`. |
+| **Build fails with compilation errors** | Try building in `Debug` mode first, which may have fewer aggressive optimizations: `cmake .. -DCMAKE_BUILD_TYPE=Debug` |
+| **"Permission denied" error on Linux/macOS** | Run: `chmod +x build/computing_module` |
+| **CMake error about PACKAGE_INTERFACE_SOURCE not found** | Ensure the path is correct and relative to the `package_interface/` directory. The error message will list common examples. |
 
 ---
 
