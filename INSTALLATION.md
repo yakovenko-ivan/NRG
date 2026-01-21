@@ -15,8 +15,6 @@ All installations require:
 *   **Git**: To clone the repository. [Download Git](https://git-scm.com/downloads)
 *   **CMake 3.12 or higher**: The build system generator. [Download CMake](https://cmake.org/download/)
 
-Platform-specific requirements are detailed below.
-
 ---
 
 ## Installation on Windows
@@ -38,7 +36,6 @@ This method uses the native Microsoft toolchain (`MSBuild`) with the Intel `ifx`
     cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_Fortran_COMPILER=ifx
     cmake --build . --target computing_module --config Release
     ```
-    The executable `computing_module.exe` will be in `build\Release\`.
 
 ### **Option B: GNU Toolchain with gfortran (Recommended for Simplicity)**
 
@@ -54,10 +51,9 @@ This method uses GNU tools (`gfortran`, `make`) via the Equation.com installer a
     git clone https://github.com/yakovenko-ivan/NRG.git
     cd NRG
     mkdir build && cd build
-    cmake .. -G "MinGW Makefiles"
+    cmake .. -G "Unix Makefiles" -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=Release
     cmake --build . --target computing_module
     ```
-    The executable `computing_module.exe` will be in the `build\` directory.
 
 ---
 
@@ -85,10 +81,9 @@ This method uses GNU tools (`gfortran`, `make`) via the Equation.com installer a
     git clone https://github.com/yakovenko-ivan/NRG.git
     cd NRG
     mkdir build && cd build
-    cmake .. -DCMAKE_Fortran_COMPILER=ifx
+    cmake .. -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_BUILD_TYPE=Release
     cmake --build . --target computing_module
     ```
-    The `computing_module` executable will be in the `build/` directory.
 
 ### **Option B: Using GNU `gfortran` (Common Default)**
 
@@ -105,10 +100,9 @@ This method uses GNU tools (`gfortran`, `make`) via the Equation.com installer a
     git clone https://github.com/yakovenko-ivan/NRG.git
     cd NRG
     mkdir build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
+    cmake .. -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=Release 
     cmake --build . --target computing_module
     ```
-    The `computing_module` executable will be in the `build/` directory.
 
 **Visual Studio Code** can be installed via Snap or your distribution's package manager for a convenient development environment.
 
@@ -137,9 +131,22 @@ The Intel `ifx` compiler is **not available** for macOS. The classic `ifort` com
     cmake .. -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=Release
     cmake --build . --target computing_module
     ```
-    The `computing_module` executable will be in the `build/` directory.
 
 **Visual Studio Code** can be installed via Homebrew (`brew install --cask visual-studio-code`) or downloaded from its website.
+
+## Understanding Build Outputs
+
+The location of compiled executables depends on your **CMake generator**:
+
+| Generator Type | Examples | Build Type Specified Via | Executable Location |
+| :--- | :--- | :--- | :--- |
+| **Multi-Config** | `Visual Studio` | `--config <Debug/Release>` flag **during build** (`cmake --build`). | `build/bin/<Debug or Release>/` |
+| **Single-Config** | `Unix Makefiles` | `-DCMAKE_BUILD_TYPE=<Debug/Release>` flag **during configuration** (`cmake ..`). | `build/bin/` |
+
+**Example Paths:**
+*   Visual Studio (Release): `build/bin/Release/computing_module.exe`
+*   Unix Makefiles (Release): `build/bin/computing_module`
+*   Package Interface: `build/bin/package_interface_1D_laminar_velocity` (or similar descriptive name)
 
 ---
 
@@ -162,16 +169,16 @@ cmake --build . --target package_interface
 
 | Issue | Solution |
 | :--- | :--- |
-| **CMake Error: "No CMAKE_Fortran_COMPILER could be found."** | **Windows (Option 1)**: Ensure you are using the **"x64 Native Tools Command Prompt"**. <br> **Linux (Option 1)**: Run `source /opt/intel/oneapi/setvars.sh`. <br> **General**: Verify your compiler installation with `ifx --version` or `gfortran --version`. |
-| **Build fails with compilation errors** | Try building in `Debug` mode first, which may have fewer aggressive optimizations: `cmake .. -DCMAKE_BUILD_TYPE=Debug` |
-| **"Permission denied" error on Linux/macOS** | Run: `chmod +x build/computing_module` |
-| **CMake error about PACKAGE_INTERFACE_SOURCE not found** | Ensure the path is correct and relative to the `package_interface/` directory. The error message will list common examples. |
+| **CMake Error: "No CMAKE_Fortran_COMPILER could be found."** | **Windows (Option A)**: Use the **"x64 Native Tools Command Prompt"**. <br> **Linux (Option A)**: Run `source /opt/intel/oneapi/setvars.sh`. <br> **General**: Verify compiler with `ifx --version` or `gfortran --version`. |
+| **CMake Error: "CMake was unable to find a build program corresponding to 'Unix Makefiles'."** (Windows) | The `make` command is missing from your PATH. The Equation.com installer places it in `C:\gfortran\bin`. [Add this directory to your system's PATH](https://www.architectryan.com/2018/03/17/add-to-the-path-on-windows-10/). |
+| **Build fails with compilation errors** | Try a `Debug` build first for better error messages. **For Makefiles:** `cmake .. -DCMAKE_BUILD_TYPE=Debug`. **For Visual Studio:** `cmake --build . --config Debug`. |
+| **`--config` flag has no effect (Makefiles)** | This is expected. With `Unix Makefiles`, the build type is set during `cmake ..` with `-DCMAKE_BUILD_TYPE`. |
 
 ---
 
 ## Next Steps
 
-After a successful build, proceed to the [Tutorial](https://github.com/yakovenko-ivan/NRG/wiki/Tutorial-1:-First-Simulation) to run your first simulation.
+After a successful build, proceed to the [Tutorial: Running Your First Simulation](https://github.com/yakovenko-ivan/NRG/wiki/Tutorial-1:-First-Simulation) to learn how to use the `package_interface` and `computing_module` executables.
 
-**Need Help?**
+**Need Help?**  
 Please search for your error message in the [GitHub Issues](https://github.com/yakovenko-ivan/NRG/issues) or open a new one if your problem isn't documented.

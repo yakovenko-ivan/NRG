@@ -1,6 +1,6 @@
 program package_interface
 
-	use IFPORT
+	!use IFPORT
 
 	use kind_parameters
 	use global_data
@@ -255,20 +255,21 @@ program package_interface
 				call problem_post_proc_manager%create_post_processor_operation(problem_data_manager,1,'temperature'	,'transducer'	,operation_area_distance = (/-transducer_offset,0,0/))
 		
 			problem_data_save	= data_save_c(	problem_data_manager	,	&
-												visible_fields_names	= (/'pressure'						,&
-																			'pressure_dynamic'				,&
-																			'temperature'					,&
-																			'density'						,&
-																			'velocity'						,&
-																			'specie_molar_concentration'	,&
-																			'velocity_of_sound'				,&
-																			'velocity_production_viscosity'	,&
-																			'mixture_cp'					,&
-																			'thermal_conductivity'			,&
-																			'viscosity'						,&
-																			'energy_production_chemistry'	,&
-																			'energy_production_diffusion'	&
-																			/) ,	&
+												visible_fields_names	= [ character(len=40) :: &   
+                                                'pressure'						,&
+                                                'pressure_dynamic'				,&
+                                                'temperature'					,&
+                                                'density'						,&
+                                                'velocity'						,&
+                                                'specie_molar_concentration'	,&
+                                                'velocity_of_sound'				,&
+                                                'velocity_production_viscosity'	,&
+                                                'mixture_cp'					,&
+                                                'thermal_conductivity'			,&
+                                                'viscosity'						,&
+                                                'energy_production_chemistry'	,&
+                                                'energy_production_diffusion'	&
+                                                 ] ,	&
 												save_time				= 100.0_dp		,	&
 												save_time_units			= 'microseconds'	,	&
 												save_format				= 'tecplot'			,	&
@@ -418,7 +419,7 @@ program package_interface
 																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
 																	farfield_temperature	= 1400.0_dp						,	&
 																	farfield_velocity		= 0.0_dp							,	&	
-																	farfield_species_names	= (/'H2O','N2'/)					,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2O','N2']				,	&	
 																	farfield_concentrations	= (/1.0_dp,nu * 3.762_dp/)	,	&
 																	priority				= 2)
 				case('near_wall')
@@ -426,7 +427,7 @@ program package_interface
 																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
 																	farfield_temperature	= 300.0_dp						,	&
 																	farfield_velocity		= 0.0_dp							,	&	
-																	farfield_species_names	= (/'H2','O2','N2'/)				,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']				,	&	
 																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	,	&
 																	priority				= 2)	
                case('counter_flow_precInc')     
@@ -434,7 +435,7 @@ program package_interface
 																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
 																	farfield_temperature	= T_t(table_size-1)					,	&
 																	farfield_velocity		= vx_t(table_size-1)				,	&	
-																	farfield_species_names	= (/'H2O','N2'/)					,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2O','N2']					,	&	
 																	farfield_concentrations	= (/1.0_dp,nu * 3.762_dp/)	,	&
 																	priority				= 2)                    
             end select	
@@ -445,7 +446,7 @@ program package_interface
 																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
 																	farfield_temperature	= 300.0_dp						,	&
 																	farfield_velocity		= 0.0_dp							,	&	
-																	farfield_species_names	= (/'H2','O2','N2'/)				,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']				,	&	
 																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	,	&
 																	priority				= 3)
                 case('counter_flow_precInc')
@@ -453,7 +454,7 @@ program package_interface
 																	farfield_pressure		= 1.0_dp*101325.0_dp	,	&
 																	farfield_temperature	= T_t(0)				,	&
 																	farfield_velocity		= vx_t(0)      ,	&	
-																	farfield_species_names	= (/'H2','O2','N2'/)				,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']				,	&	
 																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	,	&
 																	priority				= 3)  
             end select

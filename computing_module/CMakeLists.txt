@@ -46,10 +46,6 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/current_build/viscosity_solver.f90
 )
 
-set(COMPUTE_BINARY_DIR ${SRC_COMPUTE}/bin)
-file(MAKE_DIRECTORY ${COMPUTE_BINARY_DIR})
-
-
 # Define the executable in terms of the source files
 add_executable(${COMPUTE} ${computing_module_src})
 
@@ -86,7 +82,6 @@ source_group("slatec" FILES
 	${SRC_COMPUTE}/src/third_party/slatec/xgetua.f90
 )
 
-
 # Links the main executable with the created library
 target_link_libraries(${COMPUTE} ${LIBRARY_NAME})
 
@@ -95,6 +90,5 @@ target_include_directories(${COMPUTE}
     ${CMAKE_Fortran_MODULE_DIRECTORY}
 )
 
-set_target_properties(${COMPUTE} PROPERTIES
-	RUNTIME_OUTPUT_DIRECTORY ${COMPUTE_BINARY_DIR}/${CMAKE_BUILD_TYPE}
-)
+# Note: RUNTIME_OUTPUT_DIRECTORY is now controlled globally from the root CMakeLists.txt
+# The executable will be placed in ${CMAKE_BINARY_DIR}/bin/
