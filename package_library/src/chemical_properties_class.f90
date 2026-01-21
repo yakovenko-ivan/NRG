@@ -160,11 +160,13 @@ contains
 
 		select case (this%E_act_units)
 			case('J.mol')
-				activation_energy_coefficient = 1.0      			! [Eact] = J/mol
+				activation_energy_coefficient = 1.0_dp       			! [Eact] = J/mol
 			case('kJ.mol')
-			    activation_energy_coefficient = 1000.0      		! [Eact] = kJ/mol -> J/mol
+			    activation_energy_coefficient = 1000.0_dp       		! [Eact] = kJ/mol -> J/mol
 			case('cal.mol')
 			    activation_energy_coefficient = r_gase_J/r_gase_cal	! [Eact] = cal/mol -> J/mol
+			case('kcal.mol')
+			    activation_energy_coefficient = r_gase_J/r_gase_cal*1000.0_dp	! [Eact] = kcal/mol -> J/mol
 		end select
 
 		do reaction_number = 1,this%reactions_number

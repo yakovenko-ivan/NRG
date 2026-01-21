@@ -452,6 +452,7 @@ contains
 
 		species_number = manager%chemistry%chem_ptr%species_number
 		
+        farfield_velocity = 0.0_dp
 		do bound = 1, size(constructor%boundary%bc_ptr%boundary_types)
 			boundary_type_name = constructor%boundary%bc_ptr%boundary_types(bound)%get_type_name()
 			if (boundary_type_name == 'inlet') then
@@ -459,7 +460,7 @@ contains
 			end if
 		end do		
 
-		allocate(farfield_velocity_array(cons_allocation_bounds(2,1):cons_allocation_bounds(2,2)))
+		allocate(farfield_velocity_array(1)) !(cons_allocation_bounds(2,1):cons_allocation_bounds(2,2)))
 
         if(constructor%load_counter == 1) then
 			farfield_velocity_array = farfield_velocity
@@ -1907,9 +1908,9 @@ contains
 											!R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
                                         case('inlet')
 										!	farfield_velocity = farfield_velocity_array(factor * j)
-										!	farfield_velocity = farfield_velocity_array(1)
+											farfield_velocity = farfield_velocity_array(1)
                                             
-                                            farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                        !    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                             
 											if(predictor) then
 												R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
@@ -2046,9 +2047,9 @@ contains
 												
                                                 case('inlet')
 												!	farfield_velocity = farfield_velocity_array(factor * j)
-												!	farfield_velocity = farfield_velocity_array(1)
+													farfield_velocity = farfield_velocity_array(1)
                                                     
-                                                    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                                !    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                                     
 													if(predictor) then
 														R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
@@ -2239,9 +2240,9 @@ contains
 											
                                             case('inlet')
 											!	farfield_velocity = farfield_velocity_array(factor * j)
-											!	farfield_velocity = farfield_velocity_array(1)
+												farfield_velocity = farfield_velocity_array(1)
                                                 
-                                                farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                            !    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                                 
 												if(predictor) then
 													R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
@@ -2338,9 +2339,9 @@ contains
 												
                                                 case('inlet')
 												!	farfield_velocity = farfield_velocity_array(factor * j)
-												!	farfield_velocity = farfield_velocity_array(1)
+													farfield_velocity = farfield_velocity_array(1)
                                                     
-                                                    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                                !    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                                     
 													if(predictor) then
 														R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
@@ -2506,9 +2507,9 @@ contains
                                         case('inlet')
 	 
 										!	farfield_velocity = farfield_velocity_array(factor * j)
-										!	farfield_velocity = farfield_velocity_array(1)
+											farfield_velocity = farfield_velocity_array(1)
 												
-                                            farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+                                        !    farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                             
 											if (predictor) then
 												H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i,j,k)														&
@@ -2828,8 +2829,8 @@ contains
 											end if
 										end do
 									case('inlet')
-										!farfield_velocity		=  farfield_velocity_array(j)
-                                        farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+										farfield_velocity		=  farfield_velocity_array(1)
+                                        !farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                         
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
@@ -4001,8 +4002,8 @@ contains
 											end if	
 										end if
 										
-										! farfield_velocity		=  farfield_velocity_array(j)
-                                        farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
+										 farfield_velocity		=  farfield_velocity_array(1)
+                                        !farfield_velocity = bc%boundary_types(bound_number)%get_farfield_velocity()
                                         
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
@@ -5165,7 +5166,7 @@ contains
 		!	end do
 		!end if
 		
-		if (time < 5e-03) then
+		if (time > 1e-03) then
 			farfield_velocity_array = 0.0_dp
 		else
 			farfield_velocity_array = farfield_velocity

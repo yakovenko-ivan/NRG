@@ -74,7 +74,6 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib) # For static librari
 # Ensure output directories exist
 file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 file(MAKE_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
-
 # === Define user-configurable source for package_interface ===
 set(PACKAGE_INTERFACE_SOURCE "src/tests/classic_tests/1D_laminar_velocity.f90"
     CACHE STRING "Fortran source file (relative to package_interface/) to build the interface executable")

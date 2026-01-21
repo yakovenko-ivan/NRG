@@ -278,4 +278,39 @@ module supplementary_routines
 !        print *, 'Old' , x
         
     end function
+    
+
+    character(len=20) function str_e(k)
+	    use kind_parameters
+
+    !   "Convert an real to string."
+        real(dp), intent(in) :: k
+    
+        write (str_e, '(e10.3)') k    
+        str_e = adjustl(str_e)
+    
+    end function str_e
+    
+    character(len=20) function str_r(k)
+	    use kind_parameters
+
+    !   "Convert an real to string."
+        real(dp), intent(in) :: k
+    
+        write (str_r, '(f10.2)') k    
+        str_r = adjustl(str_r)
+    
+    end function str_r
+    
+    character(len=20) function str_i(k)
+	    use kind_parameters
+
+    !   "Convert an integer to string."
+        integer, intent(in) :: k
+    
+        write (str_i, '(I2)') k
+        str_i = adjustl(str_i)
+    
+    end function str_i 
+    
 end module
