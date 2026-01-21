@@ -26,8 +26,9 @@ module lagrangian_particles_solver_class
 	type(field_scalar_cons)	,dimension(:)	,allocatable	,target	:: E_f_prod_p, rho_prod_p
 	type(field_vector_cons)	,dimension(:)	,allocatable	,target	:: Y_prod_p, v_prod_p
 
-	integer	            :: average_io_unit
-	character(len=500)  :: av_header, grid_header, scatter_header
+	integer	            :: average_io_unit, trajectory_io_unit
+	character(len=500)  :: av_header, grid_header, scatter_header, trajectory_header
+	integer	:: tracked_particle
     
     real(dp)	:: streams_distance, release_time, particles_velocity
     	
@@ -43,9 +44,9 @@ module lagrangian_particles_solver_class
 	end type
 	
 	type	:: part_grid
-		real(dp)	,dimension(:,:,:)	,	allocatable	:: coords, velocity
-        real(dp)	,dimension(:,:)		,	allocatable	:: density, temperature
-        integer		,dimension(2)						:: part_grid_size
+		real(dp)	,dimension(:,:,:,:)	,	allocatable	:: coords, velocity
+        real(dp)	,dimension(:,:,:)		,	allocatable	:: density, temperature
+        integer		,dimension(3)						:: part_grid_size
         real(dp)                                        :: grid_cell_size
 	end type    
     
@@ -188,6 +189,10 @@ contains
 
 		file_name = 'average_particles_data.dat'
 		open(newunit = average_io_unit, file = file_name, status = 'replace', form = 'formatted')
+        
+		file_name = 'single_particle_trajectory.dat'
+		open(newunit = trajectory_io_unit, file = file_name, status = 'replace', form = 'formatted')
+        
 	end function
 
 	subroutine set_initial_distributions(this)
@@ -203,7 +208,8 @@ contains
         character(len=5)	,dimension(3)		    :: axis_names
         
 		integer	:: dimensions
-		integer :: i,j,k, part, part_x, part_y, part_z, dim, particle, unit, unit_h, bins_x, bins_y
+		integer :: i,j,k, part, part_x, part_y, part_z, dim, particle, unit, unit_h
+        integer     ,dimension(3)   :: bins
 		integer		,dimension(1)   :: gamma_hist
 
 		integer, dimension(3)	:: cell, initial_cell
@@ -220,6 +226,8 @@ contains
         !# Single particle test
         
 		part_number = 1
+		
+		tracked_particle = 1
         
 		this%particles_number = part_number(1)*part_number(2)*part_number(3)
 		
@@ -292,62 +300,82 @@ contains
         lengths			                    = this%domain%get_domain_lengths()
         
         this%part_grid%grid_cell_size       = 2*cell_size(1)
+        do dim = 1, dimensions
         this%part_grid%part_grid_size(1)    = nint((lengths(1,2)-lengths(1,1))/(this%part_grid%grid_cell_size))	!8
         this%part_grid%part_grid_size(2)    = nint((lengths(2,2)-lengths(2,1))/(this%part_grid%grid_cell_size))	!8
+            this%part_grid%part_grid_size(3) = nint((lengths(3,2)-lengths(3,1))/(this%part_grid%grid_cell_size))
         
-        bins_x	= this%part_grid%part_grid_size(1) 
-        bins_y	= this%part_grid%part_grid_size(2) 
+            bins(dim)	= this%part_grid%part_grid_size(dim) 
+        end do 
         
-        allocate(this%part_grid%coords(bins_x, bins_y, 2))
-        allocate(this%part_grid%velocity(bins_x, bins_y, 2))
-        allocate(this%part_grid%density(bins_x, bins_y))
-        allocate(this%part_grid%temperature(bins_x, bins_y))
+        allocate(this%part_grid%coords(bins(1), bins(2), bins(3), 3))
+        allocate(this%part_grid%velocity(bins(1), bins(2), bins(3), 3))
+        allocate(this%part_grid%density(bins(1), bins(2), bins(3)))
+        allocate(this%part_grid%temperature(bins(1), bins(2), bins(3)))
 		
         this%part_grid%coords		= 0.0_dp
         this%part_grid%velocity		= 0.0_dp
         this%part_grid%density		= 0.0_dp
         this%part_grid%temperature	= 0.0_dp
         
-        do i = 1, bins_x
-        do j = 1, bins_y
-			this%part_grid%coords(i,j,1) = lengths(1,1) + (i - 0.5_dp) * this%part_grid%grid_cell_size
-            this%part_grid%coords(i,j,2) = lengths(2,1) + (j - 0.5_dp) * this%part_grid%grid_cell_size
-!			this%part_grid%coords(i,j,1) = lengths(1,1) + 4 * cell_size(1) + 8*cell_size(1)* (i-1)
-!            this%part_grid%coords(i,j,2) = lengths(2,1) + 4 * cell_size(1) + 8*cell_size(1)* (j-1)
+        do i = 1, bins(1)
+        do j = 1, bins(2)
+        do k = 1, bins(3)
+            
+            do dim = 1, dimensions
+			    this%part_grid%coords(i,j,k,dim) = lengths(dim,1) + (i * I_m(dim,1) + j * I_m(dim,2) + k * I_m(dim,3) - 0.5_dp) * this%part_grid%grid_cell_size
+            end do
             
             do particle = 1, this%particles_number
                 
-                if ((abs(this%particles(particle)%coords(1) - this%part_grid%coords(i,j,1)) < 0.5_dp * this%part_grid%grid_cell_size).and. &
-                    (abs(this%particles(particle)%coords(2) - this%part_grid%coords(i,j,2)) < 0.5_dp * this%part_grid%grid_cell_size)) then
-!                if ((abs(this%particles(particle)%coords(1) - this%part_grid%coords(i,j,1)) < 4 * cell_size(1)).and. &
-!                    (abs(this%particles(particle)%coords(2) - this%part_grid%coords(i,j,2)) < 4 * cell_size(1))) then
-					this%part_grid%density(i,j)		= this%part_grid%density(i,j) + 1
-                    this%part_grid%temperature(i,j)	= this%part_grid%temperature(i,j) + this%particles(particle)%temperature
-                    this%part_grid%velocity(i,j,1)	= this%part_grid%velocity(i,j,1) + this%particles(particle)%velocity(1)
-                    this%part_grid%velocity(i,j,2)	= this%part_grid%velocity(i,j,2) + this%particles(particle)%velocity(2)
+                if ((abs(this%particles(particle)%coords(1) - this%part_grid%coords(i,j,k,1)) < 0.5_dp * this%part_grid%grid_cell_size).and. &
+                    (abs(this%particles(particle)%coords(2) - this%part_grid%coords(i,j,k,2)) < 0.5_dp * this%part_grid%grid_cell_size).and. &
+                    (abs(this%particles(particle)%coords(3) - this%part_grid%coords(i,j,k,3)) < 0.5_dp * this%part_grid%grid_cell_size)) then
+					this%part_grid%density(i,j,k)		= this%part_grid%density(i,j,k) + 1
+                    this%part_grid%temperature(i,j,k)	= this%part_grid%temperature(i,j,k) + this%particles(particle)%temperature
+                    this%part_grid%velocity(i,j,k,1)	= this%part_grid%velocity(i,j,k,1) + this%particles(particle)%velocity(1)
+                    this%part_grid%velocity(i,j,k,2)	= this%part_grid%velocity(i,j,k,2) + this%particles(particle)%velocity(2)
+                    this%part_grid%velocity(i,j,k,3)	= this%part_grid%velocity(i,j,k,3) + this%particles(particle)%velocity(3)
                 end if
             end do
         end do
         end do
+        end do
 
         av_header = 'VARIABLES="time" "av_path" "av_velo"'
+        trajectory_header = 'VARIABLES="time"'
         grid_header = 'VARIABLES='
         scatter_header = 'VARIABLES='
         do dim = 1, dimensions
             grid_header = trim(grid_header) // '"' // trim(axis_names(dim)) // '"'
             scatter_header = trim(scatter_header) // '"' // trim(axis_names(dim)) // '"'
             av_header =  trim(av_header) // '"av_' // trim(axis_names(dim)) // '"'
+            trajectory_header = trim(trajectory_header) // '"' // trim(axis_names(dim)) // '"'
         end do
         do dim = 1, dimensions
             grid_header = trim(grid_header) // '"v(' // trim(axis_names(dim)) // ')"'
             scatter_header = trim(scatter_header) // '"v(' // trim(axis_names(dim)) // ')"'
+            trajectory_header = trim(trajectory_header) // '"v(' // trim(axis_names(dim)) // ')"'
         end do
+        
+        do dim = 1, dimensions
+            scatter_header = trim(scatter_header) // '"p_orient(' // trim(axis_names(dim)) // ')"'
+        end do   
+        do dim = 1, dimensions
+            scatter_header = trim(scatter_header) // '"F_a(' // trim(axis_names(dim)) // ')"'
+        end do   
+        do dim = 1, dimensions
+            scatter_header = trim(scatter_header) // '"F_St(' // trim(axis_names(dim)) // ')"'
+        end do         
+        
         grid_header = trim(grid_header) // '"rho_d" "T_d"'
         scatter_header = trim(scatter_header) // '"T_d" "m_d"'
         av_header = trim(av_header) // '"av_temp" "av_diameter"'
         
         write (average_io_unit,'(A)')	trim(av_header)
 
+        write (trajectory_io_unit,'(A)')	trim(trajectory_header)
+        
         continue 
         
 	end subroutine
@@ -379,10 +407,11 @@ contains
 		
 		integer						:: particles_in_cell
 		character(len=100)			:: file_path, file_name
+        character(len=20)           :: output_fmt
 		
 		real(dp)                    :: particle_diameter, evaporation_rate, velocity_2, specie_enthalpy
 		real(dp)					:: average_path, average_velocity, average_diameter, average_temperature, particles_inside
-		real(dp)	,dimension(2)	:: average_coordinates
+		real(dp)	,dimension(3)	:: average_coordinates
 
         real(dp)					:: d_ij
         real(dp)					:: velocity_mag, delta
@@ -399,6 +428,7 @@ contains
 		real(dp)	,save	:: time = 0.0_dp, CFL_p
 		integer		,save	:: output_counter = 0
         integer		,save	:: av_output_counter = 0
+        integer		,save	:: traj_output_counter = 0
 		integer		,save	:: particle_release_counter = 0
 
 		integer				:: lagrangian_particles_io_unit
@@ -451,6 +481,7 @@ contains
 		average_diameter	= 0.0_dp
 		average_path		= 0.0_dp
 		average_velocity	= 0.0_dp
+        average_coordinates	= 0.0_dp
 		particles_inside    = 0
 		
         this%part_grid%velocity		= 0.0_dp
@@ -462,15 +493,19 @@ contains
 
 			if (.not.this%particles(part)%outside_domain) then
 
-				velocity_mag = (this%particles(part)%velocity(1)**2 + this%particles(part)%velocity(2)**2)**0.5
+				velocity_mag = 0.0_dp
 		
 				average_diameter	= average_diameter		+ (6.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 3.0_dp)
 				average_temperature	= average_temperature	+ this%particles(part)%temperature
                 do dim = 1, dimensions
-					average_coordinates(dim) = average_coordinates(dim) + this%particles(part)%coords(dim)
+                    velocity_mag	= velocity_mag + this%particles(part)%velocity(dim)**2.0_dp
                 end do
                 
-				average_path		= average_path		+ (this%particles(part)%coords(1)-this%particles(part)%coords0(1)) ** 2.0_dp + (this%particles(part)%coords(2)-this%particles(part)%coords0(2)) ** 2.0_dp	
+                do dim = 1, dimensions
+					average_coordinates(dim)    = average_coordinates(dim)  + this%particles(part)%coords(dim)
+                    average_path		        = average_path		        + (this%particles(part)%coords(dim)-this%particles(part)%coords0(dim)) ** 2.0_dp 
+                end do
+                
 				average_velocity	= average_velocity  + velocity_mag
 
 				particles_inside    = particles_inside + 1
@@ -479,17 +514,17 @@ contains
 
 				!particle_time_step = time_step
                 CFL_p = 0.0
-				do dim = 1, dimensions
-					if (abs(this%particles(part)%velocity(dim)) > 1e-10_dp) then
-                        if (abs(this%particles(part)%velocity(dim)/(0.5*this%particles_params%diameter)) > CFL_p) CFL_p = abs(this%particles(part)%velocity(dim)/(0.5*this%particles_params%diameter))
-!                        if (this%particles(part)%velocity(dim)/cell_size(dim) > CFL_p) CFL_p = this%particles(part)%velocity(dim)/cell_size(dim)
-                    else
-                        CFL_p = 1.0_dp/0.9_dp
-                    end if
-                end do
+                if (velocity_mag > 1e-10_dp) then
+				    do dim = 1, dimensions
+                        !if (abs(this%particles(part)%velocity(dim)/(0.5*this%particles_params%diameter)) > CFL_p) CFL_p = abs(this%particles(part)%velocity(dim)/(0.5*this%particles_params%diameter))
+                        if (abs(this%particles(part)%velocity(dim))/cell_size(dim) > CFL_p) CFL_p = abs(this%particles(part)%velocity(dim))/cell_size(dim)
+                    end do
+                else
+                    CFL_p = 1.0_dp/0.9_dp
+                end if
                 CFL_p = time_step*CFL_p
 
-                particle_time_step = time_step / ceiling(0.9*CFL_p) / 10
+                particle_time_step = time_step / ceiling(0.9*CFL_p) / 10.0_dp			!Time step for particles
                 particle_iterations	= time_step/ particle_time_step
                 
 				F_a =	0.0_dp			
@@ -795,82 +830,30 @@ contains
         !# Collisions
         
         do part1 = 1, this%particles_number
-			if (.not.this%particles(part1)%outside_domain) then
-				if(this%particles_number > 1) then
-					do part2 = 1, this%particles_number
-                        if ((part2 /= part1).and.(.not.this%particles(part2)%outside_domain)) then
-							d_ij		= 0.0_dp
-
-							dot_prod3	= 0.0_dp
-                            dot_prod4	= 0.0_dp
-                            dot_prod5	= 0.0_dp
-                            
-							do dim = 1, dimensions
-
-								r_ij(dim)	= this%particles(part1)%coords(dim)		- this%particles(part2)%coords(dim)
-								v_ij(dim)   = this%particles(part1)%velocity(dim)	- this%particles(part2)%velocity(dim)
-                            
-								dot_prod3	= dot_prod3 + r_ij(dim) * v_ij(dim)
-                                dot_prod4	= dot_prod4 + r_ij(dim) * this%particles(part1)%velocity(dim)
-                                dot_prod5	= dot_prod5 - r_ij(dim) * this%particles(part2)%velocity(dim)
-  
-								d_ij		= d_ij + r_ij(dim)**2
-							end do
-							d_ij = sqrt(d_ij) 
-                        
-							if (d_ij < this%particles_params%diameter) then
-                            
-                                !print *, 'Collision'
-                                !print *, 'Distance_before collision:', d_ij
-                                !
-                                !write (before_c_unit,'(8E14.6)')	this%particles(part1)%coords(1), this%particles(part1)%coords(2), this%particles(part1)%velocity(1), this%particles(part1)%velocity(2)
-                                !write (before_c_unit,'(8E14.6)')    this%particles(part2)%coords(1), this%particles(part2)%coords(2), this%particles(part2)%velocity(1), this%particles(part2)%velocity(2)
-
-								delta   = 0.5_dp * abs(this%particles_params%diameter - d_ij)
-                                
-                                do dim = 1, dimensions
-									this%particles(part1)%coords(dim)	= this%particles(part1)%coords(dim)			+ r_ij(dim) / d_ij * delta
-									this%particles(part2)%coords(dim)	= this%particles(part2)%coords(dim)			- r_ij(dim) / d_ij * delta
-
-									if ((dot_prod4 < 0).or.(dot_prod5 < 0)) then
-										this%particles(part1)%velocity(dim)	= this%particles(part1)%velocity(dim)	- (dot_prod3) * r_ij(dim) / d_ij**2
-										this%particles(part2)%velocity(dim)	= this%particles(part2)%velocity(dim)	+ (dot_prod3) * r_ij(dim) / d_ij**2
-									end if
-                                end do
-                                
-                                !print *, 'Distance_after collision:', sqrt( (this%particles(part1)%coords(1) - this%particles(part2)%coords(1))**2 + (this%particles(part1)%coords(2) - this%particles(part2)%coords(2))**2) 
-                                !print *, delta, r_ij, d_ij
-                                !
-                                !write (after_c_unit,'(8E14.6)')	this%particles(part1)%coords(1), this%particles(part1)%coords(2), this%particles(part1)%velocity(1), this%particles(part1)%velocity(2)
-                                !write (after_c_unit,'(8E14.6)') this%particles(part2)%coords(1), this%particles(part2)%coords(2), this%particles(part2)%velocity(1), this%particles(part2)%velocity(2)
-
-                                continue
-
-                            end if
-                        end if
-                    end do
-                    
-                    this%particles(part1)%coords_prev	= this%particles(part1)%coords
-                end if
-            end if
+            this%particles(part1)%coords_prev	= this%particles(part1)%coords
         end do
         
         do i = 1, this%part_grid%part_grid_size(1)
         do j = 1, this%part_grid%part_grid_size(2)
+        do k = 1, this%part_grid%part_grid_size(3)    
             do part = 1, this%particles_number
-				if ((abs(this%particles(part)%coords(1) - this%part_grid%coords(i,j,1)) < 0.5_dp * this%part_grid%grid_cell_size).and. &
-					(abs(this%particles(part)%coords(2) - this%part_grid%coords(i,j,2)) < 0.5_dp * this%part_grid%grid_cell_size)) then
-					this%part_grid%density(i,j)     = this%part_grid%density(i,j) + 1
-					this%part_grid%temperature(i,j) = this%part_grid%temperature(i,j) + this%particles(part)%temperature
-					this%part_grid%velocity(i,j,1)  = this%part_grid%velocity(i,j,1) + this%particles(part)%velocity(1)
-					this%part_grid%velocity(i,j,2)  = this%part_grid%velocity(i,j,2) + this%particles(part)%velocity(2)
+				if ((abs(this%particles(part)%coords(1) - this%part_grid%coords(i,j,k,1)) < 0.5_dp * this%part_grid%grid_cell_size).and. &
+					(abs(this%particles(part)%coords(2) - this%part_grid%coords(i,j,k,2)) < 0.5_dp * this%part_grid%grid_cell_size).and. &
+					(abs(this%particles(part)%coords(3) - this%part_grid%coords(i,j,k,3)) < 0.5_dp * this%part_grid%grid_cell_size)) then
+					this%part_grid%density(i,j,k)         = this%part_grid%density(i,j,k) + 1
+					this%part_grid%temperature(i,j,k)     = this%part_grid%temperature(i,j,k) + this%particles(part)%temperature
+					this%part_grid%velocity(i,j,k,1)      = this%part_grid%velocity(i,j,k,1) + this%particles(part)%velocity(1)
+					this%part_grid%velocity(i,j,k,2)      = this%part_grid%velocity(i,j,k,2) + this%particles(part)%velocity(2)
+                    this%part_grid%velocity(i,j,k,3)      = this%part_grid%velocity(i,j,k,3) + this%particles(part)%velocity(3)
 				end if
             end do
         end do
         end do
+        end do
         
-		if ((time/(1e-04) >= (av_output_counter)).or.(time==0.0_dp).and.(particles_inside /= 0)) then
-			write (average_io_unit,'(7E14.7)')	time, average_path/particles_inside     , &
+		if (((time/(1e-04) >= (av_output_counter)).or.(time==0.0_dp)).and.(particles_inside /= 0)) then
+            write (output_fmt,'("(",I1,"E14.6)")') dimensions + 5
+		    write (average_io_unit,output_fmt)	time, average_path/particles_inside     , &
                                                 average_velocity/particles_inside       , &
                                                 average_coordinates/particles_inside    , &
                                                 average_temperature/particles_inside    , &
@@ -879,14 +862,25 @@ contains
             av_output_counter = av_output_counter + 1
 		end if			
 			
-		if ((time/(1e-03) >= (output_counter)).or.(time==0.0_dp)) then
+		if (((time/(50.0e-06) >= (traj_output_counter)).or.(time==0.0_dp)).and.(.not.this%particles(tracked_particle)%outside_domain)) then
+            
+            write (output_fmt,'("(",I1,"E14.6)")') 2*dimensions + 1
+		    write (trajectory_io_unit,output_fmt)	time                        , & 
+                                                    this%particles(tracked_particle)%coords   , &
+                                                    this%particles(tracked_particle)%velocity               
+
+            traj_output_counter = traj_output_counter + 1
+		end if		
+		
+		if ((time/(1.0e-03) >= (output_counter)).or.(time==0.0_dp)) then
 			write(file_path,'(I6.6,A)')  int(time*1e03),'ms'
 			file_name = 'data_save_particles' // trim(fold_sep) // 'particles_' // trim(file_path) // '.plt'
 			open(newunit = lagrangian_particles_io_unit, file = file_name, status = 'replace', form = 'formatted')
             write (lagrangian_particles_io_unit,'(A)') trim(scatter_header)
+			write (output_fmt,'("(",I2,"E14.6)")') 2*dimensions + 2
 			do part = 1, this%particles_number
 				if(.not.this%particles(part)%outside_domain) then
-					write (lagrangian_particles_io_unit,'(8E14.6)')	this%particles(part)%coords(1:dimensions), this%particles(part)%velocity(1:dimensions), this%particles(part)%temperature, this%particles(part)%mass			
+					write (lagrangian_particles_io_unit,output_fmt)	this%particles(part)%coords(1:dimensions), this%particles(part)%velocity(1:dimensions), this%particles(part)%temperature, this%particles(part)%mass			
 				end if
 			end do
 
@@ -896,11 +890,14 @@ contains
 			file_name =  'particle_grid' // trim(fold_sep) // 'particles_' // trim(file_path) // '_grid.plt'
 			open(newunit = lagrangian_particles_io_unit, file = file_name, status = 'replace', form = 'formatted')
 			write (lagrangian_particles_io_unit,'(A)') trim(grid_header)
+            write (output_fmt,'("(",I1,"E14.6)")') 2*dimensions + 2
             do i = 1, this%part_grid%part_grid_size(1)
             do j = 1, this%part_grid%part_grid_size(2)
-				write (lagrangian_particles_io_unit,'(6E14.6)')	this%part_grid%coords(i,j,:), this%part_grid%velocity(i,j,:), this%part_grid%density(i,j), this%part_grid%temperature(i,j)
+            do k = 1, this%part_grid%part_grid_size(3)
+				write (lagrangian_particles_io_unit,output_fmt)	this%part_grid%coords(i,j,k,:), this%part_grid%velocity(i,j,k,:), this%part_grid%density(i,j,k), this%part_grid%temperature(i,j,k)	
             end do
             end do
+            end do 
             
 			close(lagrangian_particles_io_unit)
             
