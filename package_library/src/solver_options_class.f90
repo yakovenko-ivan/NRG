@@ -305,7 +305,7 @@ contains
 		
 		integer	:: particles_phase_counter
 
-		namelist /particles_phase/	particles_diameter, particles_material_heat_capacity, particles_material_density, &
+		namelist /particles_params/	particles_diameter, particles_material_heat_capacity, particles_material_density, &
                                     particles_material_latent_heat, particles_material_boiling_temperature, particles_material, &
                                     particles_evaporating, particles_heating, particles_inertial
 
@@ -330,7 +330,7 @@ contains
         particles_heating   				    = this%particles(this%particles_phase_counter)%heating
         particles_inertial   				    = this%particles(this%particles_phase_counter)%inertial
             
-		write(unit = io_unit, nml = particles_phase)
+		write(unit = io_unit, nml = particles_params)
 		close(io_unit)
 
 

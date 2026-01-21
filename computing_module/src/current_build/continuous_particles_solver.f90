@@ -309,7 +309,7 @@ contains
 				E_f_prod%cells(i,j,k)		= E_f_prod%cells(i,j,k) - Q_stokes * rho_d%cells(i,j,k) * particle%material_heat_capacity ! [J/m^3/s]
 				T_d_int%cells(i,j,k)		= T_d%cells(i,j,k) + Q_stokes * time_step
 
-                if (particle%evaporating == .false.) then
+                if (particle%evaporating .eqv. .false.) then
 					temp_cr = 373.15
                 else
 					temp_cr = 371.55    
