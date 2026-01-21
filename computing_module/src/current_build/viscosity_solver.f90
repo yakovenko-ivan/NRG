@@ -224,7 +224,7 @@ contains
 										    		-	sigma%pr(dim1,dim2)%cells(dim2,i,j,k)*lame_coeffs(dim2,1))/(cell_size(dim2))/lame_coeffs(dim2,2)
                     end do
                     
-                    div_sigma_dot_v = div_sigma_dot_v + (sigma_dot_v%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3)*lame_coeffs(dim1,3))  &
+                    div_sigma_dot_v = div_sigma_dot_v + (sigma_dot_v%pr(dim1)%cells(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*lame_coeffs(dim1,3)  &
 										    		-	sigma_dot_v%pr(dim1)%cells(dim1,i,j,k)*lame_coeffs(dim1,1))/(cell_size(dim1))/lame_coeffs(dim1,2)
                     
 					select case(coordinate_system)
