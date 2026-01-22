@@ -4,40 +4,23 @@
 ![Static Badge](https://img.shields.io/badge/stability-stable-brightgreen?style=flat)
 ![Static Badge](https://img.shields.io/badge/version-1.1.0-royalblue?style=flat)
 
+# NRG: Numerical Reactive Gas-dynamics
 
-# NRG project
+**NRG** is a high-performance, open-source Computational Fluid Dynamics (CFD) software package designed for high-fidelity simulations of **reactive flows** and **combustion phenomena**. Built with modern Fortran, it leverages efficient numerical algorithms for scalable performance on high-performance computing (HPC) systems.
 
-Welcome to Numerical Reactive Gas-dynamics software package. 
+This software is developed at the **Joint Institute for High Temperatures (JIHT) of the Russian Academy of Sciences (RAS)**.
 
-## Getting Started
+## ✨ Key Features
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+*   **Reactive Flow Solver**: Simulates compressible flows with detailed chemical kinetics, species transport, and heat transfer.
+*   **Modular & Extensible Architecture**: Clear separation between the core solver (`computing_module`), physics libraries (`package_library`), and problem setup (`package_interface`).
+*   **Modern Fortran Codebase**: Written using Fortran 2003/2008 standards for clarity, modularity, and performance.
+*   **Portable Build System**: Uses CMake for straightforward configuration on Linux, macOS, and Windows.
+*   **Targeted for HPC**: Designed with scalability in mind for parallel computing environments.
+
+## 🚀 Getting Started
 
 ### Prerequisites
-
-Fortran compiler with 2003 standard features support.
-### Installing
-
-Installation guide in pdf format can be found in docs folder. 
-
-**CMakeBuild tool installation (gfortran, makefile generator):**
-
-`mkdir build`
-
-`cd build`
-
-`cmake .. -G"Unix Makefiles" -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=DEBUG`
-
-`cmake --build . --target computing_module`
-
-
-**CMakeBuild tool installation (ifx, visual studio generator):**
-
-`mkdir build`
-
-`cd build`
-
-`cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_BUILD_TYPE=DEBUG`
-
-`cmake --build . --target computing_module`
-
+*   A Fortran compiler (`gfortran` ≥ 9.0 or Intel `ifx`)
+*   `CMake` ≥ 3.12
+*   `make` (or your system's build tool)
