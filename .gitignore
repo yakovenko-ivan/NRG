@@ -19,6 +19,7 @@ package_library/release_OMP
 package_library/debug_seq
 package_library/release_seq
 package_library/x64
+package_interface/x64
 NRG_GIT_stable_1/
 package_utilities/package_utilities
 package_utilities/debug_MPI
