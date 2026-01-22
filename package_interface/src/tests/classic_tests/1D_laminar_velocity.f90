@@ -1,6 +1,6 @@
 program package_interface
 
-	!use IFPORT
+	use ifport
 
 	use kind_parameters
 	use global_data
@@ -17,6 +17,7 @@ program package_interface
 	use data_save_class
 	use data_io_class
 	use post_processor_manager_class
+    use supplementary_routines
 
 	implicit none
 	
@@ -58,7 +59,6 @@ program package_interface
 	character(len=200)			:: work_dir, initials_file
 	character(len=20)			:: solver_name, coordinate_system, setup
     character(len=30)			:: mech_file, thermo_file, transdata_file
-	character(len=20)			:: str_r, str_i, str_e	
     
 	real(dp)	:: domain_length, domain_width, ignition_region
 	real(dp)	:: CFL_coeff
@@ -74,7 +74,8 @@ program package_interface
 	integer	:: ierr, io_unit
 	
 	ierr = getcwd(initial_work_dir)
-	
+	!call get_environment_variable("PWD", initial_work_dir)
+        
 	do task1 = 3, 3
 	do task2 = 1, 1
 	do task3 = 1, 1
@@ -135,11 +136,6 @@ program package_interface
 				mech_file		= 'KEROMNES.txt'
                 thermo_file		= 'KEROMNES_THERMO.txt'
                 transdata_file	= 'KEROMNES_TRANSDATA.txt'
-			case(2)
-				work_dir = trim(work_dir) // trim(fold_sep) // 'Tereza_FULL'
-				mech_file		= 'Tereza_H2.txt'
-                thermo_file		= 'Aramko20_Tereza_thermo.txt'
-                transdata_file	= 'Aramko20_Tereza_transport.txt'
 		end select
 		
 		ierr = system('mkdir '// work_dir)			
@@ -506,36 +502,3 @@ program package_interface
 	end do
 
 end program
-    
-character(len=20) function str_e(k)
-	use kind_parameters
-
-!   "Convert an real to string."
-    real(dp), intent(in) :: k
-    
-    write (str_e, '(e10.3)') k    
-    str_e = adjustl(str_e)
-    
-end function str_e
-    
-character(len=20) function str_r(k)
-	use kind_parameters
-
-!   "Convert an real to string."
-    real(dp), intent(in) :: k
-    
-    write (str_r, '(f10.2)') k    
-    str_r = adjustl(str_r)
-    
-end function str_r
-    
-character(len=20) function str_i(k)
-	use kind_parameters
-
-!   "Convert an integer to string."
-    integer, intent(in) :: k
-    
-    write (str_i, '(I2)') k
-    str_i = adjustl(str_i)
-    
-end function str_i
