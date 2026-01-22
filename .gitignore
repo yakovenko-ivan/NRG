@@ -11,9 +11,6 @@ computing_module/debug_seq
 computing_module/release_seq
 computing_module/computing_module.u2d
 computing_module/computing_module.vfproj
-package_interface/src/
-package_interface/x64/
-!package_interface/src/tests/classic_tests
 package_library/package_library
 package_library/debug_MPI
 package_library/release_MPI
