@@ -213,7 +213,7 @@ program package_interface
 		problem_data_manager	= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics,problem_solver_options)
 		
 			call problem_data_manager%create_boundary_conditions(	problem_boundaries				, &	
-																	number_of_boundary_types	= 4	, &
+																	number_of_boundary_types	= 2	, &
 																	default_boundary			= 1)
 																
 			call problem_data_manager%create_computational_mesh(problem_mesh)
@@ -402,74 +402,58 @@ program package_interface
 
 
 		!****************************** Setting boundary conditions ************************************
-			call problem_boundaries%create_boundary_type (	type_name				= 'wall'	,	&
-															slip					= .true.	,	&		
-															conductive				= .false.	,	&		
-															wall_temperature		= 0.0_dp	,	&		
-															wall_conductivity_ratio	= 0.0_dp	,	&		
-															priority				= 1)		
-
 			select case(setup)
-				case('counter_flow')															
-					call problem_boundaries%create_boundary_type (	type_name				= 'outlet'							,	&
-																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
-																	farfield_temperature	= 1400.0_dp						,	&
-																	farfield_velocity		= 0.0_dp							,	&	
-																	farfield_species_names	= [ character(len=5) ::'H2O','N2']				,	&	
-																	farfield_concentrations	= (/1.0_dp,nu * 3.762_dp/)	,	&
+                case('near_wall')
+                    call problem_boundaries%create_boundary_type (	type_name				= 'wall'	,	&
+															        slip					= .true.	,	&		
+															        conductive				= .false.	,	&		
+															        wall_temperature		= 0.0_dp	,	&		
+															        wall_conductivity_ratio	= 0.0_dp	,	&		
+															        priority				= 1)	
+                    
+					call problem_boundaries%create_boundary_type (	type_name				= 'outlet'							    ,	&
+																	farfield_pressure		= 1.0_dp*101325.0_dp			        ,	&
+																	farfield_temperature	= 300.0_dp						        ,	&
+																	farfield_velocity		= 0.0_dp							    ,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']	,	&	
+																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	        ,	&
 																	priority				= 2)
-				case('near_wall')
-					call problem_boundaries%create_boundary_type (	type_name				= 'outlet'							,	&
-																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
-																	farfield_temperature	= 300.0_dp						,	&
+                    
+                case('counter_flow')
+					call problem_boundaries%create_boundary_type (	type_name				= 'inlet'							    ,	&
+																	farfield_pressure		= 1.0_dp*101325.0_dp			        ,	&
+																	farfield_temperature	= 300.0_dp						        ,	&
+																	farfield_velocity		= 0.0_dp							    ,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']	,	&	
+																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	        ,	&
+																	priority				= 1)
+                    
+                    call problem_boundaries%create_boundary_type (	type_name				= 'outlet'							,	&
+																	farfield_pressure		= 1.0_dp*101325.0_dp			    ,	&
+																	farfield_temperature	= 1400.0_dp						    ,	&
 																	farfield_velocity		= 0.0_dp							,	&	
-																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']				,	&	
-																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	,	&
-																	priority				= 2)	
-               case('counter_flow_precInc')     
-					call problem_boundaries%create_boundary_type (	type_name				= 'outlet'							,	&
-																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
+																	farfield_species_names	= [ character(len=5) ::'H2O','N2']	,	&	
+																	farfield_concentrations	= (/1.0_dp,nu * 3.762_dp/)	        ,	&
+																	priority				= 2)
+                case('counter_flow_precInc')
+					call problem_boundaries%create_boundary_type (	type_name				= 'inlet'	                            ,	&
+																	farfield_pressure		= 1.0_dp*101325.0_dp	                ,	&
+																	farfield_temperature	= T_t(0)				                ,	&
+																	farfield_velocity		= vx_t(0)                               ,	&	
+																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']	,	&	
+																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	        ,	&
+																	priority				= 1) 
+                    call problem_boundaries%create_boundary_type (	type_name				= 'outlet'							,	&
+																	farfield_pressure		= 1.0_dp*101325.0_dp			    ,	&
 																	farfield_temperature	= T_t(table_size-1)					,	&
 																	farfield_velocity		= vx_t(table_size-1)				,	&	
-																	farfield_species_names	= [ character(len=5) ::'H2O','N2']					,	&	
-																	farfield_concentrations	= (/1.0_dp,nu * 3.762_dp/)	,	&
-																	priority				= 2)                    
-            end select	
-			
-			select case(setup) 
-                case('counter_flow')
-					call problem_boundaries%create_boundary_type (	type_name				= 'inlet'							,	&
-																	farfield_pressure		= 1.0_dp*101325.0_dp			,	&
-																	farfield_temperature	= 300.0_dp						,	&
-																	farfield_velocity		= 0.0_dp							,	&	
-																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']				,	&	
-																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	,	&
-																	priority				= 3)
-                case('counter_flow_precInc')
-					call problem_boundaries%create_boundary_type (	type_name				= 'inlet'	,	&
-																	farfield_pressure		= 1.0_dp*101325.0_dp	,	&
-																	farfield_temperature	= T_t(0)				,	&
-																	farfield_velocity		= vx_t(0)      ,	&	
-																	farfield_species_names	= [ character(len=5) ::'H2','O2','N2']				,	&	
-																	farfield_concentrations	= (/1.0_dp,nu,nu * 3.762_dp/)	,	&
-																	priority				= 3)  
+																	farfield_species_names	= [ character(len=5) ::'H2O','N2']	,	&	
+																	farfield_concentrations	= (/1.0_dp,nu * 3.762_dp/)	        ,	&
+																	priority				= 2)   
             end select
-                    
-															
-			call problem_boundaries%create_boundary_type (	type_name				= 'symmetry_plane'					,	&
-															priority				= 4)		
 
-			select case(setup)
-				case('counter_flow')
-					problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 3	
-					problem_boundaries%bc_markers(utter_loop(1,2),:,:)	= 2	
-				case('counter_flow_precInc')
-					problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 3	
-					problem_boundaries%bc_markers(utter_loop(1,2),:,:)	= 2	                    
-				case('near_wall')								
-					problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 1
-					problem_boundaries%bc_markers(utter_loop(1,2),:,:)	= 2	
-			end select	
+            problem_boundaries%bc_markers(utter_loop(1,1),:,:)	= 1
+			problem_boundaries%bc_markers(utter_loop(1,2),:,:)	= 2	
 			
 			!***********************************************************************************************
 										
