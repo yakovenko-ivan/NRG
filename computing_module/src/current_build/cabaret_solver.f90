@@ -2511,7 +2511,7 @@ call manager%create_timer(cabaret_timer                 ,'CABARET solver time'  
             print *, 'time_step_array allocation'
 		end if
 
-		time_step(1)	= 1.0e-05_dp !this%initial_time_step
+		time_step(1)	= 1.0e-03_dp !this%initial_time_step
 
 		associate(  v				=> this%v%v_ptr		, &
 					v_s				=> this%v_s%s_ptr		, &
