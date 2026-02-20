@@ -317,15 +317,15 @@ program package_interface
         !================================================================
         problem_solver_options = solver_options_c( &
             solver_name                 = solver_name,                              &
-            hydrodynamics_flag          = .true.,      ! Solve momentum equations
-            heat_transfer_flag          = .true.,      ! Solve energy equation
-            molecular_diffusion_flag    = .true.,      ! Include species diffusion
-            viscosity_flag              = .true.,      ! Include viscous effects
-            chemical_reaction_flag      = .true.,      ! Include chemical reactions
-            grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/),  ! No gravity
-            additional_particles_phases = 0,           ! No particle phases
-            CFL_flag                    = .true.,      ! Use CFL condition
-            CFL_coefficient             = 0.25_dp,     ! CFL safety factor
+            hydrodynamics_flag          = .true., &      ! Solve momentum equations
+            heat_transfer_flag          = .true., &      ! Solve energy equation
+            molecular_diffusion_flag    = .true., &      ! Include species diffusion
+            viscosity_flag              = .true., &      ! Include viscous effects
+            chemical_reaction_flag      = .true., &      ! Include chemical reactions
+            grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/), &  ! No gravity
+            additional_particles_phases = 0, &           ! No particle phases
+            CFL_flag                    = .true.,  &     ! Use CFL condition
+            CFL_coefficient             = 0.25_dp, &     ! CFL safety factor
             initial_time_step           = 1e-06_dp)    ! Initial Δt [s]
         
         !================================================================
@@ -424,27 +424,27 @@ program package_interface
                 'energy_production_chemistry',    &
                 'energy_production_diffusion'     &
             ], &
-            save_time         = 100.0_dp,        ! Save interval
-            save_time_units   = 'microseconds',  ! Time units for saving
-            save_format       = 'tecplot',       ! Output format
-            data_save_folder  = 'data_save',     ! Output directory
-            debug_flag        = .false.)         ! Debug mode off
+            save_time         = 100.0_dp,       &   ! Save interval
+            save_time_units   = 'microseconds', &   ! Time units for saving
+            save_format       = 'tecplot',      &   ! Output format
+            data_save_folder  = 'data_save',    &   ! Output directory
+            debug_flag        = .false.)            ! Debug mode off
         
         !================================================================
         ! DATA I/O CONFIGURATION
         !================================================================
         problem_data_io = data_io_c( &
             problem_data_manager,    &
-            check_time         = 5.0_dp,         ! Checkpoint interval
-            check_time_units   = 'milliseconds', ! Time units for checkpoints
-            data_output_folder = 'data_output')  ! Checkpoint directory
+            check_time         = 5.0_dp,         &  ! Checkpoint interval
+            check_time_units   = 'milliseconds', &  ! Time units for checkpoints
+            data_output_folder = 'data_output')     ! Checkpoint directory
         
         !================================================================
         ! INITIAL CONDITIONS SETUP
         !================================================================
         
         ! Set uniform ambient conditions
-        T%cells(:,:,:)   = 300.0_dp          ! Ambient temperature [K]
+        T%cells(:,:,:)   = 300.0_dp              ! Ambient temperature [K]
         p%cells(:,:,:)   = 1.0_dp * 101325.0_dp  ! Atmospheric pressure [Pa]
         
         ! Set initial species mole fractions (unburned mixture)
