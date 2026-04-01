@@ -254,7 +254,14 @@ contains
         this%particles(1)%outside_domain	= .false. 
         this%particles(1)%temperature		= 300.0_dp
         
-		this%particles(1)%mass	= Pi*this%particles_params%diameter**3 / 6.0_dp * this%particles_params%material_density
+        if (dimensions == 2) then
+		    this%particles(1)%mass	= Pi*this%particles_params%diameter**2 / 4.0_dp * this%particles_params%material_density
+        end if
+        
+        if (dimensions == 3) then
+		    this%particles(1)%mass	= Pi*this%particles_params%diameter**3 / 6.0_dp * this%particles_params%material_density
+        end if
+        
         continue
         
         !# Two particle streams setup
@@ -554,8 +561,15 @@ contains
 
                     this%particles(part)%coords_prev    = this%particles(part)%coords
                     
-					particle_diameter = (6.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 3.0_dp)
-					
+                    
+                    if (dimensions == 2) then
+		                particle_diameter = (4.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 2.0_dp)
+                    end if
+        
+                    if (dimensions == 3) then
+		                particle_diameter = (6.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 3.0_dp)
+                    end if
+				
 					cell = this%get_particle_cell(this%particles(part)%coords,out_flag)
 					i = cell(1)
 					j = cell(2)
@@ -600,24 +614,46 @@ contains
 				
 					!# Calculate particle mass and cross section
 					m_liq	= this%particles(part)%mass
-					A_pc	= Pi*particle_diameter**2 / 4.0_dp
-					A_ps	= Pi*particle_diameter**2
+                    
+                    if (dimensions == 2) then
+					    A_pc	= particle_diameter
+					    A_ps	= Pi*particle_diameter                 
+                    end if
+        
+                    if (dimensions == 3) then
+					    A_pc	= Pi*particle_diameter**2 / 4.0_dp
+					    A_ps	= Pi*particle_diameter**2
+                    end if
 
 					!# Calculate particle Reynolds number
 					Re_p	= rhog_old * abs_relative_velocity * particle_diameter / nu%cells(i,j,k)
 				
 					if ( abs_relative_velocity > 1.0e-10_dp) then	
-					!# Calculate drag coefficient for spherical particle
-						if (Re_p < 1e-010) then
-							C_drag = 100
-						elseif (Re_p < 1.0_dp) then
-								C_drag = 24.0_dp / Re_p
-						elseif (Re_p < 1000.0_dp) then
-								C_drag = 24.0_dp * ( 0.85_dp + 0.15 * Re_p**0.687) / Re_p
-						elseif (Re_p >= 1000.0_dp) then
-								C_drag = 0.44_dp
-						end if
-				
+                        if (dimensions == 2) then
+                            !# Calculate drag coefficient for cylindrical particle
+						    if (Re_p < 1e-010) then
+							    C_drag = 100
+						    elseif (Re_p < 1.0_dp) then
+								    C_drag = 10.0_dp / Re_p ** 0.8_dp
+						    elseif (Re_p < 1000.0_dp) then
+								    C_drag = 10.0_dp * ( 0.6_dp + 0.4_dp * Re_p**0.8_dp) / Re_p
+						    elseif (Re_p >= 1000.0_dp) then
+								    C_drag = 1.0_dp
+						    end if
+                        end if
+                        
+                        if (dimensions == 3) then
+                            !# Calculate drag coefficient for spherical particle
+						    if (Re_p < 1e-010) then
+							    C_drag = 100
+						    elseif (Re_p < 1.0_dp) then
+								    C_drag = 24.0_dp / Re_p
+						    elseif (Re_p < 1000.0_dp) then
+								    C_drag = 24.0_dp * ( 0.85_dp + 0.15_dp * Re_p**0.687_dp) / Re_p
+						    elseif (Re_p >= 1000.0_dp) then
+								    C_drag = 0.44_dp
+						    end if
+                        end if                        
 						particles_in_cell = this%count_particles_in_cell(cell)
 				
 					!# Calculate new particle coordinates and velocities
@@ -717,8 +753,8 @@ contains
     !					H_m	= 1.35020265065071 *1e-04/ particle_diameter       ! FDS Sh_p * D_air_water / particle_diameter          !1.35020265065071 ! FDS
                     
                         !# FDS TRG 6ed pg. 99 (func.f90 particle_H_MASS_H_HEAT_GAS)
-					    H_heat	= Nu_p * kappa%cells(i,j,k)	/ particle_diameter ! * 1.0_dp                                                              ! Nu_p * kappa%cells(i,j,k)	/ particle_diameter   !814.814366872002 ! FDS
-					    H_mass	= Sh_p * D_air_water * Bm / (Y_vap - Yg_old(particle_material_index)) / particle_diameter !/ 50.0_dp                     ! Sh_p * D_air_water / particle_diameter          !1.35020265065071 ! FDS
+					    H_heat	= Nu_p * kappa%cells(i,j,k)	/ particle_diameter ! * 1.0_dp                                              ! Nu_p * kappa%cells(i,j,k)	/ particle_diameter   !814.814366872002 ! FDS
+					    H_mass	= Sh_p * D_air_water * Bm / (Y_vap - Yg_old(particle_material_index)) / particle_diameter !/ 50.0_dp    ! Sh_p * D_air_water / particle_diameter          !1.35020265065071 ! FDS
                     
                     
 					    specie_enthalpy_gas		= (this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,particle_material_index))*Tg_old / this%thermo%thermo_ptr%molar_masses(particle_material_index)
