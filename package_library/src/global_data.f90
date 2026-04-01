@@ -33,9 +33,10 @@ module global_data
     integer             ,dimension(3,3) ,parameter  :: I_m = reshape((/1,0,0,0,1,0,0,0,1/), (/3,3/))
 
     real(dp)	,parameter  :: pi			= 3.141592653589793115997963468544185161590576171875_dp
-    real(dp)	,parameter	:: r_gase_J		= 8.31446261815324_dp
-    real(dp)	,parameter	:: r_gase_cal	= 1.98720425864083_dp
-    real(dp)	,parameter	:: T_ref        = 298.15_dp
-    real(dp)	,parameter	:: P_atm		= 101325.0_dp
+    real(dp)	,parameter	:: r_gase_J		= 8.31446261815324_dp           ! [J/(K * mol)]
+    real(dp)	,parameter	:: r_gase_cal	= 1.98720425864083_dp           ! [cal/(K * mol)]
+    real(dp)	,parameter	:: T_ref        = 298.15_dp                     ! [K]
+    real(dp)	,parameter	:: P_atm		= 101325.0_dp                   ! [Pa]
+    real(dp)    ,parameter  :: sigma_SB     = 5.669e-08_dp                  ! [J/(s * m^2 * K^4)]
 	
 end module

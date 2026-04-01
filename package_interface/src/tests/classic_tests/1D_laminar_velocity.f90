@@ -321,6 +321,7 @@ program package_interface
             heat_transfer_flag          = .true., &      ! Solve energy equation
             molecular_diffusion_flag    = .true., &      ! Include species diffusion
             viscosity_flag              = .true., &      ! Include viscous effects
+            radiation_flag              = .true., &      ! Include thermal radiation effects
             chemical_reaction_flag      = .true., &      ! Include chemical reactions
             grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/), &  ! No gravity
             additional_particles_phases = 0, &           ! No particle phases

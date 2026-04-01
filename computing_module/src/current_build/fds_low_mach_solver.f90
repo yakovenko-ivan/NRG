@@ -18,6 +18,7 @@ module fds_low_mach_solver_class
 	use fickean_diffusion_solver_class
 	use lagrangian_particles_solver_class
 	use continuous_particles_solver_class
+    use thermal_radiation_solver_class
 	
 	use solver_options_class
     
@@ -65,7 +66,7 @@ module fds_low_mach_solver_class
 	end type
 
 	type fds_solver
-		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag, perturbed_velocity
+		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, radiation_flag, reactive_flag, hydrodynamics_flag, CFL_condition_flag, all_Neumann_flag, perturbed_velocity
 		real(dp)		            :: courant_fraction
 		real(dp)		            :: time, time_step, initial_time_step
         real(dp)    , dimension(3)  :: g
@@ -78,7 +79,8 @@ module fds_low_mach_solver_class
 		type(diffusion_solver)				:: diff_solver
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(table_approximated_real_gas)	:: state_eq
-
+        type(thermal_radiation_solver)      :: radiation_solver
+        
 		type(lagrangian_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
 !		type(continuum_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
 		
@@ -89,7 +91,7 @@ module fds_low_mach_solver_class
 		type(boundary_conditions_pointer)			:: boundary
 
 		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mol_mix_conc
-		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_diff	, E_f_int		, h_s			, gamma
+		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_diff	, E_f_prod_rad  , E_f_int		, h_s			, gamma
 		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_old			, R
 		type(field_scalar_cons_pointer)	:: nu		, kappa
 		type(field_scalar_flow_pointer)	:: F_a		, F_b
@@ -194,6 +196,7 @@ contains
 		constructor%viscosity_flag		= manager%solver_options%get_viscosity_flag()
 		constructor%heat_trans_flag		= manager%solver_options%get_heat_transfer_flag()
 		constructor%reactive_flag		= manager%solver_options%get_chemical_reaction_flag()
+        constructor%reactive_flag		= manager%solver_options%get_thermal_radiation_flag()
 		constructor%hydrodynamics_flag	= manager%solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= manager%solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= manager%solver_options%get_CFL_condition_flag()
@@ -320,6 +323,12 @@ contains
 			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'diffusivity')
 			constructor%D%v_ptr						=> vect_ptr%v_ptr
         end if
+        
+        if (constructor%radiation_flag) then
+			constructor%radiation_solver	= thermal_radiation_solver_c(manager)
+			call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_radiation')
+			constructor%E_f_prod_rad%s_ptr		=> scal_ptr%s_ptr
+		end if
 
         if(constructor%perturbed_velocity) then
 			call manager%create_vector_field(v_prod_sources	,'velocity_production_sources'		,'v_prod_sources'	,'spatial')
@@ -1015,6 +1024,7 @@ contains
 					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &	
 					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &	
 					E_f_prod_chem 	    => this%E_f_prod_chem%s_ptr	, &
+                    E_f_prod_rad	    => this%E_f_prod_rad%s_ptr	, &
 					E_f_prod_heat	    => this%E_f_prod_heat%s_ptr	, &
 					E_f_prod_gd 	    => this%E_f_prod_gd%s_ptr	, &
 					E_f_prod_diff	    => this%E_f_prod_diff%s_ptr	, &	
@@ -1060,6 +1070,7 @@ contains
 					if (this%heat_trans_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_heat%cells(i,j,k)	![J/m^3/s]
 					if (this%diffusion_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_diff%cells(i,j,k)	![J/m^3/s]
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)	![J/m^3/s]
+                    if (this%radiation_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_rad%cells(i,j,k)	
 					!end if
 
 					average_molar_mass = 0.0_dp
@@ -3947,11 +3958,11 @@ contains
 											end do
 										end if
 								
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= h_s%cells(i,j,k) * T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) / T%cells(i,j,k)
+										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			            = h_s%cells(i,j,k) * T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) / T%cells(i,j,k)
 
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
-											v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= -v%pr(dim1)%cells(i,j,k)
+											v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			    = -v%pr(dim1)%cells(i,j,k)
 											else
 												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
 											end if

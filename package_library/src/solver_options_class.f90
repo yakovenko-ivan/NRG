@@ -18,7 +18,7 @@ module solver_options_class
 	type    :: solver_options
 		private
 		character(len=20)	:: solver_name	
-		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+		logical				:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, CFL_flag
 		real(dp)			:: CFL_coefficient, initial_time_step
         real(dp),   dimension(3)    :: grav_acc
 		integer				:: additional_particles_phases
@@ -37,6 +37,7 @@ module solver_options_class
 		procedure	:: get_CFL_condition_flag
 		procedure	:: get_hydrodynamics_flag
 		procedure	:: get_heat_transfer_flag
+        procedure	:: get_thermal_radiation_flag
 		procedure	:: get_molecular_diffusion_flag
 		procedure	:: get_viscosity_flag
 		procedure	:: get_chemical_reaction_flag
@@ -54,9 +55,9 @@ module solver_options_class
 
 contains
 
-	type(solver_options) function constructor(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step)
+	type(solver_options) function constructor(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step)
 		character(len=*)	    ,intent(in)	:: solver_name
-		logical				    ,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+		logical				    ,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, thermal_radiation_flag, CFL_flag
         real(dp), dimension(3)  ,intent(in) :: grav_acc
 		integer				    ,intent(in)	,optional	:: additional_particles_phases
 		real(dp)			    ,intent(in)	:: CFL_coefficient, initial_time_step
@@ -71,7 +72,7 @@ contains
 			additional_particles = 0
 		end if
 		
-		call constructor%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles, CFL_flag, CFL_coefficient, initial_time_step)
+		call constructor%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, additional_particles, CFL_flag, CFL_coefficient, initial_time_step)
 		
 		open(newunit = io_unit, file = solver_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
@@ -119,14 +120,14 @@ contains
 		integer					,intent(in)	:: solver_data_unit
 		
 		logical				    :: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag
-        logical				    :: viscosity_flag, chemical_reaction_flag, CFL_flag
+        logical				    :: viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, CFL_flag
 		real(dp), dimension(3)  :: grav_acc
         integer				    :: additional_particles_phases
 		real(dp)			    :: CFL_coefficient, initial_time_step
 		character(len=20)	    :: solver_name
 		
 		namelist /solver_properties/    solver_name, hydrodynamics_flag, heat_transfer_flag, &
-                                        molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, &
+                                        molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, &
                                         grav_acc, additional_particles_phases, &
                                         CFL_flag, CFL_coefficient, initial_time_step
 		
@@ -135,6 +136,7 @@ contains
 		heat_transfer_flag			=	this%heat_transfer_flag
 		molecular_diffusion_flag	=	this%molecular_diffusion_flag
 		viscosity_flag				=	this%viscosity_flag
+        thermal_radiation_flag      =   this%thermal_radiation_flag
 		chemical_reaction_flag		=	this%chemical_reaction_flag
         grav_acc                    =   this%grav_acc
 		additional_particles_phases	=	this%additional_particles_phases	
@@ -150,22 +152,22 @@ contains
 		class(solver_options)	,intent(inout)	:: this
 		integer					,intent(in)		:: solver_data_unit
 		
-		logical				    :: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+		logical				    :: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, CFL_flag
 		real(dp), dimension(3)  :: grav_acc		
         integer				    :: additional_particles_phases
 		real(dp)			    :: CFL_coefficient, initial_time_step
 		character(len=20)	    :: solver_name
 	
-		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step
+		namelist /solver_properties/  solver_name, hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step
 		
 		read(unit = solver_data_unit, nml = solver_properties)
-		call this%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step)
+		call this%set_properties(solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step)
 		
 	end subroutine
 	
-	subroutine set_properties(this, solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step)
+	subroutine set_properties(this, solver_name,hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, initial_time_step)
 		class(solver_options)	,intent(inout)	:: this
-		logical								,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, chemical_reaction_flag, CFL_flag
+		logical								,intent(in)	:: hydrodynamics_flag, heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, CFL_flag
 		real(dp), dimension(3)              ,intent(in) :: grav_acc		
         integer								,intent(in)	:: additional_particles_phases
 		real(dp)							,intent(in)	:: CFL_coefficient, initial_time_step
@@ -176,6 +178,7 @@ contains
 		this%heat_transfer_flag			=	heat_transfer_flag
 		this%molecular_diffusion_flag	=	molecular_diffusion_flag
 		this%viscosity_flag				=	viscosity_flag
+        this%thermal_radiation_flag		=	thermal_radiation_flag
 		this%chemical_reaction_flag		=	chemical_reaction_flag
         this%grav_acc                   =   grav_acc
 		allocate(this%particles(additional_particles_phases))
@@ -199,6 +202,7 @@ contains
 		write(log_unit,'(A,L)')         ' Heat transfer			: ',	this%heat_transfer_flag
 		write(log_unit,'(A,L)')         ' Molecular diffusion	: ',	this%molecular_diffusion_flag
 		write(log_unit,'(A,L)')         ' Viscosity				: ',	this%viscosity_flag
+        write(log_unit,'(A,L)')         ' Thermal radiation 	: ',	this%thermal_radiation_flag
 		write(log_unit,'(A,L)')         ' Chemical reaction		: ',	this%chemical_reaction_flag
 		write(log_unit,'(A,3E14.7)')    ' Gravitational accel.	: ',	this%grav_acc
 		write(log_unit,'(A,I2)')        ' Suspended phases      : ',	this%additional_particles_phases
@@ -242,8 +246,15 @@ contains
 		logical								:: get_viscosity_flag
 		
 		get_viscosity_flag	= this%viscosity_flag
-	end function	
+    end function	
 	
+	pure function get_thermal_radiation_flag(this)
+		class(solver_options)	,intent(in)	:: this
+		logical								:: get_thermal_radiation_flag
+		
+		get_thermal_radiation_flag	= this%thermal_radiation_flag
+	end function	
+    
 	pure function get_chemical_reaction_flag(this)
 		class(solver_options)	,intent(in)	:: this
 		logical								:: get_chemical_reaction_flag
