@@ -52,6 +52,7 @@ module fds_low_mach_solver_class
     type(timer)     :: fds_chemistry_timer
     type(timer)     :: fds_diffusion_timer
     type(timer)     :: fds_heattransfer_timer
+    type(timer)     :: fds_radiation_timer
     type(timer)     :: fds_viscosity_timer
   
 	real(dp)	,dimension(:)	,allocatable	:: farfield_velocity_array
@@ -196,14 +197,14 @@ contains
 		constructor%viscosity_flag		= manager%solver_options%get_viscosity_flag()
 		constructor%heat_trans_flag		= manager%solver_options%get_heat_transfer_flag()
 		constructor%reactive_flag		= manager%solver_options%get_chemical_reaction_flag()
-        constructor%reactive_flag		= manager%solver_options%get_thermal_radiation_flag()
+        constructor%radiation_flag  	= manager%solver_options%get_thermal_radiation_flag()
 		constructor%hydrodynamics_flag	= manager%solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= manager%solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= manager%solver_options%get_CFL_condition_flag()
         
         !# sub solver options
 		    constructor%perturbed_velocity_flag	= .false.
-            constructor%stabilizing_inlet_flag	= .false.
+            constructor%stabilizing_inlet_flag	= .true.
 		    constructor%igniter_flag	        = .false.
             
         constructor%g                   = manager%solver_options%get_grav_acc()
@@ -672,6 +673,7 @@ contains
     call manager%create_timer(fds_chemistry_timer       ,'FDS chemistry solver time'    , 'chem_t')
     call manager%create_timer(fds_diffusion_timer       ,'FDS diffusion solver time'    , 'diff_t')
     call manager%create_timer(fds_heattransfer_timer    ,'FDS heattransfer solver time' , 'ht_t')
+    call manager%create_timer(fds_radiation_timer       ,'FDS radiation solver time'    , 'rad_t')
     call manager%create_timer(fds_viscosity_timer       ,'FDS viscosity solver time'    , 'visc_t')
     call manager%create_timer(fds_multigrid_timer       ,'Multigrid solver time'        , 'mg_t')
  
@@ -715,6 +717,10 @@ contains
 		if (this%heat_trans_flag)			call this%heat_trans_solver%solve_heat_transfer(this%time_step)				
         call fds_heattransfer_timer%toc(new_iter=.true.)
  
+        call fds_radiation_timer%tic()
+		if (this%radiation_flag)			call this%radiation_solver%solve_radiation(this%time_step)				
+        call fds_radiation_timer%toc(new_iter=.true.)
+        
 		if (this%perturbed_velocity_flag)		call this%perturb_velocity_field(this%time_step)
 
 		if(this%additional_particles_phases_number /= 0) then
