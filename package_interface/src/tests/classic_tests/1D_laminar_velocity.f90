@@ -163,12 +163,14 @@ program package_interface
     ! task6: Spatial resolution (2=dx=1.0e-04 m)
     !================================================================
     
-    do task1 = 3, 3          ! Currently fixed at near_wall (3)
-    do task2 = 1, 1          ! Currently fixed at Cartesian (1)
-    do task3 = 1, 1          ! Currently fixed at FDS solver (1)
-    do task4 = 1, 1          ! Currently fixed at KEROMNES mechanism (1)
-    do task5 = 9, 9          ! Currently fixed at 9% H2
-    do task6 = 2, 2          ! Currently fixed at dx=1.0e-04 (2)
+    do task1 = 1, 1          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
+    do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
+    do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
+    do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
+    do task5 = 10, 10        ! Hydrogen percent in mixture with air
+    do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
+                             !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
+                             !                      dx=6.25e-06 (6)
         
         ! Initialize working directory structure
         work_dir = '1D_LBV_test'  ! Main results directory
@@ -321,13 +323,13 @@ program package_interface
             heat_transfer_flag          = .true., &      ! Solve energy equation
             molecular_diffusion_flag    = .true., &      ! Include species diffusion
             viscosity_flag              = .true., &      ! Include viscous effects
-            radiation_flag              = .true., &      ! Include thermal radiation effects
+            thermal_radiation_flag      = .true., &      ! Include thermal radiation effects
             chemical_reaction_flag      = .true., &      ! Include chemical reactions
             grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/), &  ! No gravity
             additional_particles_phases = 0, &           ! No particle phases
             CFL_flag                    = .true.,  &     ! Use CFL condition
             CFL_coefficient             = 0.25_dp, &     ! CFL safety factor
-            initial_time_step           = 1e-06_dp)    ! Initial Δt [s]
+            initial_time_step           = 1e-06_dp)      ! Initial Δt [s]
         
         !================================================================
         ! MPI AND DATA MANAGEMENT SETUP
@@ -423,7 +425,8 @@ program package_interface
                 'thermal_conductivity',           &
                 'viscosity',                      &
                 'energy_production_chemistry',    &
-                'energy_production_diffusion'     &
+                'energy_production_diffusion',    &
+                'energy_production_radiation'     &
             ], &
             save_time         = 100.0_dp,       &   ! Save interval
             save_time_units   = 'microseconds', &   ! Time units for saving
