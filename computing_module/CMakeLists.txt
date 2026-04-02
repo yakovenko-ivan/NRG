@@ -38,6 +38,7 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/current_build/fds_low_mach_solver.f90
 	${SRC_COMPUTE}/src/current_build/fickean_diffusion_solver.f90
 	${SRC_COMPUTE}/src/current_build/fourier_heat_transfer_solver.f90
+	${SRC_COMPUTE}/src/current_build/thermal_radiation_solver.f90
 	${SRC_COMPUTE}/src/current_build/lagrangian_particles_solver.f90
 	${SRC_COMPUTE}/src/current_build/main.f90
 	${SRC_COMPUTE}/src/current_build/continuous_particles_solver.f90

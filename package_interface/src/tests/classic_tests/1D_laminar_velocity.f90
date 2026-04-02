@@ -245,9 +245,10 @@ program package_interface
         !------------------------------------------------
         ! TASK5: HYDROGEN CONCENTRATION
         !------------------------------------------------
-        X_H2     = task5 * 1.0_dp  ! Convert to percentage
-        work_dir = trim(work_dir) // trim(fold_sep) // trim(str_r(X_H2)) //'_pcnt'
-        nu       = (100.0 - X_H2) / X_H2 / 4.762_dp  ! Calculate stoichiometric ratio
+        X_H2		= task2 * 5.0_dkind
+        phi			= 4.762_dkind * 0.5_dkind * X_H2 /100.0_dkind / (1.0_dkind - X_H2/100.0_dkind)
+	    nu			= (100.0_dkind - X_H2) / X_H2 / 4.762_dkind     
+        work_dir	= trim(work_dir) // trim(fold_sep) //  trim(str(X_H2)) //'_pcnt_' // trim(str(phi)) //'_phi(fuel)'
         
         ierr = system('mkdir '// work_dir)
         
@@ -377,7 +378,7 @@ program package_interface
             problem_data_manager,                            &
             post_processor_name = "proc1",                   &
             operations_number   = 7,                         &
-            save_time           = 1.0_dp,                    &
+            save_time           = 100.0_dp,                    &
             save_time_units     = 'microseconds')
         
         ! Define post-processing operations:
@@ -428,8 +429,8 @@ program package_interface
                 'energy_production_diffusion',    &
                 'energy_production_radiation'     &
             ], &
-            save_time         = 100.0_dp,       &   ! Save interval
-            save_time_units   = 'microseconds', &   ! Time units for saving
+            save_time         = 1.0_dp,       &   ! Save interval
+            save_time_units   = 'milliseconds', &   ! Time units for saving
             save_format       = 'tecplot',      &   ! Output format
             data_save_folder  = 'data_save',    &   ! Output directory
             debug_flag        = .false.)            ! Debug mode off
