@@ -667,15 +667,15 @@ contains
         
 		continue
 		
-    call manager%create_timer(fds_timer                 ,'FDS solver time'              , 'sol_t')
-    call manager%create_timer(fds_gas_dynamics_timer    ,'FDS gas dynamics time'        , 'gd_t')
-    call manager%create_timer(fds_eos_timer             ,'FDS eos solver time'          , 'eos_t')
-    call manager%create_timer(fds_chemistry_timer       ,'FDS chemistry solver time'    , 'chem_t')
-    call manager%create_timer(fds_diffusion_timer       ,'FDS diffusion solver time'    , 'diff_t')
-    call manager%create_timer(fds_heattransfer_timer    ,'FDS heattransfer solver time' , 'ht_t')
-    call manager%create_timer(fds_radiation_timer       ,'FDS radiation solver time'    , 'rad_t')
-    call manager%create_timer(fds_viscosity_timer       ,'FDS viscosity solver time'    , 'visc_t')
-    call manager%create_timer(fds_multigrid_timer       ,'Multigrid solver time'        , 'mg_t')
+        call manager%create_timer(fds_timer                 ,'FDS solver time'              , 'sol_t')
+        call manager%create_timer(fds_gas_dynamics_timer    ,'FDS gas dynamics time'        , 'gd_t')
+        call manager%create_timer(fds_eos_timer             ,'FDS eos solver time'          , 'eos_t')
+        call manager%create_timer(fds_chemistry_timer       ,'FDS chemistry solver time'    , 'chem_t')
+        call manager%create_timer(fds_diffusion_timer       ,'FDS diffusion solver time'    , 'diff_t')
+        call manager%create_timer(fds_heattransfer_timer    ,'FDS heattransfer solver time' , 'ht_t')
+        call manager%create_timer(fds_radiation_timer       ,'FDS radiation solver time'    , 'rad_t')
+        call manager%create_timer(fds_viscosity_timer       ,'FDS viscosity solver time'    , 'visc_t')
+        call manager%create_timer(fds_multigrid_timer       ,'Multigrid solver time'        , 'mg_t')
  
 	end function
 
@@ -3127,24 +3127,24 @@ contains
 
 		real(dp), save			:: previous_time = 0.0_dp, current_time = 0.0_dp, previous_correction_time = 0.0_dp
 
-		real(dp), dimension(20), save	:: flame_velocity_hist = 0.0
+		real(dp), dimension(500), save	:: flame_velocity_hist = 0.0
 		integer		,save			:: track_counter = 0, correction_counter = 0, stabilization_counter = 0, hist_indx
 
 		character(len=200)			:: file_name
 		
 		integer		,dimension(:), allocatable, save	:: flame_front_index
 		real(dp)	,dimension(:), allocatable, save	:: max_val, max_coord
-		
+		real(dp)	,dimension(:), allocatable, save	:: data_array, test
+        
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
 
 		real(dp)					:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x, velocity_deviation
-		real(dp)	,dimension(2)	:: coords_lp
+		real(dp)	,dimension(3)	:: coords_lp
 		integer						:: i_lp, j_lp, lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2
 		integer		,save			:: j_lp_E = 1
 		
 		integer						:: hist_size
-		real(dp)	,dimension(20)	:: data_array, test
 		real(dp)					:: s, diff, var_s, z
         
 		integer :: CO_index, H2O2_index, HO2_index, OH_index, H_index
@@ -3154,16 +3154,19 @@ contains
 		logical	,save			:: correction_flag = .true.
 		character(len=20)		:: boundary_type_name
 		character(len=20)		:: flame_data_file
+        character(len=500)      :: av_header
+        character(len=5)	,dimension(3)	:: axis_names
         
         integer	,save			:: flame_loc_unit
         integer					:: flame_loc_unit_old, stat
         
 		dimensions		= this%domain%get_domain_dimensions()
+        axis_names      = this%domain%get_axis_names()
 		species_number	= this%chem%chem_ptr%species_number
-		
+        
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-				
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+
+        cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
 !		CO_index		= this%chem%chem_ptr%get_chemical_specie_index('CO')
 !		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
@@ -3177,6 +3180,7 @@ contains
 			allocate(flame_front_index(cons_inner_loop(2,1):cons_inner_loop(2,2)))
 			allocate(max_val(cons_inner_loop(2,1):cons_inner_loop(2,2)))
 			allocate(max_coord(cons_inner_loop(2,1):cons_inner_loop(2,2)))
+            allocate(data_array(3*dimensions+14), test(3*dimensions+14))
         end if
 		
         data_array = 0.0_dp
@@ -3189,8 +3193,8 @@ contains
 					bc				=> this%boundary%bc_ptr)
 
 		time_delay			= 1e-05_dp!1e-05_dp!1e-05_dp!1e-05_dp			
-		time_track			= 1e-03_dp!2e-04_dp!1e-05_dp!2e-04_dp
-		time_stabilization	= 1e-03_dp!5e-06_dp!1e-05_dp!5e-06_dp		
+		time_track			= 1e-04_dp!2e-04_dp!1e-05_dp!2e-04_dp
+		time_stabilization	= 1e-04_dp!5e-06_dp!1e-05_dp!5e-06_dp		
        
 		if ( (time - time_delay) / time_track  > track_counter + 1) then			
 					
@@ -3198,6 +3202,28 @@ contains
  				write(flame_data_file,'(A,I2,A)') 'av_flame_data_',this%load_counter,'.dat'
 				open(newunit = flame_loc_unit, file = flame_data_file, status = 'replace', form = 'formatted')
 
+                av_header = 'VARIABLES="time" '
+                
+                do dim = 1, dimensions
+                    av_header =  trim(av_header) // '"lp_H' // trim(axis_names(dim)) // ' "'
+                end do
+                
+                av_header = trim(av_header) // '"Ufl_H" "avUfl_H" "U_in" "U_tot" "max_H" '
+                
+                do dim = 1, dimensions
+                    av_header =  trim(av_header) // '"lp_T' // trim(axis_names(dim)) // ' "'
+                end do
+                
+                av_header = trim(av_header) // '"Ufl_T" "max_T" '
+                
+                do dim = 1, dimensions
+                    av_header =  trim(av_header) // '"lp_E' // trim(axis_names(dim)) // ' "'
+                end do
+                
+                av_header = trim(av_header) // '"Ufl_E" "max_E" "z" "corr_cont" "stab_count" "track_count" ' 
+
+                write (flame_loc_unit,'(A)')	trim(av_header)
+                
 				if (this%load_counter > 1) then
 					write(flame_data_file,'(A,I2,A)') 'av_flame_data_',this%load_counter-1,'.dat'
 					open(newunit = flame_loc_unit_old, file = flame_data_file, status = 'old', form = 'formatted')
@@ -3395,11 +3421,13 @@ contains
                             exit
                         end if
                     end do
-
+                    
 					previous_time			= data_array(1)
-                    previous_flame_location	= data_array(2:3)
-                    av_flame_velocity		= data_array(5)
-                    track_counter				= data_array(18)
+                    do dim = 1, dimensions
+                        previous_flame_location(dim)	= data_array(dim+1)
+                    end do
+                    av_flame_velocity		= data_array(dimensions+3)
+                    track_counter           = data_array(3*dimensions+14)
 
                     if( track_counter < size(flame_velocity_hist)) then
                         flame_velocity_hist(:mod(track_counter,size(flame_velocity_hist))) = av_flame_velocity
@@ -3407,13 +3435,13 @@ contains
                         flame_velocity_hist = av_flame_velocity
                     end if
                     
-                    flame_velocity_hist(mod(track_counter,size(flame_velocity_hist))+1) = data_array(4)
+                    flame_velocity_hist(mod(track_counter,size(flame_velocity_hist))+1) = data_array(dimensions+2)
                 end if
  			end if  
 
         
 
-			if( (track_counter /= 0).and.(track_counter /= nint(data_array(19))).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
+			if( (track_counter /= 0).and.(track_counter /= nint(data_array(3*dimensions+13))).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
 !            if( (correction /= 0).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
                 
 				flame_velocity		= (current_flame_location(1) - previous_flame_location(1))/(current_time - previous_time)
@@ -3493,33 +3521,38 @@ contains
                     print *, abs(z)
                     print *, (time - previous_correction_time) / time_stabilization
                 !    pause
-					if ((abs(z) < 1.96_dp).and.((time - previous_correction_time) / time_stabilization > 1)) then
-						farfield_velocity_array = max(farfield_velocity_array - 0.1_dp*av_flame_velocity, 0.0_dp)
+					if ((abs(z) > 1.96_dp).and.((time - previous_correction_time) / time_stabilization > 1)) then
+						farfield_velocity_array = max(farfield_velocity_array - 0.01_dp*av_flame_velocity, 0.0_dp)
 						previous_correction_time = time
 						correction_counter = correction_counter + 1 
 					end if
                 end if
 				
-                data_array(1)		= time
-                data_array(2:3)		= current_flame_location
-                data_array(4)		= flame_velocity
-                data_array(5)		= av_flame_velocity
-
-                data_array(6)		= farfield_velocity_array(1)
-                data_array(7)		= abs(farfield_velocity_array(1))+abs(av_flame_velocity)
-                data_array(8)		= max_val_H
-                data_array(9:10)	= current_flame_location_T
-                data_array(11)		= flame_velocity_T
-                data_array(12)		= max_val_T
-                data_array(13:14)	= current_flame_location_E
-                data_array(15)		= flame_velocity_E
-                data_array(16)		= max_val_E
-                data_array(17)		= z
-                data_array(18)		= correction_counter
-                data_array(19)		= stabilization_counter
-                data_array(20)		= track_counter
+                data_array(1)		                = time
+                do dim = 1, dimensions
+                    data_array(dim+1)	            = current_flame_location(dim)
+                end do
                 
-                				
+                data_array(dimensions+2)            = flame_velocity
+                data_array(dimensions+3)	        = av_flame_velocity
+                data_array(dimensions+4)	        = farfield_velocity_array(1)
+                data_array(dimensions+5)	        = abs(farfield_velocity_array(1))+abs(av_flame_velocity)
+                data_array(dimensions+6)	        = max_val_H
+                do dim = 1, dimensions
+                    data_array(dimensions+6+dim)    = current_flame_location_T(dim)
+                end do
+                data_array(2*dimensions+7)		    = flame_velocity_T
+                data_array(2*dimensions+8)		    = max_val_T
+                do dim = 1, dimensions
+                    data_array(2*dimensions+8+dim)	= current_flame_location_E(dim)
+                end do
+                data_array(3*dimensions+9)          = flame_velocity_E
+                data_array(3*dimensions+10)         = max_val_E
+                data_array(3*dimensions+11)         = z
+                data_array(3*dimensions+12)         = correction_counter
+                data_array(3*dimensions+13)         = stabilization_counter
+                data_array(3*dimensions+14)         = track_counter
+				
 				if (mod(track_counter,1) == 0) then
 					write (flame_loc_unit,'(20E20.12)') data_array
 				end if
