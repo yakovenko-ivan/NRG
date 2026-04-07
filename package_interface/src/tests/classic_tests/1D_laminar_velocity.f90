@@ -98,16 +98,19 @@ program package_interface
     !==========================================
     ! CHEMICAL AND PHYSICAL PARAMETERS
     !==========================================
-    integer                     :: species_number      ! Number of chemical species
-    real(dp)                    :: domain_length       ! Domain length in x-direction [m]
-    real(dp)                    :: domain_width        ! Domain width [m]
-    real(dp)                    :: ignition_region     ! Ignition zone location/size
-    real(dp)                    :: CFL_coeff           ! CFL stability coefficient
-    real(dp)                    :: delta_x             ! Spatial resolution [m]
-    real(dp)                    :: offset              ! General offset parameter
-    real(dp)                    :: nu                  ! Stoichiometric O2/H2 ratio
-    real(dp)                    :: X_H2                ! Hydrogen mole fraction [%]
-    real(dp)                    :: spec_summ           ! Temporary sum for normalization
+    integer                     :: species_number       ! Number of chemical species
+    real(dp)                    :: domain_length        ! Domain length in x-direction [m]
+    real(dp)                    :: domain_width         ! Domain width [m]
+    real(dp)                    :: ignition_region      ! Ignition zone location/size
+    real(dp)                    :: CFL_coeff            ! CFL stability coefficient
+    real(dp)                    :: delta_x              ! Spatial resolution [m]
+    real(dp)                    :: offset               ! General offset parameter
+    real(dp)                    :: nu                   ! Stoichiometric O2/H2 ratio
+    real(dp)                    :: X_H2                 ! Hydrogen mole fraction [%]
+    real(dp)                    :: phi                  ! Equivalence ratio
+    real(dp)                    :: spec_summ            ! Temporary sum for normalization
+    real(dp)                    :: v_in                 ! Initial guess for inflow velocity
+    
     
     !==========================================
     ! FLAMELET TABLE DATA (for counter_flow_precInc setup)
@@ -168,7 +171,7 @@ program package_interface
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
     do task5 = 10, 10        ! Hydrogen percent in mixture with air
-    do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
+    do task6 = 1, 1          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
         
@@ -245,10 +248,10 @@ program package_interface
         !------------------------------------------------
         ! TASK5: HYDROGEN CONCENTRATION
         !------------------------------------------------
-        X_H2		= task2 * 5.0_dkind
-        phi			= 4.762_dkind * 0.5_dkind * X_H2 /100.0_dkind / (1.0_dkind - X_H2/100.0_dkind)
-	    nu			= (100.0_dkind - X_H2) / X_H2 / 4.762_dkind     
-        work_dir	= trim(work_dir) // trim(fold_sep) //  trim(str(X_H2)) //'_pcnt_' // trim(str(phi)) //'_phi(fuel)'
+        X_H2		= task5 * 1.0_dp
+        phi			= 4.762_dp * 0.5_dp * X_H2 /100.0_dp / (1.0_dp - X_H2/100.0_dp)
+	    nu			= (100.0_dp - X_H2) / X_H2 / 4.762_dp     
+        work_dir	= trim(work_dir) // trim(fold_sep) //  trim(str_r(X_H2)) //'_pcnt_' // trim(str_r(phi)) //'_phi(fuel)'
         
         ierr = system('mkdir '// work_dir)
         
@@ -480,6 +483,12 @@ program package_interface
                     end if
                 end do
                 
+                v_in =    0.01144_dp + 19.41_dp*X_H2 - 5.045_dp*X_H2**2 + 0.4772_dp*X_H2**3 &
+                        - 0.02021_dp*X_H2**4 + 0.0004622_dp*X_H2**5 - 6.008e-06_dp*X_H2**6  &
+                        + 4.209e-08_dp*X_H2**7 - 1.239e-10_dp*X_H2**8
+                
+                v_in = v_in / 100.0_dp
+                
                 ! Convert mole fractions to dimensionless form
                 call problem_thermophysics%change_field_units_mole_to_dimless(Y)
             
@@ -643,7 +652,7 @@ program package_interface
                     type_name               = 'inlet',               &
                     farfield_pressure       = 1.0_dp * 101325.0_dp,  &
                     farfield_temperature    = 300.0_dp,              &  ! Cold reactants
-                    farfield_velocity       = 0.0_dp,                &
+                    farfield_velocity       = v_in,                  &  ! Initial guess
                     farfield_species_names  = [character(len=5) :: 'H2','O2','N2'], &
                     farfield_concentrations = (/1.0_dp, nu, nu * 3.762_dp/), &
                     priority                = 1)
