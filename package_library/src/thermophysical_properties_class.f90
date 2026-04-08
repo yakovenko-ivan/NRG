@@ -729,9 +729,32 @@ contains
 
 	end subroutine	
 	
-	subroutine change_cell_units_mole_to_dimless(this,Y)
+	subroutine change_cell_units_mole_to_dimless(this,X)
 		class(thermophysical_properties)    ,intent(in) 	:: this
-		real(dp)	,dimension(:)			,intent(inout)	:: Y
+		real(dp)	,dimension(:)			,intent(inout)	:: X
+
+		real(dp)	:: mass_summ
+
+		integer						:: species_number
+		integer						:: specie_number
+
+		species_number	= size(X)
+
+		mass_summ = 0.0_dp
+		do specie_number = 1,species_number
+			mass_summ = mass_summ + X(specie_number) * this%molar_masses(specie_number)
+		end do
+
+		do specie_number = 1,species_number
+			X(specie_number)	= X(specie_number) * this%molar_masses(specie_number) / mass_summ
+		end do
+
+    end subroutine
+    
+    real(dp) function get_specie_molar_fraction(this,Y,specie_index)
+		class(thermophysical_properties)    ,intent(in) 	:: this
+		real(dp)	,dimension(:)			,intent(in)		:: Y
+        integer			                    ,intent(in)		:: specie_index
 
 		real(dp)	:: mass_summ
 
@@ -742,12 +765,10 @@ contains
 
 		mass_summ = 0.0_dp
 		do specie_number = 1,species_number
-			mass_summ = mass_summ + Y(specie_number) * this%molar_masses(specie_number)
+			mass_summ = mass_summ + Y(specie_number) / this%molar_masses(specie_number)
 		end do
 
-		do specie_number = 1,species_number
-			Y(specie_number)	= Y(specie_number) * this%molar_masses(specie_number) / mass_summ
-		end do
-
-	end subroutine		
+		get_specie_molar_fraction =	Y(specie_index) / this%molar_masses(specie_index) / mass_summ
+    end function
+    
 end module

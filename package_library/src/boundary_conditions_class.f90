@@ -16,7 +16,7 @@ module boundary_conditions_class
 
 	type boundary_conditions
 		type(boundary_type)		,dimension(:)		,allocatable	:: boundary_types
-		integer(i1)			,dimension(:,:,:)	,allocatable	:: bc_markers
+		integer(i1)				,dimension(:,:,:)	,allocatable	:: bc_markers
 		integer														:: default_boundary_type
 		integer														:: boundary_type_counter
 	contains
@@ -24,6 +24,8 @@ module boundary_conditions_class
 		procedure	,private	:: read_properties
 		procedure	,private	:: write_properties
 		procedure	,private	:: set_properties
+        
+        procedure	:: get_boundary_types        
 
 		! Logger	
 		procedure	:: write_log
@@ -180,6 +182,12 @@ contains
 		this%boundary_types(this%boundary_type_counter) = boundary_type_c(type_name,slip,conductive,wall_temperature,wall_conductivity_ratio,farfield_pressure,farfield_temperature,farfield_density,farfield_velocity,farfield_concentrations,farfield_species_names,priority,io_unit)
 		close(io_unit)
 		
-	end subroutine
+    end subroutine
+    
+	pure integer function	get_boundary_types(this)
+		class(boundary_conditions)		,intent(in)		:: this
+
+		get_boundary_types = size(this%boundary_types)
+	end function    
 
 end module
