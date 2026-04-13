@@ -571,8 +571,10 @@ contains
 					chem			=> this%chem%chem_ptr)
 
 		max_T = 0.0_dp
+        min_index = 0
+        max_index = 0
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			if((T%cells(i,1,1) > 300.0_dp).and.(T%cells(i,1,1) < 310.0_dp))	min_index = i
+			if((T%cells(i,1,1) > 300.5_dp).and.(T%cells(i,1,1) < 310.0_dp).and.(min_index == 0))	min_index = i
 			if(T%cells(i,1,1) > max_T) then
 				max_index = i
 				max_T = T%cells(i,1,1)

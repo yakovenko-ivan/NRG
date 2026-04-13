@@ -778,12 +778,6 @@ contains
 
 		if (this%stabilizing_inlet_flag) then
 			call this%stabilizing_inlet_1D(this%time, stabilized_flag)
-			if (stabilized_flag) then
-				stop_flag = .true.
-!				call this%chem_kin_solver%write_chemical_kinetics_table('15.0_pcnt_H2-Air_table(T).dat')
-!				call this%write_data_table('H2-Air_flamelet.dat')
-				stop
-			end if
 		end if
          
         
@@ -3132,14 +3126,16 @@ contains
 
 		character(len=200)			:: file_name
 		
-		integer		,dimension(:), allocatable, save	:: flame_front_index
-		real(dp)	,dimension(:), allocatable, save	:: max_val, max_coord
-		real(dp)	,dimension(:), allocatable, save	:: data_array, test
+		integer				,dimension(:), allocatable, save	:: flame_front_index
+		real(dp)			,dimension(:), allocatable, save	:: max_val, max_coord
+		real(dp)			,dimension(:), allocatable, save	:: data_array, test
+        real(dp)			,dimension(:), allocatable, save	:: farfield_concentrations, concs
+        character(len=10)	,dimension(:), allocatable, save	:: farfield_species_names
         
 		integer	:: dimensions, species_number
 		integer	,dimension(3,2)	:: cons_inner_loop
 
-		real(dp)					:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x, velocity_deviation
+		real(dp)					:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x, velocity_deviation, X_H2
 		real(dp)	,dimension(3)	:: coords_lp
 		integer						:: i_lp, j_lp, lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2
 		integer		,save			:: j_lp_E = 1
@@ -3147,14 +3143,16 @@ contains
 		integer						:: hist_size
 		real(dp)					:: s, diff, var_s, z
         
-		integer :: CO_index, H2O2_index, HO2_index, OH_index, H_index
-		integer	:: bound_number,sign
-		integer :: i,j,k,plus,dim,dim1,spec, lp_index,lp_index2,lp_index3
+		integer :: specie_index, H2_index, CO_index, H2O2_index, HO2_index, OH_index, H_index
+		integer	:: boundary_types,sign
+		integer :: i,j,k,plus,dim,dim1,bound_number, specie_number, spec, lp_index,lp_index2,lp_index3
 		
-		logical	,save			:: correction_flag = .true.
-		character(len=20)		:: boundary_type_name
-		character(len=20)		:: flame_data_file
-        character(len=500)      :: av_header
+		logical	,save				:: correction_flag = .true.
+		character(len=20)			:: boundary_type_name
+		character(len=20)			:: flame_data_file
+        character(len=500)			:: av_header
+        character(len=200)	,save	:: data_table_filename, chem_table_filename
+        character(len=100)			:: chemical_mechanism
         character(len=5)	,dimension(3)	:: axis_names
         
         integer	,save			:: flame_loc_unit
@@ -3163,11 +3161,13 @@ contains
 		dimensions		= this%domain%get_domain_dimensions()
         axis_names      = this%domain%get_axis_names()
 		species_number	= this%chem%chem_ptr%species_number
+        boundary_types	= this%boundary%bc_ptr%get_boundary_types()
         
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 
         cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
 
+        H2_index		= this%chem%chem_ptr%get_chemical_specie_index('H2')
 !		CO_index		= this%chem%chem_ptr%get_chemical_specie_index('CO')
 !		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
 !		OH_index		= this%chem%chem_ptr%get_chemical_specie_index('OH')
@@ -3181,8 +3181,33 @@ contains
 			allocate(max_val(cons_inner_loop(2,1):cons_inner_loop(2,2)))
 			allocate(max_coord(cons_inner_loop(2,1):cons_inner_loop(2,2)))
             allocate(data_array(3*dimensions+14), test(3*dimensions+14))
+            allocate(concs(species_number))
+            do bound_number = 1, boundary_types
+                if (this%boundary%bc_ptr%boundary_types(bound_number)%get_type_name() == 'inlet') then
+					call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
+					call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
+                end if
+            end do
+                
+            concs = 0.0_dp
+			do specie_number = 1, size(farfield_species_names)
+				specie_index		= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
+				concs(specie_index) = farfield_concentrations(specie_number)
+			end do
+        
+			X_H2 = concs(H2_index)/sum(concs) * 100.0_dp
+            
+            chemical_mechanism = trim(this%chem%chem_ptr%get_chemical_mechanism())
+            
+			data_table_filename =	'H2-Air_flamelet_' // trim(chemical_mechanism) //'_'// trim(str_r(X_H2)) // &
+									'_pcnt_'// trim(str_e(cell_size(1)))//'_dx' // '.dat'
+            chem_table_filename =  	'H2-Air_chem_table_' // trim(chemical_mechanism) //'_'// trim(str_r(X_H2)) // &
+									'_pcnt_'// trim(str_e(cell_size(1)))//'_dx' // '.dat'
+            
         end if
-		
+						
+
+        
         data_array = 0.0_dp
         
 		associate (	v				=> this%v%v_ptr				, &
@@ -3571,9 +3596,14 @@ contains
 				
 			end if
 
-			if(stabilization_counter > 100) then
+!			if(stabilization_counter > 100) then
 				stabilized = .true.
-			end if
+                if (stabilized) then
+					call this%chem_kin_solver%write_chemical_kinetics_table(chem_table_filename)
+					call this%write_data_table(data_table_filename)
+					stop
+				end if
+!			end if
 			
 			track_counter = track_counter + 1
 			
@@ -3592,8 +3622,8 @@ contains
 		real(dp)					:: max_grad_temp, left_grad_temp, right_grad_temp, max_CO, left_CO, right_CO, flame_velocity, flame_surface_length, surface_factor
 		real(dp)					:: a, b 
 		real(dp)					:: time_diff, time_delay
-		real(dp), save			:: previous_flame_location = 0.0_dp, current_flame_location = 0.0_dp, farfield_velocity = 0.0_dp
-		real(dp), save			:: previous_time = 0.0_dp, current_time = 0.0_dp
+		real(dp)	,save			:: previous_flame_location = 0.0_dp, current_flame_location = 0.0_dp, farfield_velocity = 0.0_dp
+		real(dp)	,save			:: previous_time = 0.0_dp, current_time = 0.0_dp
 		integer		,save			:: correction = 0
 		integer						:: flame_front_index
 		character(len=200)			:: file_name
@@ -5300,8 +5330,8 @@ contains
 		max_grad_T = 0.0	
         max_T = 0.0
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			if(abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1) > max_grad_T) then
-				max_grad_T = abs(T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1)
+			if((T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1) > max_grad_T) then
+				max_grad_T = (T%cells(i+1,1,1) - T%cells(i-1,1,1))/cell_size(1)
 				max_grad_index = i
 			end if
 			if(T%cells(i,1,1) > max_T)	max_T = T%cells(i,1,1)
@@ -5329,7 +5359,8 @@ contains
 		
 		table_size = max(lf/cell_size(1) - left_min_index, right_min_index - lf/cell_size(1))
  
-		name_string = 'x'
+        name_string = 'VARIABLES='
+		name_string = trim(name_string) // 'x'
 		name_string = trim(name_string) // '  ' // trim(T%name_short)
 		name_string = trim(name_string) // '  ' // trim(rho%name_short)
 

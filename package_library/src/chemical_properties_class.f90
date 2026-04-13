@@ -44,6 +44,7 @@ module chemical_properties_class
 		
 		procedure	:: get_chemical_specie_index
 		procedure	:: get_chemical_specie_name
+        procedure	:: get_chemical_mechanism
 
 		! Logger
 		procedure	:: write_log
@@ -667,6 +668,18 @@ contains
         get_chemical_specie_name = this%species_names(index)
 
     end function	
+    
+    character(len=20) function get_chemical_mechanism(this)
+
+        class(chemical_properties)		,intent(inout)  ::  this
+        character(len=20)	:: mechanism_name
+		integer				:: index_type
+        
+        index_type				= index(this%chemical_mechanism_file_name,'.txt')
+        mechanism_name			= this%chemical_mechanism_file_name(:index_type-1)
+        get_chemical_mechanism	= trim(mechanism_name)
+
+    end function
 
 
     integer function read_chemical_species_number(this,file_unit)

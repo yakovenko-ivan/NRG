@@ -25,7 +25,7 @@ IF(${CMAKE_BUILD_TYPE} MATCHES "DEBUG" OR ${CMAKE_BUILD_TYPE} MATCHES "Debug" OR
     IF(${CMAKE_Fortran_COMPILER_ID} MATCHES "GNU")
         set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -ffree-line-length-512 -fcheck=all -fbacktrace -fbounds-check -cpp -DOMP -fopenmp")
     ELSEIF(${CMAKE_Fortran_COMPILER_ID} MATCHES "Intel")
-		set(CMAKE_Fortran_FLAGS_DEBUG "/Od /fpe:0 /traceback /check:pointer /check:bounds /check:shape /check:uninit /check:format /check:output_conversion /check:stack /fpp /DWIN /DOMP /Qopenmp /libs:static /threads /c")
+		set(CMAKE_Fortran_FLAGS_DEBUG "/Od /fpe:0 /traceback /check:pointer /check:bounds /check:shape /check:uninit /check:format /check:output_conversion /check:stack /debug:full  /fpp /DWIN /DOMP /Qopenmp /libs:static /threads /c")
     ELSE()
         message(WARNING "Unable to determine Compiler ID: ${CMAKE_Fortran_COMPILER_ID}")
     ENDIF(${CMAKE_Fortran_COMPILER_ID} MATCHES "GNU")

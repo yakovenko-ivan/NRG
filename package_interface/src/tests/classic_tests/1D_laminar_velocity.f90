@@ -132,6 +132,7 @@ program package_interface
     character(len=20)           :: solver_name         ! Solver type identifier
     character(len=20)           :: coordinate_system   ! Coordinate system type
     character(len=30)           :: setup               ! Physical setup type
+    character(len=30)           :: mech_name           ! Chemical mechanism name
     character(len=30)           :: mech_file           ! Chemical mechanism file
     character(len=30)           :: thermo_file         ! Thermodynamic data file
     character(len=30)           :: transdata_file      ! Transport data file
@@ -166,12 +167,12 @@ program package_interface
     ! task6: Spatial resolution (2=dx=1.0e-04 m)
     !================================================================
     
-    do task1 = 1, 1          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
+    do task1 = 2, 2          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 10, 10        ! Hydrogen percent in mixture with air
-    do task6 = 1, 1          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
+    do task5 = 20, 20, 1     ! Hydrogen percent in mixture with air
+    do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
         
@@ -238,9 +239,10 @@ program package_interface
         select case(task4)
             case(1)
                 work_dir = trim(work_dir) // trim(fold_sep) // 'KEROMNES'
-                mech_file      = 'KEROMNES.txt'
-                thermo_file    = 'KEROMNES_THERMO.txt'
-                transdata_file = 'KEROMNES_TRANSDATA.txt'
+                mech_name      = 'KEROMNES'
+                mech_file      = trim(mech_name) // '.txt'
+                thermo_file    = trim(mech_name) // '_THERMO.txt'
+                transdata_file = trim(mech_name) // '_TRANSDATA.txt'
         end select
         
         ierr = system('mkdir '// work_dir)
@@ -499,9 +501,8 @@ program package_interface
                 ! Load precomputed flamelet solution from file
                 initials_file = trim(task_setup_folder) // trim(fold_sep) // &
                                 'table_initials' // trim(fold_sep) // &
-                                'Tereza_FULL' // trim(fold_sep) // &
-                                'H2-Air_flamelet_' // trim(str_r(X_H2)) // &
-                                '_pcnt_dx_' // trim(str_e(2*delta_x)) // '.dat'
+                                'H2-Air_flamelet_'// trim(mech_name) //'_'// trim(str_r(X_H2)) // &
+                                '_pcnt_' // trim(str_e(2*delta_x)) //'_dx' // '.dat'
                 
                 open(newunit = io_unit, file = initials_file, status = 'old', form = 'formatted')
                 read(io_unit,*) string  ! Skip header
