@@ -381,7 +381,7 @@ program package_interface
             problem_data_manager,                            &
             post_processor_name = "proc1",                   &
             operations_number   = 7,                         &
-            save_time           = 100.0_dp,                    &
+            save_time           = 100.0_dp,                  &
             save_time_units     = 'microseconds')
         
         ! Define post-processing operations:
