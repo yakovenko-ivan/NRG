@@ -3596,14 +3596,14 @@ contains
 				
 			end if
 
-!			if(stabilization_counter > 100) then
+			if(stabilization_counter > 100) then
 				stabilized = .true.
                 if (stabilized) then
 					call this%chem_kin_solver%write_chemical_kinetics_table(chem_table_filename)
 					call this%write_data_table(data_table_filename)
 					stop
 				end if
-!			end if
+			end if
 			
 			track_counter = track_counter + 1
 			
