@@ -204,7 +204,7 @@ contains
         
         !# sub solver options
 		    constructor%perturbed_velocity_flag	= .false.
-            constructor%stabilizing_inlet_flag	= .true.
+            constructor%stabilizing_inlet_flag	= .false.
 		    constructor%igniter_flag	        = .false.
             
         constructor%g                   = manager%solver_options%get_grav_acc()
