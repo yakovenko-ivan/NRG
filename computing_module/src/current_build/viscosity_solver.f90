@@ -349,7 +349,14 @@ contains
                     
                     do dim3 = 1, dimensions
                         if (dim3 == dim1) then
-                            div_v = div_v + (v%pr(dim1)%cells(i,j,k) * lame_coeffs(dim1,3) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) * lame_coeffs(dim1,1)) / cell_size(dim1) / lame_coeffs(dim1,2)
+                            
+                            if ((dim1 == 1) .and. (abs(lame_coeffs(1,2)) < 1.0e-12_dp)) then
+								div_v = div_v + 2.0_dp * (v%pr(dim1)%cells(i,j,k) - v%pr(dim1)%cells(i-I_m(dim1,1),j,k)) / cell_size(dim1)
+							else
+								div_v = div_v + (v%pr(dim1)%cells(i,j,k) * lame_coeffs(dim1,3) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) * lame_coeffs(dim1,1)) / cell_size(dim1) / lame_coeffs(dim1,2)
+                            end if
+                            
+                            !div_v = div_v + (v%pr(dim1)%cells(i,j,k) * lame_coeffs(dim1,3) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) * lame_coeffs(dim1,1)) / cell_size(dim1) / lame_coeffs(dim1,2)
                         else
                             v_node_h = 0.25_dp * (v%pr(dim3)%cells(i,j,k) + v%pr(dim3)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) + v%pr(dim3)%cells(i-I_m(dim1,1)+I_m(dim3,1),j-I_m(dim1,2)+I_m(dim3,2),k-I_m(dim1,3)+I_m(dim3,3)))
                             v_node_l = 0.25_dp * (v%pr(dim3)%cells(i,j,k) + v%pr(dim3)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) + v%pr(dim3)%cells(i-I_m(dim1,1)-I_m(dim3,1),j-I_m(dim1,2)-I_m(dim3,2),k-I_m(dim1,3)-I_m(dim3,3)))
