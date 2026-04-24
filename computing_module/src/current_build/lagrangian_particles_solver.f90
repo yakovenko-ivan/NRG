@@ -502,7 +502,14 @@ contains
 
 				velocity_mag = 0.0_dp
 		
-				average_diameter	= average_diameter		+ (6.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 3.0_dp)
+                if (dimensions == 2) then
+		            average_diameter	= average_diameter	+ (4.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 2.0_dp)
+                end if
+        
+                if (dimensions == 3) then
+		            average_diameter	= average_diameter	+ (6.0_dp * this%particles(part)%mass / Pi /  particle%material_density) ** (1.0_dp / 3.0_dp)
+                end if
+                
 				average_temperature	= average_temperature	+ this%particles(part)%temperature
                 do dim = 1, dimensions
                     velocity_mag	= velocity_mag + this%particles(part)%velocity(dim)**2.0_dp
