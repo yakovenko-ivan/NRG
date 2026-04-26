@@ -136,12 +136,14 @@ contains
 		    sum = 0.0_dp
             
 			if(bc%bc_markers(i,j,k) == 0) then
-                E_f_prod%cells(i,j,k)	=  -4.0_dp * sigma_SB * (T%cells(i,j,k)**4 - this%T_b**4) 
+                 
                 do specie = 1,species_number			
                     mol_frac    = Y%pr(specie)%cells(i,j,k)/molar_masses(specie) * mol_mix_conc%cells(i,j,k)
                     ap          = this%calculate_absorption_coeff(specie,T%cells(i,j,k))        
                     sum         = sum + mol_frac * p%cells(i,j,k) * ap
                 end do
+                
+                E_f_prod%cells(i,j,k)	=  -4.0_dp * sigma_SB * (T%cells(i,j,k)**4 - this%T_b**4) * sum
 			end if				
 		end do
 		end do
