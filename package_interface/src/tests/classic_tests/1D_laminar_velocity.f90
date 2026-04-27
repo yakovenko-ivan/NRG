@@ -167,11 +167,11 @@ program package_interface
     ! task6: Spatial resolution (2=dx=1.0e-04 m)
     !================================================================
     
-    do task1 = 2, 2          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
+    do task1 = 1, 1          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 20, 20, 1     ! Hydrogen percent in mixture with air
+    do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
     do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
@@ -329,7 +329,7 @@ program package_interface
             heat_transfer_flag          = .true., &      ! Solve energy equation
             molecular_diffusion_flag    = .true., &      ! Include species diffusion
             viscosity_flag              = .true., &      ! Include viscous effects
-            thermal_radiation_flag      = .true., &      ! Include thermal radiation effects
+            thermal_radiation_flag      = .false., &     ! Include thermal radiation effects
             chemical_reaction_flag      = .true., &      ! Include chemical reactions
             grav_acc                    = (/0.0_dp, 0.0_dp, 0.0_dp/), &  ! No gravity
             additional_particles_phases = 0, &           ! No particle phases
@@ -471,18 +471,21 @@ program package_interface
             case('counter_flow')
                 ! Create hot ignition zone at 3/4 domain position
                 do i = utter_loop(1,1), utter_loop(1,2)
-                    if (i > int(3.0_dp * domain_length / delta_x / 4.0_dp) - (0.005_dp / delta_x)) then
-                        T%cells(i,:,:) = 2500.0_dp  ! Ignition temperature
-                        
                         ! Set products beyond ignition zone
-                        if (i > int(3.0_dp * domain_length / delta_x / 4.0_dp)) then
-                            T%cells(i,:,:)        = 300.0_dp          ! Cool products
+                        if (i > int(2.0_dp * domain_length / delta_x / 4.0_dp)) then
+                            if (i < int(2.0_dp * domain_length / delta_x / 4.0_dp) + (0.001_dp / delta_x)) then
+                                T%cells(i,:,:) = 1700.0_dp  ! Ignition temperature
+                            else
+                                T%cells(i,:,:)        = 300.0_dp          ! Cool products
+                            end if
+                            
+
                             Y%pr(1)%cells(i,:,:)  = 0.0_dp            ! No H2
                             Y%pr(2)%cells(i,:,:)  = 0.0_dp            ! No O2
                             Y%pr(3)%cells(i,:,:)  = nu * 3.762_dp     ! N2 only
                             Y%pr(7)%cells(i,:,:)  = 1.0_dp            ! H2O (assuming species 7)
                         end if
-                    end if
+
                 end do
                 
                 v_in =    0.01144_dp + 19.41_dp*X_H2 - 5.045_dp*X_H2**2 + 0.4772_dp*X_H2**3 &

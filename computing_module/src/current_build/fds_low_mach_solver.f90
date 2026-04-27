@@ -3217,7 +3217,7 @@ contains
 					E_f_prod_chem 		=> this%E_f_prod_chem%s_ptr	, &
 					bc				=> this%boundary%bc_ptr)
 
-		time_delay			= 1e-05_dp!1e-05_dp!1e-05_dp!1e-05_dp			
+		time_delay			= 1e-03_dp!1e-05_dp!1e-05_dp!1e-05_dp			
 		time_track			= 1e-04_dp!2e-04_dp!1e-05_dp!2e-04_dp
 		time_stabilization	= 1e-04_dp!5e-06_dp!1e-05_dp!5e-06_dp		
        
