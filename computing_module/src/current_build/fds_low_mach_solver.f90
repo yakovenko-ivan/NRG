@@ -1071,7 +1071,8 @@ contains
 					if (this%diffusion_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_diff%cells(i,j,k)	![J/m^3/s]
 					if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_chem%cells(i,j,k)	![J/m^3/s]
                     if (this%radiation_flag)	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) +  E_f_prod_rad%cells(i,j,k)	
-					!end if
+
+                    !end if
 
 					average_molar_mass = 0.0_dp
 					do spec = 1,species_number
@@ -1089,8 +1090,12 @@ contains
 						do particles_phase_counter = 1, this%additional_particles_phases_number
 							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)	![J/m^3/s]
 						end do		
-					end if
+                    end if
 					
+                    do dim = 1,dimensions
+                        div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + rho%cells(i,j,k) * this%g(dim) * v%pr(dim)%cells(i,j,k)
+                    end do
+                    
 					do dim = 1,dimensions
 					
 						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
@@ -1563,7 +1568,7 @@ contains
 				do i = loop(1,1),loop(1,2)
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then 
 						if (predictor) then
-							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
+							if (abs(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) > 1e-010) then
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
 							end if
 
@@ -1579,7 +1584,7 @@ contains
 							    end do		
 						    end if
                         else
-							if(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) > 1e-010) then
+							if (abs(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) > 1e-010) then
 								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
 							end if
 								

@@ -148,10 +148,18 @@ contains
 		integer	:: sign
 		integer :: i,j,k,plus,dim,dim1,dim2
 
-		call this%calculate_sigma()
-		!call this%apply_boundary_conditions()
-
 		dimensions		= this%domain%get_domain_dimensions()
+	
+		this%E_f_prod%s_ptr%cells(:,:,:) = 0.0_dp
+		do dim = 1, dimensions
+			this%v_prod%v_ptr%pr(dim)%cells(:,:,:) = 0.0_dp
+		end do
+		do dim = 1, dimensions
+			this%sigma_dot_v%v_ptr%pr(dim)%cells(:,:,:,:) = 0.0_dp
+		end do
+
+		call this%calculate_sigma()
+		call this%apply_boundary_conditions()
 
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 
@@ -159,10 +167,6 @@ contains
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
-      !  associate(  sigma			=> this%sigma%t_ptr)
-		    !call this%mpi_support%exchange_conservative_tensor_field(sigma)
-      !  end associate
-        
 		associate(  v_prod			=> this%v_prod%v_ptr		, &
 					v				=> this%v%v_ptr				, &
 					E_f_prod		=> this%E_f_prod%s_ptr		, &
@@ -209,9 +213,17 @@ contains
                     
                 select case(coordinate_system)
 					case ('cylindrical')
-						this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k) - 2.0_dp/3.0_dp*div_v)
+						if (abs(mesh%mesh(1,i,j,k)) > 1.0e-12_dp) then
+							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k) - 2.0_dp/3.0_dp*div_v)
+						else
+							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (-2.0_dp/3.0_dp*div_v)
+						end if
 					case ('spherical')
-						this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k) - 2.0_dp/3.0_dp*div_v) 
+						if (abs(mesh%mesh(1,i,j,k)) > 1.0e-12_dp) then
+							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (2.0_dp*v%pr(1)%cells(i,j,k)/mesh%mesh(1,i,j,k) - 2.0_dp/3.0_dp*div_v) 
+						else
+							this%sigma_theta_theta(i,j,k) = nu%cells(i,j,k) * (-2.0_dp/3.0_dp*div_v)
+						end if
                 end select	 
 				
                 div_sigma_dot_v = 0.0_dp
@@ -229,9 +241,13 @@ contains
                     
 					select case(coordinate_system)
 					case ('cylindrical')
-						if(dim1==1) div_sigma = div_sigma - this%sigma_theta_theta(i,j,k)/mesh%mesh(1,i,j,k)
+						if((dim1==1) .and. (abs(mesh%mesh(1,i,j,k)) > 1.0e-12_dp)) then
+							div_sigma = div_sigma - this%sigma_theta_theta(i,j,k)/mesh%mesh(1,i,j,k)
+						end if
 					case ('spherical')
-						if(dim1==1) div_sigma = div_sigma - this%sigma_theta_theta(i,j,k)/mesh%mesh(1,i,j,k)
+						if((dim1==1) .and. (abs(mesh%mesh(1,i,j,k)) > 1.0e-12_dp)) then
+							div_sigma = div_sigma - 2.0_dp * this%sigma_theta_theta(i,j,k)/mesh%mesh(1,i,j,k)
+						end if
                     end select			
 									
 					v_prod%pr(dim1)%cells(i,j,k)	=  div_sigma 
@@ -251,8 +267,8 @@ contains
                     
         associate(  v_prod			=> this%v_prod%v_ptr		, &
 					E_f_prod		=> this%E_f_prod%s_ptr)
-		call this%mpi_support%exchange_conservative_scalar_field(E_f_prod)
-		call this%mpi_support%exchange_conservative_vector_field(v_prod)		
+		    call this%mpi_support%exchange_conservative_scalar_field(E_f_prod)
+		    call this%mpi_support%exchange_conservative_vector_field(v_prod)		
 		
 		end associate
 	end subroutine
@@ -284,7 +300,7 @@ contains
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
         associate(	v		=> this%v%v_ptr)
-		call this%mpi_support%exchange_conservative_vector_field(v)					
+		    call this%mpi_support%exchange_conservative_vector_field(v)					
         end associate
 
 		associate(	v		    => this%v%v_ptr					, &
@@ -355,8 +371,6 @@ contains
 							else
 								div_v = div_v + (v%pr(dim1)%cells(i,j,k) * lame_coeffs(dim1,3) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) * lame_coeffs(dim1,1)) / cell_size(dim1) / lame_coeffs(dim1,2)
                             end if
-                            
-                            !div_v = div_v + (v%pr(dim1)%cells(i,j,k) * lame_coeffs(dim1,3) - v%pr(dim1)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) * lame_coeffs(dim1,1)) / cell_size(dim1) / lame_coeffs(dim1,2)
                         else
                             v_node_h = 0.25_dp * (v%pr(dim3)%cells(i,j,k) + v%pr(dim3)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim3)%cells(i+I_m(dim3,1),j+I_m(dim3,2),k+I_m(dim3,3)) + v%pr(dim3)%cells(i-I_m(dim1,1)+I_m(dim3,1),j-I_m(dim1,2)+I_m(dim3,2),k-I_m(dim1,3)+I_m(dim3,3)))
                             v_node_l = 0.25_dp * (v%pr(dim3)%cells(i,j,k) + v%pr(dim3)%cells(i-I_m(dim1,1),j-I_m(dim1,2),k-I_m(dim1,3)) + v%pr(dim3)%cells(i-I_m(dim3,1),j-I_m(dim3,2),k-I_m(dim3,3)) + v%pr(dim3)%cells(i-I_m(dim1,1)-I_m(dim3,1),j-I_m(dim1,2)-I_m(dim3,2),k-I_m(dim1,3)-I_m(dim3,3)))
@@ -394,8 +408,15 @@ contains
 					
         end associate
 					
-        continue
-		
+		associate(  sigma       => this%sigma%t_ptr             , &
+					sigma_dot_v => this%sigma_dot_v%v_ptr)
+		    do dim1 = 1, dimensions
+			    do dim2 = 1, dimensions
+				    call this%mpi_support%exchange_flow_scalar_field(sigma%pr(dim1,dim2))
+			    end do
+		    end do
+		    call this%mpi_support%exchange_flow_vector_field(sigma_dot_v)
+		end associate
 
 	end subroutine
 	
@@ -496,8 +517,6 @@ contains
 					nu%cells(i,j,k)      = 0.5_dp * (sum1 + 1.0_dp / sum2)
                 end if
 				
-                !nu%cells(i,j,k)      = 100.0_dp * nu%cells(i,j,k)
-                
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1,dimensions
 						do plus = 1,2

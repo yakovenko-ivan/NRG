@@ -169,9 +169,8 @@ contains
 												* (T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - T%cells(i,j,k)) / cell_size(dim)
 
 					div_thermo_flux = div_thermo_flux  + (thermo_flux2 - thermo_flux1) / cell_size(dim) / lame_coeffs(dim,2)
-					continue
                 end do
-				E_f_prod%cells(i,j,k)	=  div_thermo_flux !* time_step 
+				E_f_prod%cells(i,j,k)	=  div_thermo_flux 
 			
 				do dim = 1,dimensions
 					do plus = 1,2
@@ -190,7 +189,7 @@ contains
 		end do
 		end do
 		end do
-	!$omp end do nowait
+	!$omp end do
 	!$omp end parallel
 
 		end associate
@@ -205,9 +204,6 @@ contains
 
 	subroutine calculate_thermal_c_coeff_constant(this)
 		class(heat_transfer_solver) ,intent(inout) :: this
-
-		real(dp)	:: reduced_collision_diameter
-		real(dp)	:: inv_reduced_molar_mass
 
 		integer		:: species_number
 		integer		:: specie_number
@@ -287,8 +283,10 @@ contains
 
 							stc = this%thermal_c_coeff_constant(specie_number)   * sqrt(T%cells(i,j,k)) / omega_2_2 * (4.0_dp * specie_cv / 15.0_dp / r_gase_J + 3.0_dp / 5.0_dp)
 
-							sum1 = sum1 + stc * mol_frac
-							sum2 = sum2 + mol_frac / stc
+							if (stc > 0.0_dp) then
+								sum1 = sum1 + stc * mol_frac
+								sum2 = sum2 + mol_frac / stc
+							end if
 						end if
 					end if
 				end do
@@ -303,13 +301,10 @@ contains
 		end do
 		end do
 
-	!$omp end do nowait
+	!$omp end do
 	!$omp end parallel
 
 		end associate
-    continue
-
-
 
 	end subroutine
 
