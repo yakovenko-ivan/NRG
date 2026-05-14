@@ -53,12 +53,15 @@ ENDIF(${CMAKE_BUILD_TYPE} MATCHES "RELEASE" OR ${CMAKE_BUILD_TYPE} MATCHES "Rele
 set(INTERFACE package_interface)
 # Define the executable name
 set(COMPUTE computing_module)
+# Define the executable name
+set(UTILITY package_utilities)
 # Name of source library
 set(LIBRARY_NAME package_library)
 
 # Source Directories
 set(SRC ${CMAKE_SOURCE_DIR})
 set(SRC_INTERFACE ${SRC}/package_interface)
+set(SRC_UTILITY ${SRC}/package_utilities)
 set(SRC_COMPUTE ${SRC}/computing_module)
 set(SRC_LIB ${SRC}/package_library)
 
@@ -79,7 +82,12 @@ set(PACKAGE_INTERFACE_SOURCE "src/tests/classic_tests/1D_laminar_velocity.f90"
     CACHE STRING "Fortran source file (relative to package_interface/) to build the interface executable")
 message(STATUS "PACKAGE_INTERFACE_SOURCE is set to: ${PACKAGE_INTERFACE_SOURCE}")
 
+set(PACKAGE_UTILITY_SOURCE "src/leading_point_velocity.f90"
+    CACHE STRING "Fortran source file (relative to package_utilities/) to build the utility executable")
+message(STATUS "PACKAGE_UTILITY_SOURCE is set to: ${PACKAGE_UTILITY_SOURCE}")
+
 # Add subdirectories for the build process to look in
 add_subdirectory(${SRC_LIB})
 add_subdirectory(${SRC_INTERFACE})
+add_subdirectory(${SRC_UTILITY})
 add_subdirectory(${SRC_COMPUTE})

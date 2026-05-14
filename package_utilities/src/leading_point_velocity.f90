@@ -38,7 +38,7 @@ program Leading_point
 
 	real(sp)		,dimension(:,:,:)	,allocatable	:: read_buffer, read_buffer2, read_buffer3
 
-    integer ,parameter		                        :: variables_number_in_file = 19!29!20!31	!# Сколько переменных было в файлах с расчетами
+    integer ,parameter		                        :: variables_number_in_file = 19	!29!20!31	!# Сколько переменных было в файлах с расчетами
 	integer ,parameter		                        :: variables_number = 11			!# Сколько переменных будет в файле с x-t разверткой, названия переменных см. стр. 88. Первая переменная - всегда время! 
 
     character(len=20) ,dimension(variables_number)	:: variables_names
@@ -79,7 +79,7 @@ program Leading_point
 	
 	global_inner_cells_bounds	= problem_domain%get_global_inner_cells_bounds()	
 	
-	cell_size = 2e-05_dp
+	cell_size = 4e-04_dp
 	
 	data_save_folder = trim(problem_data_save%get_data_save_folder())
 !	write(system_command,'(A,A,A)') 'ls ', trim(data_save_folder) , ' | wc -l > dir.txt'				!# Linux
@@ -105,7 +105,7 @@ program Leading_point
 	write(file_name,'(A)') 'lp_coord(t).dat' 
 	open(newunit=write_unit, file=file_name, status='replace')
 	
-	write(write_unit,'(A)') 'VARIABLES="time" "lp_x"' 
+	write(write_unit,'(A)') 'VARIABLES="time" "lp_y"' 
 
 	num_of_strings = 0
 	
@@ -115,6 +115,7 @@ program Leading_point
 		write(file_name,'(A,A,A)') trim(data_save_folder),trim(fold_sep),trim(file_path)
 		open(newunit=read_units(file_counter),file=file_name,status='old',form='binary')
 		
+        string = ''
 		if(file_counter == 1) then 
 			do while ((abs(string - cell_size/2) > cell_size/100))
 				read(read_units(file_counter)) string
@@ -133,7 +134,7 @@ program Leading_point
 		data_save_time			= save_time/problem_data_save%get_save_time_coefficient()
 		
 		
-		do variable_counter = 1, 4
+		do variable_counter = 1, 5
 			read(read_units(file_counter),iostat = sta) (((read_buffer(i,j,k),  i = global_inner_cells_bounds(1,1),global_inner_cells_bounds(1,2)), &
 																				j = global_inner_cells_bounds(2,1),global_inner_cells_bounds(2,2)), &
 																				k = global_inner_cells_bounds(3,1),global_inner_cells_bounds(3,2))			
@@ -145,22 +146,24 @@ program Leading_point
         tip_coord_y	= 0.0
         tip_coord_x = 0.0
         
-		do i = global_inner_cells_bounds(1,1)+1, global_inner_cells_bounds(1,2)-1
+		do i = global_inner_cells_bounds(1,1), global_inner_cells_bounds(1,2)
 		do j = global_inner_cells_bounds(2,1)+1, global_inner_cells_bounds(2,2)-1
+        do k = global_inner_cells_bounds(3,1), global_inner_cells_bounds(3,2)    
 
-            if(j==25) then
-				grad_x = (read_buffer(i-1,j,1) - read_buffer(i+1,j,1))
-				if ((grad_x > max_grad_x))	then
-					max_grad_x = grad_x
-					tip_coord_x = i*cell_size - 0.5*cell_size
+            if ((i==64).and.(k==64)) then
+				grad_y = (read_buffer(i,j-1,k) - read_buffer(i,j+1,k))
+				if ((grad_y > max_grad_y))	then
+					max_grad_y = grad_y
+					tip_coord_y = (j - 0.5)*cell_size
 				end if
             end if
             
 		end do
+        end do
 		end do
 
 
-		write(write_unit,'(3E14.7)') data_save_time, tip_coord_x
+		write(write_unit,'(3E14.7)') data_save_time, tip_coord_y
 
 	end do
 
