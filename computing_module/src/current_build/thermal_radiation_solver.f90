@@ -65,7 +65,7 @@ contains
 		call manager%create_scalar_field(E_f_prod_radiation	,'energy_production_radiation'	,'E_f_prod_radiation')
 		constructor%E_f_prod%s_ptr		=> E_f_prod_radiation
 
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_ptr%v_ptr
 
         constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr

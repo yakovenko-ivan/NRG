@@ -185,7 +185,7 @@ program computing_module
 	call problem_manager%create_scalar_field(E_f			,'full_energy'					,'E_f')
 	call problem_manager%create_scalar_field(mol_mix_conc	,'mixture_molar_concentration'	,'mix_mol_conc')
 	call problem_manager%create_vector_field(v				,'velocity'						,'v',	'spatial')
-	call problem_manager%create_vector_field(Y				,'specie_molar_concentration '	,'Y',	'chemical')
+	call problem_manager%create_vector_field(Y				,'specie_mass_fraction'	        ,'Y',	'chemical')
 
 !	problem_data_io				= data_io_c(problem_manager,calculation_time)
 

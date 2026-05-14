@@ -159,7 +159,7 @@ contains
 		constructor%E_f%s_ptr					=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
 		constructor%v%v_ptr						=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr						=> vect_c_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
 		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr	
@@ -171,7 +171,7 @@ contains
 		constructor%E_f_int%s_ptr				=> E_f_int
 		call manager%create_vector_field(v_int		,'velocity_interm'						,'v_int'	,'spatial')
 		constructor%v_int%v_ptr					=> v_int
-		call manager%create_vector_field(Y_int		,'specie_molar_concentration_interm'	,'Y_int'	,'chemical')
+		call manager%create_vector_field(Y_int		,'specie_mass_fraction_interm'	,'Y_int'	,'chemical')
 		constructor%Y_int%v_ptr					=> Y_int
 		constructor%gas_dynamics_solver	= coarse_particles_c(manager, constructor%g)
 		

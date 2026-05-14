@@ -204,7 +204,7 @@ contains
         
         !# sub solver options
 		    constructor%perturbed_velocity_flag	= .false.
-            constructor%stabilizing_inlet_flag	= .false.
+            constructor%stabilizing_inlet_flag	= .true.
 		    constructor%igniter_flag	        = .false.
             
         constructor%g                   = manager%solver_options%get_grav_acc()
@@ -227,7 +227,7 @@ contains
 		constructor%E_f%s_ptr					=> scal_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
 		constructor%v%v_ptr						=> vect_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr						=> vect_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
 		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr	
@@ -266,9 +266,9 @@ contains
 		
 		call manager%create_vector_field(v_int		,'velocity_interm'						,'v_int'	,'spatial')
 		constructor%v_int%v_ptr					=> v_int
-		call manager%create_vector_field(Y_int		,'specie_molar_concentration_interm'	,'Y_int'	,'chemical')
+		call manager%create_vector_field(Y_int		,'specie_mass_fraction_interm'	,'Y_int'	,'chemical')
 		constructor%Y_int%v_ptr					=> Y_int
-		call manager%create_vector_field(Y_old		,'specie_molar_concentration_old'		,'Y_old'	,'chemical')
+		call manager%create_vector_field(Y_old		,'specie_mass_fraction_old'		,'Y_old'	,'chemical')
 		constructor%Y_old%v_ptr					=> Y_old
 		
 		call manager%create_scalar_field(F_a	,'F_a'				,'F_a')

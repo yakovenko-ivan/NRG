@@ -70,7 +70,7 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
 		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
 		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_ptr%v_ptr
 
 		call manager%create_scalar_field(E_f_prod_diff	,'energy_production_diffusion'	,'E_f_prod_diff')
@@ -111,7 +111,7 @@ contains
 		real(dp)	:: div_dif_flux, diffusion_flux1, diffusion_flux2, diffusion_energy_flux1, diffusion_energy_flux2, div_dif_en_flux
 		real(dp)	:: diff_velocity_corr1, diff_velocity_corr2
 		
-		real(dp) ,dimension(:)	,allocatable    :: diff_velocity1, diff_velocity2
+		real(dp) ,dimension(this%chem%chem_ptr%species_number) :: diff_velocity1, diff_velocity2
 		real(dp)					:: specie_enthalpy, specie_enthalpy1, specie_enthalpy2, h_s_Tref
 		real(dp)					:: Y_prod_summ
 		real(dp)					:: check_summ1, check_summ2
@@ -125,6 +125,7 @@ contains
 		
 		character(len=20)			:: boundary_type_name
 		integer	:: sign, bound_number
+		logical	:: touches_inlet_outlet
 		integer :: i,j,k,plus,dim,specie_number,specie_number1
 		
 		call this%calculate_diffusivity_coeff()
@@ -140,7 +141,6 @@ contains
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 		
-		allocate(diff_velocity1(species_number),diff_velocity2(species_number))
 		diff_velocity1 = 0.0_dp
 		diff_velocity2 = 0.0_dp
 				
@@ -168,7 +168,7 @@ contains
 					mesh			=> this%mesh%mesh_ptr	, &
 					bc				=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity1, diff_velocity2, diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, h_s_Tref, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name) !, &
+	!$omp parallel default(shared)  private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity1, diff_velocity2, diff_velocity_corr1,diff_velocity_corr2,diffusion_flux1,diffusion_flux2, h_s_Tref, specie_enthalpy, specie_enthalpy1, specie_enthalpy2,lame_coeffs,sign,bound_number,boundary_type_name,touches_inlet_outlet) !, &
 	!!$omp& shared(this, time_step,cons_inner_loop,dimensions,species_number, cell_size, coordinate_system) 
 	    
     !$omp do collapse(3) schedule(static)
@@ -201,8 +201,11 @@ contains
 							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
 							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
 							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
-					end select						
+                    end select						
 						
+                    diff_velocity1 = 0.0_dp
+                    diff_velocity2 = 0.0_dp
+
 					do specie_number = 1,species_number
 						if (molar_masses(specie_number) /= 0.0_dp) then
 							diff_velocity1(specie_number) = 0.5_dp * (D%pr(specie_number)%cells(i,j,k) + D%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * lame_coeffs(dim,1) 	* &
@@ -217,6 +220,18 @@ contains
 						end if
 					end do
 						
+					touches_inlet_outlet = .false.
+					do plus = 1,2
+						sign			= (-1)**plus
+						bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+						if( bound_number /= 0 ) then
+							boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
+							if (boundary_type_name == 'inlet' .or. boundary_type_name == 'outlet') then
+								touches_inlet_outlet = .true.
+							end if
+						end if
+					end do
+					if (.not. touches_inlet_outlet) then
 					do specie_number = 1,species_number
 						if (molar_masses(specie_number) /= 0.0_dp) then
 							diffusion_flux1 =	diff_velocity1(specie_number) - diff_velocity_corr1 * 0.5_dp * (Y%pr(specie_number)%cells(i,j,k) + Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
@@ -247,27 +262,13 @@ contains
 !							print *, div_dif_flux
                             
 							E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) +  div_dif_flux / molar_masses(specie_number)! * time_step 
-						end if							
-					end do
-				end do
-		
-				do dim = 1,dimensions
-					do plus = 1,2
-						sign			= (-1)**plus
-						bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-						if( bound_number /= 0 ) then
-							boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-							select case(boundary_type_name)
-								case('inlet','outlet')
-									do specie_number = 1,species_number
-										Y_prod%pr(specie_number)%cells(i,j,k) = 0.0_dp
-									end do
-									E_f_prod%cells(i,j,k) = 0.0_dp
-							end select
+							end if							
+						end do
 						end if
 					end do
-				end do
-			
+		
+
+
 			end if			
 		end do
 		end do
@@ -286,7 +287,6 @@ contains
 		
 		end associate
 		
-        deallocate(diff_velocity1,diff_velocity2)
 	end subroutine
 
 
@@ -393,18 +393,18 @@ contains
 						D_binary(specie_number1,specie_number2) = this%diffusivity_binary_constant(specie_number1,specie_number2) * (T%cells(i,j,k) ** 1.5_dp) / p%cells(i,j,k) / omega_1_1
 					end if
 				end do
+                end do
+					
+				average_molar_mass = 0.0_dp
+				do specie_number2 = 1,species_number
+					if (molar_masses(specie_number2) /= 0.0_dp) then
+						average_molar_mass = average_molar_mass + (Y%pr(specie_number2)%cells(i,j,k) /molar_masses(specie_number2))
+					end if
 				end do
-
+					
+				average_molar_mass =  1.0_dp / average_molar_mass 
+                
 				do specie_number1 = 1,species_number
-					
-					average_molar_mass = 0.0_dp
-					do specie_number2 = 1,species_number
-						if (molar_masses(specie_number2) /= 0.0_dp) then
-							average_molar_mass = average_molar_mass + (Y%pr(specie_number2)%cells(i,j,k) /molar_masses(specie_number2))
-						end if
-					end do
-					
-					average_molar_mass =  1.0_dp / average_molar_mass 
 					
 					accumulation_value = 0.0_dp
 					do specie_number2 = 1,species_number			

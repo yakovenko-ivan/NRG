@@ -110,9 +110,9 @@ contains
 		constructor%v%v_ptr				=> vect_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_interm')
 		constructor%v_int%v_ptr			=> vect_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration_interm')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction_interm')
 		constructor%Y_int%v_ptr			=> vect_ptr%v_ptr		
 		
 		call manager%create_vector_field(v_prod_gd	,'velocity_production_gas_dynamics'		,'v_prod_gd'	,'spatial')

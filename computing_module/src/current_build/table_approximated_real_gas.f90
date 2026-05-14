@@ -125,12 +125,12 @@ contains
 
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
 		constructor%v%v_ptr				=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_c_ptr%v_ptr
 
 		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'velocity_flow')
 		constructor%v_f%v_ptr			=> vect_f_ptr%v_ptr		
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'specie_molar_concentration_flow')
+		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'specie_mass_fraction_flow')
 		constructor%Y_f%v_ptr			=> vect_f_ptr%v_ptr		
 		
 		call manager%create_scalar_field(gamma_f	,'adiabatic_index_flow'	,'gamma_flow')

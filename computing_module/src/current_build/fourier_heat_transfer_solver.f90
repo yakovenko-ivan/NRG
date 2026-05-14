@@ -68,7 +68,7 @@ contains
 		call manager%create_scalar_field(kappa			,'thermal_conductivity'				,'kappa')
 		constructor%kappa%s_ptr			=> kappa
 
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_ptr%v_ptr
 
 		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr

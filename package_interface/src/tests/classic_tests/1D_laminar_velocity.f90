@@ -170,7 +170,7 @@ program package_interface
     do task1 = 1, 1          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
-    do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
+    do task4 = 1, 3          ! Chemical kinetics scheme: KEROMNES mechanism (1)
     do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
     do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
@@ -238,8 +238,20 @@ program package_interface
         !------------------------------------------------
         select case(task4)
             case(1)
-                work_dir = trim(work_dir) // trim(fold_sep) // 'KEROMNES'
                 mech_name      = 'KEROMNES'
+                work_dir = trim(work_dir) // trim(fold_sep) // trim(mech_name)
+                mech_file      = trim(mech_name) // '.txt'
+                thermo_file    = trim(mech_name) // '_THERMO.txt'
+                transdata_file = trim(mech_name) // '_TRANSDATA.txt'
+            case(2)
+                mech_name      = 'KONNOV'
+                work_dir = trim(work_dir) // trim(fold_sep) // trim(mech_name)
+                mech_file      = trim(mech_name) // '.txt'
+                thermo_file    = trim(mech_name) // '_THERMO.txt'
+                transdata_file = trim(mech_name) // '_TRANSDATA.txt'
+            case(3)
+                mech_name      = 'ZHANG'
+                work_dir = trim(work_dir) // trim(fold_sep) // trim(mech_name)
                 mech_file      = trim(mech_name) // '.txt'
                 thermo_file    = trim(mech_name) // '_THERMO.txt'
                 transdata_file = trim(mech_name) // '_TRANSDATA.txt'
@@ -359,7 +371,7 @@ program package_interface
         
         ! Create vector solution fields
         call problem_data_manager%create_vector_field(v, 'velocity', 'v', 'spatial')
-        call problem_data_manager%create_vector_field(Y, 'specie_molar_concentration', 'Y', 'chemical')
+        call problem_data_manager%create_vector_field(Y, 'specie_mass_fraction', 'Y', 'chemical')
         
         ! Get geometric information
         cell_size = problem_mesh%get_cell_edges_length()
@@ -424,7 +436,7 @@ program package_interface
                 'temperature',                    &
                 'density',                        &
                 'velocity',                       &
-                'specie_molar_concentration',     &
+                'specie_mass_fraction',     &
                 'velocity_of_sound',              &
                 'velocity_production_viscosity',  &
                 'mixture_cp',                     &

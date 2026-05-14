@@ -125,7 +125,7 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr					=> scal_ptr%s_ptr
 
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr						=> vect_ptr%v_ptr
 
 		call manager%create_scalar_field(E_f_prod_chem	,'energy_production_chemistry'	,'E_f_prod_chem')

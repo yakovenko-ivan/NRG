@@ -87,7 +87,7 @@ contains
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity')
 		constructor%v%v_ptr				=> vect_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_ptr%v_ptr
 		
 		call manager%create_vector_field(v_prod_visc	,'velocity_production_viscosity','v_prod_visc'	,'spatial')

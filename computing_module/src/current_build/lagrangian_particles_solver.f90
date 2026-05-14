@@ -134,7 +134,7 @@ contains
 		constructor%T%s_ptr					=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure')
 		constructor%p%s_ptr					=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr					=> vect_c_ptr%v_ptr		
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
 		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr		
