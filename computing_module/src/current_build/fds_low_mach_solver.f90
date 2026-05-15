@@ -204,7 +204,7 @@ contains
         
         !# sub solver options
 		    constructor%perturbed_velocity_flag	= .false.
-            constructor%stabilizing_inlet_flag	= .true.
+            constructor%stabilizing_inlet_flag	= .false.
 		    constructor%igniter_flag	        = .false.
             
         constructor%g                   = manager%solver_options%get_grav_acc()
@@ -1093,7 +1093,7 @@ contains
                     end if
 					
                     do dim = 1,dimensions
-                        div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + rho%cells(i,j,k) * this%g(dim) * v%pr(dim)%cells(i,j,k)
+                        div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + rho%cells(i,j,k) * this%g(dim) * 0.5_dp * (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v_f%pr(dim)%cells(dim,i,j,k))
                     end do
                     
 					do dim = 1,dimensions
