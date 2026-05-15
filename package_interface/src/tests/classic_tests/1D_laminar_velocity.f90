@@ -171,7 +171,7 @@ program package_interface
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 3          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
+    do task5 = 10, 10, 1       ! Hydrogen percent in mixture with air
     do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
@@ -436,7 +436,7 @@ program package_interface
                 'temperature',                    &
                 'density',                        &
                 'velocity',                       &
-                'specie_mass_fraction',     &
+                'specie_mass_fraction',           &
                 'velocity_of_sound',              &
                 'velocity_production_viscosity',  &
                 'mixture_cp',                     &
@@ -616,12 +616,17 @@ program package_interface
             case('near_wall')
                 ! Create hot region near wall (first quarter of domain)
                 do i = 1, floor(domain_length / delta_x)
-                    if (i < int(domain_length / delta_x / 4)) then
-                        T%cells(i,:,:)        = 2000.0_dp      ! Hot near-wall region
+                    if (i < int(domain_length / delta_x / 8.0_dp)) then
+                    if (i > int(domain_length / delta_x / 8.0_dp) - (0.001_dp / delta_x)) then
+                        T%cells(i,:,:) = 2500.0_dp  ! Ignition temperature
+                    else
+                        T%cells(i,:,:)        = 300.0_dp       ! Cool products
                         Y%pr(1)%cells(i,:,:)  = 0.0_dp         ! No H2 (burned)
                         Y%pr(2)%cells(i,:,:)  = 0.0_dp         ! No O2 (burned)
                         Y%pr(3)%cells(i,:,:)  = nu * 3.762_dp  ! N2 only
                         Y%pr(7)%cells(i,:,:)  = 1.0_dp         ! H2O (products)
+                    end if
+
                     end if
                 end do
                 

@@ -1,0 +1,57 @@
+! ---------------------------    How to cite   -------------------------------
+!        Chemical-kinetic description of high-temperature ignition        
+!            and detonation of acetylene-oxygen-diluent systems        
+! B. Varatharajan, F.A. Williams                                       
+! Combust. Flame (2001), http://dx.doi.org/10.1016/S0010-2180(00)00235-2 
+! Combustion and Flame 124(4) (2001) 624-645                                    
+!-----------------------------------------------------------------------------
+! E_act_utins = J.mol
+
+ELEMENTS
+O  H  C  N  AR
+END
+
+SPECIES
+C2H2     O2      N2      O      H      OH     H2O      CO     CO2     CH2O     CH2CO
+HCCO     HCO     HO2     H2     CH3    AR
+END
+
+REACTIONS
+
+H+O2=>OH+O			      3.52E+16	   -0.70	  71400.0
+OH+O=>H+O2			      1.15E+14	   -0.32	   -700.0
+OH+H2=>H2O+H			      1.17E+09	    1.30	  15200.0
+O+H2O=>OH+OH			      7.60E+00	    3.84	  53500.0
+OH+OH=>O+H2O			      2.45E-01	    3.97	 -19000.0
+
+H+O2+M=>HO2+M                        6.76E+19     -1.40          00000.0
+'CO/1.9/ CO2/3.8/ H2/2.5/ H2O/12.0/ N2/1.0/ AR/1.0/ O/1.0/ H/1.0/ O2/1.0/ OH/1.0/ HO2/1.0/ CH2O/1.0/ HCCO/1.0/ CH2CO/1.0/ CH3/1.0/ HCO/1.0/'
+HO2+H=>OH+OH			      1.70E+14	    0.00	   3700.0
+HO2+H=>H2+O2			      4.28E+13	    0.00	   5900.0
+HO2+OH=>H2O+O2			      2.89E+13	    0.00	  -2100.0
+
+H+OH+M=>H2O+M                        2.20E+22     -2.00          00000.0
+'CO/1.9/ CO2/3.8/ H2/2.5/ H2O/12.0/ N2/1.0/ AR/1.0/ O/1.0/ H/1.0/ O2/1.0/ OH/1.0/ HO2/1.0/ CH2O/1.0/ HCCO/1.0/ CH2CO/1.0/ CH3/1.0/ HCO/1.0/'
+H2O+M=>H+OH+M                        2.18E+23     -1.93         499000.0
+'CO/1.9/ CO2/3.8/ H2/2.5/ H2O/12.0/ N2/1.0/ AR/1.0/ O/1.0/ H/1.0/ O2/1.0/ OH/1.0/ HO2/1.0/ CH2O/1.0/ HCCO/1.0/ CH2CO/1.0/ CH3/1.0/ HCO/1.0/'
+
+CO+OH=>CO2+H			      4.40E+06	    1.50	  -3100.0
+CO2+H=>CO+OH			      4.97E+08	    1.50	  89700.0
+
+C2H2+O2=>CH2O+CO		      4.60E+15	   -0.54	 188000.0
+C2H2+O=>HCCO+H			      4.00E+14	    0.00	  44600.0
+C2H2+OH=>CH2CO+H		      1.90E+07	    1.70	   4200.0
+CH2CO+O=>HCCO+OH		      1.00E+13	    0.00	   8400.0
+CH2CO+H=>CH3+CO			      1.11E+07	    2.00	   8400.0
+HCCO+O2=>CO+CO+OH		      2.88E+07	    1.70	   4200.0
+
+CH2O+M=>HCO+H+M                      6.26E+16      0.00         326000.0
+'CO/1.9/ CO2/3.8/ H2/2.5/ H2O/16.3/ N2/1.0/ AR/1.0/ O/1.0/ H/1.0/ O2/1.0/ OH/1.0/ HO2/1.0/ CH2O/1.0/ HCCO/1.0/ CH2CO/1.0/ CH3/1.0/ HCO/1.0/'
+CH2O+H=>HCO+H2			      1.26E+08	    1.62	   9100.0
+CH2O+OH=>HCO+H2O		      3.90E+10	    0.89	   1700.0
+HCO+M=>CO+H+M                        1.86E+17     -1.00          71100.0
+'CO/2.5/ CO2/2.5/ H2/1.9/ H2O/12.0/ N2/1.0/ AR/1.0/ O/1.0/ H/1.0/ O2/1.0/ OH/1.0/ HO2/1.0/ CH2O/1.0/ HCCO/1.0/ CH2CO/1.0/ CH3/1.0/ HCO/1.0/'
+HCO+H=>CO+H2			      1.00E+14	    0.00	  00000.0
+CH3+O=>CH2O+H			      8.43E+13	    0.00	  00000.0
+
+END
