@@ -171,7 +171,7 @@ program package_interface
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 3          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 10, 10, 1       ! Hydrogen percent in mixture with air
+    do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
     do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
