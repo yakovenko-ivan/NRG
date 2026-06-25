@@ -302,13 +302,18 @@ module supplementary_routines
     
     end function str_r
     
-    character(len=20) function str_i(k)
+    character(len=20) function str_i(k,d)
 	    use kind_parameters
 
     !   "Convert an integer to string."
         integer, intent(in) :: k
+        integer, intent(in) :: d
     
-        write (str_i, '(I2)') k
+        character(len=10)   :: format_str
+        
+        write(format_str,'(A,I1,A,I1,A)') '(I', d, '.', d, ')' 
+        
+        write (str_i, trim(format_str)) k
         str_i = adjustl(str_i)
     
     end function str_i 

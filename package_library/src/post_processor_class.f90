@@ -251,11 +251,12 @@ contains
 		logical	:: file_exists
 		integer	:: i, dim, proj_counter, operations_counter
 
-		integer					:: processor_rank
+		integer :: processor_rank
 
 		processor_rank = this%domain%get_processor_rank()
 
-		if((time*this%save_time_coefficient >= this%save_time*this%output_counter).or.(time == 0.0)) then
+!		if((time*this%save_time_coefficient >= this%save_time*this%output_counter).or.(time == 0.0)) then
+        if((abs(time*this%save_time_coefficient - this%save_time*(this%output_counter)) < 0.01* this%save_time).or.(time == 0.0)) then
 			if (processor_rank == 0) then
 				inquire(file = this%post_processor_output_file, exist = file_exists)
 				if (file_exists) then
@@ -263,9 +264,13 @@ contains
 				else
 					open(newunit = output_file_unit, file = this%post_processor_output_file, status = 'new', form = 'formatted', position = 'append')
 				end if
-			end if
+            end if
 
-			this%values(1) = time 
+            if (this%output_counter == 0) then
+                this%values(1) = 0.0_dp
+            else
+			    this%values(1) = this%save_time*(this%output_counter)!time 
+            end if
 			
 			call this%post_processor_operations(1)%process_operation(this%boundaries,leading_point_indexes,this%values(2))
 				
@@ -284,7 +289,7 @@ contains
 			end do
 
 			if (processor_rank == 0) then	
-				write(output_file_unit,'(*(E14.6))')  (this%values(i), i=1,size(this%values))
+				write(output_file_unit,'(*(E20.12))')  (this%values(i), i=1,size(this%values))
 				close(output_file_unit)
 			end if
 			

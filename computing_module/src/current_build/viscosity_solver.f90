@@ -46,7 +46,8 @@ module viscosity_solver_class
 		real(dp) ,dimension(:,:,:)	,allocatable    :: sigma_theta_theta		
 	contains
 		procedure	,private	::	calculate_viscosity_coeff_constant
-		procedure	,private	::	calculate_viscosity_coeff
+		procedure	,private	::	calculate_mixture_averaged_viscosity_coeff
+        procedure	,private	::	calculate_specie_viscosity_coeff
 		procedure	,private	::	calculate_sigma
 		procedure	,private	::	apply_boundary_conditions
 		procedure				::	solve_viscosity
@@ -287,7 +288,7 @@ contains
 		integer		,dimension(3,2)	:: cons_inner_loop, flow_inner_loop, loop
 		real(dp)	,dimension(3)	:: cell_size
 		
-		call this%calculate_viscosity_coeff()
+		call this%calculate_mixture_averaged_viscosity_coeff()
 		
 		dimensions		= this%domain%get_domain_dimensions()
 
@@ -436,17 +437,52 @@ contains
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter)
 
 			do specie_number1 = 1,species_number
-				this%viscosity_coeff_constant(specie_number1)    = 0.00001_dp * 0.0844_dp * sqrt(molar_masses(specie_number1))/collision_diameter(specie_number1)/collision_diameter(specie_number1)
+				this%viscosity_coeff_constant(specie_number1)    = 8.4417e-07_dp * sqrt(molar_masses(specie_number1))/collision_diameter(specie_number1)/collision_diameter(specie_number1)
 			end do
 
 		end associate
 
-	end subroutine	
+    end subroutine	
 	
-	subroutine calculate_viscosity_coeff(this)
+    
+	function calculate_specie_viscosity_coeff(this,specie_number,T) result(nu_specie)
+		class(viscosity_solver) ,intent(inout)  :: this
+        integer                 ,intent(in)     :: specie_number
+        real(dp)                ,intent(in)     :: T
+        
+        real(dp)                     :: nu_specie
+        
+		real(dp)                     :: mol_frac, smc, T_red, sum1, sum2
+		real(dp)                     :: specie_cp, specie_cv
+		real(dp)                     :: omega_2_2
+		
+		integer	:: dimensions
+		integer	:: sign, bound_number
+		integer	:: species_number
+
+		integer	,dimension(3,2)	:: cons_inner_loop			
+		
+		integer :: i,j,k,plus,dim,dim1,dim2
+
+        
+		associate(  potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
+					molar_masses            => this%thermo%thermo_ptr%molar_masses)
+        
+        nu_specie = 0.0_dp
+		if (molar_masses(specie_number) /= 0.0_dp) then				
+			T_red       =	T / potential_well_depth(specie_number)
+            omega_2_2   =   this%thermo%thermo_ptr%calculate_omega(T_red,2,2)
+			nu_specie   =   this%viscosity_coeff_constant(specie_number)   * sqrt(T) / omega_2_2
+        end if
+        
+        end associate
+	end function
+     
+    
+	subroutine calculate_mixture_averaged_viscosity_coeff(this)
 		class(viscosity_solver) ,intent(inout) :: this
 
-		real(dp)                     :: mol_frac, smc, reduced_temperature, sum1, sum2
+		real(dp)                     :: mol_frac, smc, T_red, sum1, sum2
 		real(dp)                     :: specie_cp, specie_cv
 		real(dp)                     :: omega_2_2
 		
@@ -473,7 +509,7 @@ contains
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter	, &
 					bc						=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared)  private(i,j,k,specie_number,sum1,sum2,mol_frac,reduced_temperature,omega_2_2,specie_cp,specie_cv,smc,sign,bound_number) !, &
+	!$omp parallel default(shared)  private(i,j,k,specie_number,sum1,sum2,mol_frac,smc,sign,bound_number) !, &
     !!$omp& firstprivate(this)
 	!!$omp& shared(this,species_number,cons_inner_loop,dimensions) 
 
@@ -490,21 +526,10 @@ contains
 
 				do specie_number = 1,species_number
 					if (molar_masses(specie_number) /= 0.0_dp) then				
-						mol_frac            =	Y%pr(specie_number)%cells(i,j,k)/molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
+						mol_frac =	Y%pr(specie_number)%cells(i,j,k)/molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
 						if (mol_frac /= 0.0_dp) then
-							reduced_temperature =	T%cells(i,j,k) / potential_well_depth(specie_number)
-							if (reduced_temperature < 70.0_dp) then
-								omega_2_2           =	1.16145_dp / (reduced_temperature ** 0.14874_dp)    +   &
-														0.52487_dp / exp(0.77320_dp * reduced_temperature)  +   &
-														2.16178_dp / exp(2.43787_dp * reduced_temperature)
-							else
-								omega_2_2           =	1.16145_dp / (reduced_temperature ** 0.14874_dp)
-							end if
-							specie_cp = this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k), specie_number)
-							specie_cv = specie_cp - r_gase_J
-
-							smc = this%viscosity_coeff_constant(specie_number)   * sqrt(T%cells(i,j,k)) / omega_2_2
-
+							smc = this%calculate_specie_viscosity_coeff(specie_number,T%cells(i,j,k))
+                            
 							sum1 = sum1 + smc * mol_frac
 							sum2 = sum2 + mol_frac / smc
 						end if

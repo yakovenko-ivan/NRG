@@ -167,11 +167,11 @@ program package_interface
     ! task6: Spatial resolution (2=dx=1.0e-04 m)
     !================================================================
     
-    do task1 = 1, 1          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
+    do task1 = 3, 3          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
-    do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
-    do task4 = 1, 3          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
+    do task3 = 1, 3          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
+    do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
+    do task5 = 10, 60, 10    ! Hydrogen percent in mixture with air
     do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
@@ -189,12 +189,15 @@ program package_interface
             case(1)
                 work_dir = trim(work_dir) // trim(fold_sep) //'cf'
                 setup = 'counter_flow'
+                domain_length = 0.0256_dp  ! Fixed domain length [m]
             case(2)
                 work_dir = trim(work_dir) // trim(fold_sep) //'cf_prcInc'
                 setup = 'counter_flow_precInc'
+                domain_length = 0.0256_dp  ! Fixed domain length [m]
             case(3)
                 work_dir = trim(work_dir) // trim(fold_sep) //'nw'
                 setup = 'near_wall'
+                domain_length = 0.1024_dp  ! Fixed domain length [m]
         end select
         
         ierr = system('mkdir '// work_dir)
@@ -308,7 +311,6 @@ program package_interface
         !================================================================
         ! DOMAIN DEFINITION
         !================================================================
-        domain_length = 0.0256_dp  ! Fixed domain length [m]
         
         problem_domain = computational_domain_c(  &
             dimensions         = 1,                                     &
@@ -490,7 +492,6 @@ program package_interface
                             else
                                 T%cells(i,:,:)        = 300.0_dp          ! Cool products
                             end if
-                            
 
                             Y%pr(1)%cells(i,:,:)  = 0.0_dp            ! No H2
                             Y%pr(2)%cells(i,:,:)  = 0.0_dp            ! No O2
@@ -616,17 +617,16 @@ program package_interface
             case('near_wall')
                 ! Create hot region near wall (first quarter of domain)
                 do i = 1, floor(domain_length / delta_x)
-                    if (i < int(domain_length / delta_x / 8.0_dp)) then
-                    if (i > int(domain_length / delta_x / 8.0_dp) - (0.001_dp / delta_x)) then
-                        T%cells(i,:,:) = 2500.0_dp  ! Ignition temperature
-                    else
-                        T%cells(i,:,:)        = 300.0_dp       ! Cool products
+                    if (i < int(domain_length / delta_x / 10.0_dp)) then
+                        if (i > int(domain_length / delta_x / 20.0_dp)) then
+                            T%cells(i,:,:) = 1500.0_dp  ! Ignition temperature
+                        else
+                            T%cells(i,:,:)        = 300.0_dp       ! Cool products
+                        end if
                         Y%pr(1)%cells(i,:,:)  = 0.0_dp         ! No H2 (burned)
                         Y%pr(2)%cells(i,:,:)  = 0.0_dp         ! No O2 (burned)
                         Y%pr(3)%cells(i,:,:)  = nu * 3.762_dp  ! N2 only
                         Y%pr(7)%cells(i,:,:)  = 1.0_dp         ! H2O (products)
-                    end if
-
                     end if
                 end do
                 

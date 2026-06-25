@@ -216,7 +216,7 @@ contains
 
 			do specie_number = 1,species_number
 				if (molar_masses(specie_number) /= 0.0_dp) then
-					this%thermal_c_coeff_constant(specie_number)    = 0.0001_dp  * 8.323_dp  * sqrt(0.001_dp / molar_masses(specie_number))/collision_diameter(specie_number)/collision_diameter(specie_number)
+					this%thermal_c_coeff_constant(specie_number)    = 2.6319e-05_dp * sqrt(1.0_dp / molar_masses(specie_number))/collision_diameter(specie_number)/collision_diameter(specie_number)
 				end if
 			end do
 
@@ -227,7 +227,7 @@ contains
 	subroutine calculate_thermal_c_coeff(this)
 		class(heat_transfer_solver) ,intent(inout) :: this
 
-		real(dp)                     :: mol_frac, stc, reduced_temperature, sum1, sum2
+		real(dp)                     :: mol_frac, stc, T_red, sum1, sum2
 		real(dp)                     :: specie_cp, specie_cv
 		real(dp)                     :: omega_2_2
 
@@ -251,7 +251,7 @@ contains
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter	, & 
 					bc						=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared)  private(i,j,k,sum1,sum2,mol_frac,reduced_temperature,omega_2_2,specie_cp,specie_cv,stc,specie_number) !, &
+	!$omp parallel default(shared)  private(i,j,k,sum1,sum2,mol_frac,T_red,omega_2_2,specie_cp,specie_cv,stc,specie_number) !, &
 	!!$omp& shared(this,species_number,cons_inner_loop)
         
 	!$omp do collapse(3) schedule(static)
@@ -269,14 +269,9 @@ contains
 					if (molar_masses(specie_number) /= 0.0_dp) then
 						mol_frac            =	Y%pr(specie_number)%cells(i,j,k)/molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
 						if (mol_frac /= 0.0_dp) then
-							reduced_temperature =	T%cells(i,j,k) / potential_well_depth(specie_number)
-							if (reduced_temperature < 70.0_dp) then
-								omega_2_2           =	1.16145_dp / (reduced_temperature ** 0.14874_dp)    +   &
-														0.52487_dp / exp(0.77320_dp * reduced_temperature)  +   &
-														2.16178_dp / exp(2.43787_dp * reduced_temperature)
-							else
-								omega_2_2           =	1.16145_dp / (reduced_temperature ** 0.14874_dp)
-							end if					
+							T_red       =	T%cells(i,j,k) / potential_well_depth(specie_number)
+                            
+                            omega_2_2   =   this%thermo%thermo_ptr%calculate_omega(T_red,2,2)
 												
 							specie_cp = this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k), specie_number)
 							specie_cv = specie_cp - r_gase_J

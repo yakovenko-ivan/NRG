@@ -12,7 +12,6 @@ module table_approximated_real_gas_class
 	use boundary_conditions_class
 	use thermophysical_properties_class
 	use computational_mesh_class
-    	use riemann_solver_class
     use benchmarking
 
 	implicit none
@@ -29,10 +28,8 @@ module table_approximated_real_gas_class
 
 	real(dp)	,dimension(:)	,allocatable	:: concs
 	!$omp threadprivate(concs)
-    
-    type(riemann_solver)						:: riemann
-	!$omp threadprivate(riemann)
-    
+
+
 	type 	:: table_approximated_real_gas
 		type(field_scalar_cons_pointer)				:: p, p_stat, p_stat_old, T, e_i, E_f, rho, mol_mix_conc, v_s, gamma, h_s,dp_stat_dt, mixture_cp, h_full
 		type(field_scalar_flow_pointer)				:: rho_f, p_f, e_i_f, v_s_f, E_f_f, T_f, gamma_f
@@ -141,10 +138,6 @@ contains
 		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
 		constructor%chem%chem_ptr		=> manager%chemistry%chem_ptr
 		constructor%mesh%mesh_ptr		=> manager%computational_mesh_pointer%mesh_ptr
-        
-        !$omp parallel
-        riemann						=	riemann_solver_c(manager)
-		!$omp end parallel
         
 		species_number = manager%chemistry%chem_ptr%species_number
 		allocate(constructor%total_species(species_number))
@@ -686,18 +679,14 @@ contains
 	subroutine apply_state_equation_flow_variables(this)
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dp)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mol_mix_conc, cp, cv, gamma
-        real(dp)	:: rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r
+		real(dp)	:: T_old, t_initial, cp, cv
 		real(dp)	:: average_molar_mass
-		real(dp)	:: rho_Y
-		
-		real(dp)	:: old_Mach
-		
+
 		integer	:: species_number
 		integer	:: dimensions
 		integer	,dimension(3,2)	:: flow_inner_loop, loop
 
-		integer	:: specie_number, dim, dim1, dim2
+		integer	:: specie_number, dim, dim1
 		integer	:: i,j,k
 
 		species_number = this%chem%chem_ptr%species_number
@@ -714,19 +703,9 @@ contains
 					e_i_f	=> this%e_i_f%s_ptr		, &
 					T_f		=> this%T_f%s_ptr		, &
 					gamma_f	=> this%gamma_f%s_ptr	, &
-					p       => this%p%s_ptr         , &
-					rho     => this%rho%s_ptr       , &
-					gamma   => this%gamma%s_ptr     , &
-					v       => this%v%v_ptr         , &
-					mesh	=> this%mesh%mesh_ptr	, &
 					bc		=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,t_final,e_internal,cp,cv,h_s,T_old,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r) !, &
-    !!$omp& firstprivate(this)
-	!!$omp& shared(this,e_i_f_old,c_v_f_old,flow_inner_loop,dimensions,species_number)
-	
-        	
-
+	!$omp parallel default(shared) private(i,j,k,dim,dim1,specie_number,loop,average_molar_mass,t_initial,cp,cv,T_old)
 		do dim = 1, dimensions
 
 			loop = flow_inner_loop
@@ -753,55 +732,7 @@ contains
 						concs(specie_number)				= Y_f%pr(specie_number)%cells(dim,i,j,k) * average_molar_mass / this%thermo%thermo_ptr%molar_masses(specie_number)
                     end do						
 					
-                    
-					if((p_f%cells(dim,i,j,k) < 0.0).or.(rho_f%cells(dim,i,j,k) < 0.0)) then
-                    !if ((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
-						!print *, 'Flow EOS exception: ', dim, i,j,k
-						!do dim2 = 1, dimensions
-						!	print *, 'Coordinates', dim2, mesh%mesh(dim2,i,j,k)
-						!end do						
-						!print *, gamma_f%cells(dim,i,j,k)
-						!print *, p_f%cells(dim,i,j,k)
-						!print *, rho_f%cells(dim,i,j,k)
-						!print *, v_s_f%cells(dim,i,j,k)
-                        !gamma_f%cells(dim,i,j,k) = abs(gamma_f%cells(dim,i,j,k))
-						!p_f%cells(dim,i,j,k) = abs(p_f%cells(dim,i,j,k))
-						!rho_f%cells(dim,i,j,k) = abs(rho_f%cells(dim,i,j,k))
-                        
-						!stop
-                        
-                        rho_l	= rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                        rho_r	= rho%cells(i,j,k)
-                        p_l		= p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                        p_r		= p%cells(i,j,k)
-                        gamma_l = gamma%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                        gamma_r	= gamma%cells(i,j,k)
-                        v_l		= v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                        v_r		= v%pr(dim)%cells(i,j,k)
-                        
-                        print *, p_f%cells(dim,i,j,k), rho_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k)
-                        
-                        call riemann%set_parameters(	rho_l	, rho_r		,	&
-														p_l		, p_r		,   &
-														gamma_l	, gamma_r	,	&
-														v_l		, v_r)
-                       
-                        call riemann%solve()
-                        
-                        rho_f%cells(dim,i,j,k)			= riemann%get_density()
-                        p_f%cells(dim,i,j,k)			= riemann%get_pressure()
-                        v_f%pr(dim)%cells(dim,i,j,k)	= riemann%get_velocity()
-                        
-                        call riemann%clear()
-                        
-                        print *, p_f%cells(dim,i,j,k), rho_f%cells(dim,i,j,k), v_f%pr(dim)%cells(dim,i,j,k)
-                        
-                        print *, 'Riemann activation count: ', riemann%get_activation_count()
-!                        pause
-					end if                   
-                    
-
-					T_old	= T_f%cells(dim,i,j,k)
+ 					T_old	= T_f%cells(dim,i,j,k)
 					T_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / r_gase_J * average_molar_mass
 					t_initial				= T_f%cells(dim,i,j,k)
 				
@@ -809,7 +740,7 @@ contains
 					cv = cp - r_gase_J 
 
 					gamma_f%cells(dim,i,j,k)	= cp / cv
-					
+
 					e_i_f%cells(dim,i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_energy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)
 					
 				!# Experimental iterative procedure. Due to discontnuity in T=1000K for sensible enthalpy this approach provides poor results		
@@ -823,7 +754,7 @@ contains
 				!	e_i_f%cells(dim,i,j,k)	= (e_i_f_old%cells(dim,i,j,k) + (T_f%cells(dim,i,j,k) - T_old)*c_v_f_old%cells(dim,i,j,k)) /average_molar_mass 
 
 					v_s_f%cells(dim,i,j,k)	= sqrt(gamma_f%cells(dim,i,j,k)*p_f%cells(dim,i,j,k)/rho_f%cells(dim,i,j,k))
-                    
+
 					E_f_f%cells(dim,i,j,k)	= e_i_f%cells(dim,i,j,k) / average_molar_mass
 
 					do dim1 = 1, dimensions
@@ -836,15 +767,10 @@ contains
 
 			!$omp end do nowait
 		end do
-			
+
 		!$omp end parallel
 
         end associate
-		continue
-
-		
-
-		continue
 	end subroutine	
 
 	subroutine check_conservation_laws(this)

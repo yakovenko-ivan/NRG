@@ -201,14 +201,14 @@ contains
 		call manager%create_scalar_field(T_f_new	,'temperature_flow'			,'T_f_new')
 		constructor%T_f_new%s_ptr 		=> T_f_new
 		
-		call manager%create_vector_field(Y_f_new,'specie_molar_concentration_flow'	,'Y_f_new',	'chemical')
+		call manager%create_vector_field(Y_f_new,'specie_mass_fraction_flow'	,'Y_f_new',	'chemical')
 		constructor%Y_f_new%v_ptr => Y_f_new		
 		call manager%create_vector_field(v_f_new,'velocity_flow'					,'v_f_new',	'spatial')
 		constructor%v_f_new%v_ptr => v_f_new	
 		
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
 		constructor%v%v_ptr				=> vect_c_ptr%v_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_c_ptr%v_ptr	
 		
 		if (constructor%reactive_flag) then
@@ -677,12 +677,12 @@ call manager%create_timer(cabaret_timer                 ,'CABARET solver time'  
 		real(dp)	,parameter	:: rho_inf		= 0.487471044003493_dp
 		real(dp)	,parameter	:: c_inf		= 539.709011600784_dp
 		real(dp)	,parameter	:: gamma_inf	= 1.40137_dp
-		real(dp)			:: g_inf		= 1.0_dp / rho_inf / c_inf
-		real(dp)	,save	:: q_inf		= u_inf - p_inf / rho_inf / c_inf
+		real(dp)			    :: g_inf		= 1.0_dp / rho_inf / c_inf
+		real(dp)	,save	    :: q_inf		= u_inf - p_inf / rho_inf / c_inf
 	
-		real(dp)	:: spec_summ, rho_Y
+		real(dp)	        :: spec_summ, rho_Y
 		
-		real(dp), save	:: Mach_old
+		real(dp), save	    :: Mach_old
 		real(dp)			:: Mach
 		real(dp)			:: flow_Mach, cons_Mach
 		real(dp)			:: Mach_rise, Max_Mach_rise
@@ -2565,10 +2565,10 @@ call manager%create_timer(cabaret_timer                 ,'CABARET solver time'  
 
 		this%time_step = this%courant_fraction * time_step(1)
 
-		if(time_step(1) < 5.7e-09_dp) then
-			this%time_step = 0.25 * time_step(1)
-			print *, 'Time step was reduced. Co = 1: ',time_step(1), '. Reduced: ', this%time_step
-		end if
+		!if(time_step(1) < 5.7e-09_dp) then
+		!	this%time_step = 0.25 * time_step(1)
+		!	print *, 'Time step was reduced. Co = 1: ',time_step(1), '. Reduced: ', this%time_step
+		!end if
 
 		end associate
 			

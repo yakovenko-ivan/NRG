@@ -218,9 +218,16 @@ program computing_module
 	
     call problem_manager%create_timer(main_clock,'Main cycle time', 'MAIN')
 
-	iter = 0
+   
+	iter            = 0
 	stop_flag		= .false.
 	precision_flag	= .false.
+    
+    if (problem_data_io%get_load_counter() == 1) then
+        calculation_time = 0.0_dp
+		call problem_post_proc_manager%process_data(calculation_time	,stop_flag)
+    end if        
+    
 	do while(.not.stop_flag)
         
         call main_clock%tic()
@@ -263,7 +270,7 @@ program computing_module
 !			call problem_cpm_solver%set_CFL_coefficient(0.75_dp)
 !		end if
 	
-!		if (calculation_time > 1.0e-05_dp) then
+!		if (calculation_time > 1.01e-03_dp) then
 !			call problem_data_save%set_save_time(200.0_dp)
 !            stop
 !        end if    

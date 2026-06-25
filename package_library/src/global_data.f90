@@ -38,5 +38,7 @@ module global_data
     real(dp)	,parameter	:: T_ref        = 298.15_dp                     ! [K]
     real(dp)	,parameter	:: P_atm		= 101325.0_dp                   ! [Pa]
     real(dp)    ,parameter  :: sigma_SB     = 5.669e-08_dp                  ! [J/(s * m^2 * K^4)]
+    
+    real(dp)    ,parameter  :: tables_temperature_ceiling  = 6000.0               ! [K]
 	
 end module

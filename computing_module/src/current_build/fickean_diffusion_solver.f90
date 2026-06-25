@@ -325,11 +325,11 @@ contains
 	subroutine calculate_diffusivity_coeff(this)
 		class(diffusion_solver) ,intent(inout) :: this
 
-		real(dp)                     :: mol_frac, stc, reduced_temperature, sum1, sum2
+		real(dp)                     :: mol_frac, stc, T_red, sum1, sum2
 		real(dp)                     :: specie_cp, specie_cv
 		real(dp)                     :: omega_2_2
 
-		real(dp)						:: average_molar_mass
+		real(dp)					 :: average_molar_mass
 		real(dp)                     :: accumulation_value
 		real(dp)                     :: omega_1_1
 		real(dp)                     :: reduced_collision_diameter
@@ -359,7 +359,7 @@ contains
                     bc                      => this%boundary%bc_ptr		                    , &
 					collision_diameter      => this%thermo%thermo_ptr%collision_diameter)
 
-	!$omp parallel default(shared)  private(i,j,k,sum1,sum2,mol_frac,reduced_temperature,reduced_collision_diameter,inv_reduced_molar_mass,average_molar_mass,accumulation_value,specie_mass_density,mixture_mass_density,omega_1_1,D_binary,specie_number1,specie_number2) !, &
+	!$omp parallel default(shared)  private(i,j,k,sum1,sum2,mol_frac,T_red,reduced_collision_diameter,inv_reduced_molar_mass,average_molar_mass,accumulation_value,specie_mass_density,mixture_mass_density,omega_1_1,D_binary,specie_number1,specie_number2) !, &
 	!!$omp& shared(this,species_number,cons_inner_loop) 
                 
 	!$omp do collapse(3) schedule(static)
@@ -376,15 +376,18 @@ contains
 				do specie_number1 = 1,species_number-1
 				do specie_number2 = specie_number1+1,species_number
 					if ((molar_masses(specie_number1) /= 0.0_dp).and.(molar_masses(specie_number2) /= 0.0_dp)) then
-						reduced_temperature = T%cells(i,j,k) / sqrt(potential_well_depth(specie_number1)*potential_well_depth(specie_number2))
-						if (reduced_temperature < 70.0_dp) then
-							omega_1_1           = 	1.06036_dp / (reduced_temperature ** 0.15610_dp)      + &
-													0.19300_dp / exp(0.47635_dp * reduced_temperature )   + &
-													1.03587_dp / exp(1.52996_dp * reduced_temperature )   + &
-													1.76474_dp / exp(3.89411_dp * reduced_temperature )
-						else
-							omega_1_1           = 	1.06036_dp / (reduced_temperature ** 0.15610_dp) 
-						end if
+						T_red       = T%cells(i,j,k) / sqrt(potential_well_depth(specie_number1)*potential_well_depth(specie_number2))
+
+                        omega_1_1   =   this%thermo%thermo_ptr%calculate_omega(T_red,1,1)
+                        
+      !                  if (reduced_temperature < 70.0_dp) then
+						!	omega_1_1           = 	1.06036_dp / (reduced_temperature ** 0.15610_dp)      + &
+						!							0.19300_dp / exp(0.47635_dp * reduced_temperature )   + &
+						!							1.03587_dp / exp(1.52996_dp * reduced_temperature )   + &
+						!							1.76474_dp / exp(3.89411_dp * reduced_temperature )
+						!else
+						!	omega_1_1           = 	1.06036_dp / (reduced_temperature ** 0.15610_dp) 
+						!end if
 					
 						reduced_collision_diameter  = 0.5_dp * (collision_diameter(specie_number1) + collision_diameter(specie_number2))
 						reduced_collision_diameter  = reduced_collision_diameter * reduced_collision_diameter
