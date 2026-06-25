@@ -1128,13 +1128,13 @@ contains
 						continue
 					end do	
 				
-					mixture_cp				= thermo%calculate_mixture_cp(T%cells(i,j,k), concs)
+					mixture_cp				= thermo%mixture_cp_molar(T%cells(i,j,k), concs)
 					
 					div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)
 					
 					do spec = 1, species_number
 					
-						specie_enthalpy = (thermo%calculate_specie_enthalpy(T%cells(i,j,k),spec) - thermo%calculate_specie_enthalpy(T_ref,spec))  / thermo%molar_masses(spec)
+						specie_enthalpy = (thermo%specie_enthalpy_molar(T%cells(i,j,k),spec) - thermo%specie_enthalpy_molar(T_ref,spec))  / thermo%molar_masses(spec)
 					
 						do dim = 1, dimensions
 					
@@ -1234,7 +1234,7 @@ contains
 						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mol_mix_conc / thermo%molar_masses(spec)
 					end do	    
       
-					mixture_cp		= thermo%calculate_mixture_cp(T%cells(i,j,k), concs)
+					mixture_cp		= thermo%mixture_cp_molar(T%cells(i,j,k), concs)
 				
 					dp_stat_dt%cells(i,j,k) = (D_sum - U_sum)/ P_sum
 

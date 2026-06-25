@@ -764,16 +764,16 @@ contains
 					    H_mass	= Sh_p * D_air_water * Bm / (Y_vap - Yg_old(particle_material_index)) / particle_diameter !/ 50.0_dp    ! Sh_p * D_air_water / particle_diameter          !1.35020265065071 ! FDS
                     
                     
-					    specie_enthalpy_gas		= (this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,particle_material_index))*Tg_old / this%thermo%thermo_ptr%molar_masses(particle_material_index)
-					    specie_enthalpy_liquid	= (this%thermo%thermo_ptr%calculate_specie_cp(this%particles(part)%temperature,particle_material_index))*this%particles(part)%temperature / this%thermo%thermo_ptr%molar_masses(particle_material_index)
+					    specie_enthalpy_gas		= (this%thermo%thermo_ptr%specie_cp_molar(Tg_old,particle_material_index))*Tg_old / this%thermo%thermo_ptr%molar_masses(particle_material_index)
+					    specie_enthalpy_liquid	= (this%thermo%thermo_ptr%specie_cp_molar(this%particles(part)%temperature,particle_material_index))*this%particles(part)%temperature / this%thermo%thermo_ptr%molar_masses(particle_material_index)
 
-                        h_s_Tref			        = this%thermo%thermo_ptr%calculate_specie_enthalpy(T_ref, particle_material_index)
-                        specie_enthalpy_gas		    = (this%thermo%thermo_ptr%calculate_specie_enthalpy(Tg_old, particle_material_index) - h_s_Tref) / this%thermo%thermo_ptr%molar_masses(particle_material_index)
-                        specie_enthalpy_liquid		= (this%thermo%thermo_ptr%calculate_specie_enthalpy(this%particles(part)%temperature, particle_material_index) - h_s_Tref) / this%thermo%thermo_ptr%molar_masses(particle_material_index)
+                        h_s_Tref			        =  this%thermo%thermo_ptr%specie_enthalpy_molar(T_ref, particle_material_index)
+                        specie_enthalpy_gas		    = (this%thermo%thermo_ptr%specie_enthalpy_molar(Tg_old, particle_material_index) - h_s_Tref) / this%thermo%thermo_ptr%molar_masses(particle_material_index)
+                        specie_enthalpy_liquid		= (this%thermo%thermo_ptr%specie_enthalpy_molar(this%particles(part)%temperature, particle_material_index) - h_s_Tref) / this%thermo%thermo_ptr%molar_masses(particle_material_index)
                     
 					    mixture_cp = 0.0
 					    do spec = 1, species_number
-						    mixture_cp		= mixture_cp + this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,spec)	* Yg_old(spec) / this%thermo%thermo_ptr%molar_masses(spec)
+						    mixture_cp		= mixture_cp + this%thermo%thermo_ptr%specie_cp_molar(Tg_old,spec)	* Yg_old(spec) / this%thermo%thermo_ptr%molar_masses(spec)
                         end do			
 
     				    AGHRHO      = A_ps * H_mass * (rhog_old) / ( 1.0_dp + 0.5_dp * particle_time_step * A_ps * H_mass * (1.0_dp - Yg_old(particle_material_index)) / cell_volume / rhog_old)
@@ -848,7 +848,7 @@ contains
                     
 					    rhog_new	= M_gas_new / cell_volume
 			
-					    delta_H		= ((this%thermo%thermo_ptr%calculate_specie_cp(Tp_old,particle_material_index))*Tp_old - (this%thermo%thermo_ptr%calculate_specie_cp(Tg_old,particle_material_index))*Tg_old) / this%thermo%thermo_ptr%molar_masses(particle_material_index)
+					    delta_H		= ((this%thermo%thermo_ptr%specie_cp_molar(Tp_old,particle_material_index))*Tp_old - (this%thermo%thermo_ptr%specie_cp_molar(Tg_old,particle_material_index))*Tg_old) / this%thermo%thermo_ptr%molar_masses(particle_material_index)
 			
 					    E_f_prod%cells(i,j,k)	=	E_f_prod%cells(i,j,k) + (W_ratio * dmp / M_gas_old + (dmp * delta_H - Q) / Hg_old) / time_step
 					

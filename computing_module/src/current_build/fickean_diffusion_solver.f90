@@ -246,17 +246,17 @@ contains
 							
 							Y_prod%pr(specie_number)%cells(i,j,k) = Y_prod%pr(specie_number)%cells(i,j,k) + div_dif_flux! * time_step
 							
-							!specie_enthalpy = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k),specie_number))*T%cells(i,j,k)
-							!specie_enthalpy1 = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),specie_number))*T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-							!specie_enthalpy2 = (this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),specie_number))*T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+							!specie_enthalpy = (this%thermo%thermo_ptr%specie_cp(T%cells(i,j,k),specie_number))*T%cells(i,j,k)
+							!specie_enthalpy1 = (this%thermo%thermo_ptr%specie_cp(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),specie_number))*T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							!specie_enthalpy2 = (this%thermo%thermo_ptr%specie_cp(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),specie_number))*T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
        
 							!div_dif_flux		=  (diffusion_flux2 * 0.5_dp * (specie_enthalpy + specie_enthalpy2) - diffusion_flux1 * 0.5_dp * (specie_enthalpy + specie_enthalpy1)) / cell_size(dim) / lame_coeffs(dim,2)	
                             !print *, div_dif_flux
                             
-                            h_s_Tref			=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T_ref, specie_number)
-                            specie_enthalpy		=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i,j,k), specie_number)	- h_s_Tref
-                            specie_enthalpy1	=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), specie_number) - h_s_Tref
-                            specie_enthalpy2	=	this%thermo%thermo_ptr%calculate_specie_enthalpy(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), specie_number) - h_s_Tref
+                            h_s_Tref			=	this%thermo%thermo_ptr%specie_enthalpy_molar(T_ref, specie_number)
+                            specie_enthalpy		=	this%thermo%thermo_ptr%specie_enthalpy_molar(T%cells(i,j,k), specie_number)	- h_s_Tref
+                            specie_enthalpy1	=	this%thermo%thermo_ptr%specie_enthalpy_molar(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), specie_number) - h_s_Tref
+                            specie_enthalpy2	=	this%thermo%thermo_ptr%specie_enthalpy_molar(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)), specie_number) - h_s_Tref
      
 							div_dif_flux		=  (diffusion_flux2 * 0.5_dp * (specie_enthalpy + specie_enthalpy2) - diffusion_flux1 * 0.5_dp * (specie_enthalpy + specie_enthalpy1)) / cell_size(dim) / lame_coeffs(dim,2)	
 !							print *, div_dif_flux

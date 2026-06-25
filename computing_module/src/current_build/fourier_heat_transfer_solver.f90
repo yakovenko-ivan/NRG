@@ -273,7 +273,7 @@ contains
                             
                             omega_2_2   =   this%thermo%thermo_ptr%calculate_omega(T_red,2,2)
 												
-							specie_cp = this%thermo%thermo_ptr%calculate_specie_cp(T%cells(i,j,k), specie_number)
+							specie_cp = this%thermo%thermo_ptr%specie_cp_molar(T%cells(i,j,k), specie_number)
 							specie_cv = specie_cp - r_gase_J
 
 							stc = this%thermal_c_coeff_constant(specie_number)   * sqrt(T%cells(i,j,k)) / omega_2_2 * (4.0_dp * specie_cv / 15.0_dp / r_gase_J + 3.0_dp / 5.0_dp)

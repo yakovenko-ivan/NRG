@@ -329,7 +329,7 @@ contains
 				end do
 
 				do i_specie = 1,species_number
-					specie_enthalpy = this%thermo%thermo_ptr%calculate_specie_enthalpy(T_ref,i_specie)
+					specie_enthalpy = this%thermo%thermo_ptr%specie_enthalpy_molar(T_ref,i_specie)
 
 					if (this%ODE_solver == 'table_approximated') then
 						E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) - specie_enthalpy*(conc_out(i_specie)) / time_step
@@ -385,8 +385,8 @@ contains
 		h = 0.0_dp
 
 		do 	i_component= 1,	species_number
-			s(i_component) = this%thermo%thermo_ptr%calculate_specie_entropy(T,i_component)
-			h(i_component) = this%thermo%thermo_ptr%calculate_specie_enthalpy(T,i_component)
+			s(i_component) = this%thermo%thermo_ptr%specie_entropy_molar(T,i_component)
+			h(i_component) = this%thermo%thermo_ptr%specie_enthalpy_molar(T,i_component)
 		end do
 
 		do i_react = 1, reactions_number

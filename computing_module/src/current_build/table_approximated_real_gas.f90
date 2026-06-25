@@ -221,18 +221,18 @@ contains
 				
 				rho%cells(i,j,k)		= p%cells(i,j,k) / (T%cells(i,j,k) * r_gase_J) * mol_mix_conc%cells(i,j,k)
 				
-				cp = this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
+				cp = this%thermo%thermo_ptr%mixture_cp_molar(T%cells(i,j,k), concs)
 				cv = cp - r_gase_J
 				
 				gamma%cells(i,j,k)		= cp / cv	
 
-                h_s_Tref				= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)
-                e_i_Tref				= this%thermo%thermo_ptr%calculate_mixture_energy(T_ref, concs)
+                h_s_Tref				= this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)
+                e_i_Tref				= this%thermo%thermo_ptr%mixture_internal_energy_molar(T_ref, concs)
                
-                h_s%cells(i,j,k)		= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - h_s_Tref
-				h_full%cells(i,j,k)		= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs)
+                h_s%cells(i,j,k)		= this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - h_s_Tref
+				h_full%cells(i,j,k)		= this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs)
                
-                e_i%cells(i,j,k)		= this%thermo%thermo_ptr%calculate_mixture_energy(T%cells(i,j,k), concs) - h_s_Tref
+                e_i%cells(i,j,k)		= this%thermo%thermo_ptr%mixture_internal_energy_molar(T%cells(i,j,k), concs) - h_s_Tref
 
                 h_s%cells(i,j,k)		= h_s%cells(i,j,k)		/ mol_mix_conc%cells(i,j,k) 
                 h_full%cells(i,j,k)		= h_full%cells(i,j,k)	/ mol_mix_conc%cells(i,j,k)  
@@ -334,13 +334,13 @@ contains
 					T_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / r_gase_J * average_molar_mass
 					t_initial				= T_f%cells(dim,i,j,k)
 				
-					cp = this%thermo%thermo_ptr%calculate_mixture_cp(t_initial, concs)
+					cp = this%thermo%thermo_ptr%mixture_cp_molar(t_initial, concs)
 					cv = cp - r_gase_J 
 
 					gamma_f%cells(dim,i,j,k)	= cp / cv
 
-					h_s						= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)) 
-					e_i_f%cells(dim,i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_energy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)
+					h_s						= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) 
+					e_i_f%cells(dim,i,j,k)	=  this%thermo%thermo_ptr%mixture_internal_energy_molar(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)
 				
 					v_s_f%cells(dim,i,j,k) = sqrt(gamma_f%cells(dim,i,j,k)*p_f%cells(dim,i,j,k)/rho_f%cells(dim,i,j,k))
 					
@@ -433,7 +433,7 @@ contains
 				end do				
 				
 				e_i%cells(i,j,k)	= e_i%cells(i,j,k) * mol_mix_conc%cells(i,j,k)
-                h_s_Tref			= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)
+                h_s_Tref			= this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)
                 
 			!# New de = cv*dT equation of state		
 				T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature(T%cells(i,j,k),e_i%cells(i,j,k),concs)
@@ -443,12 +443,12 @@ contains
             !	T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature_Pconst(T%cells(i,j,k),e_i%cells(i,j,k),concs)
 			!	rho%cells(i,j,k)		= p%cells(i,j,k) * mol_mix_conc%cells(i,j,k) / T%cells(i,j,k) / r_gase_J
                 
-				cp						= this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
+				cp						= this%thermo%thermo_ptr%mixture_cp_molar(T%cells(i,j,k), concs)
 				cv						= cp - r_gase_J 
 				gamma%cells(i,j,k)		= cp / cv
 
-				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - h_s_Tref) / mol_mix_conc%cells(i,j,k)
-				h_full%cells(i,j,k)		= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) / mol_mix_conc%cells(i,j,k)
+				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - h_s_Tref) / mol_mix_conc%cells(i,j,k)
+				h_full%cells(i,j,k)		=  this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) / mol_mix_conc%cells(i,j,k)
                 
                 mixture_cp%cells(i,j,k) = cp / mol_mix_conc%cells(i,j,k)
 	
@@ -539,7 +539,7 @@ contains
 				
 				t_initial           = T%cells(i,j,k)
 
-				cp = this%thermo%thermo_ptr%calculate_mixture_cp(t_initial, concs)
+				cp = this%thermo%thermo_ptr%mixture_cp_molar(t_initial, concs)
 				cv = cp - r_gase_J 
 
 				gamma%cells(i,j,k)	= cp / cv				
@@ -639,12 +639,12 @@ contains
 
 				T%cells(i,j,k)      = p_stat%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)
 				
-				cp = this%thermo%thermo_ptr%calculate_mixture_cp(T%cells(i,j,k), concs)
+				cp = this%thermo%thermo_ptr%mixture_cp_molar(T%cells(i,j,k), concs)
 				cv = cp - r_gase_J 
 
 				gamma%cells(i,j,k)	= cp / cv
 		
-				h_s%cells(i,j,k)	= (this%thermo%thermo_ptr%calculate_mixture_enthalpy(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)) / mol_mix_conc%cells(i,j,k)
+				h_s%cells(i,j,k)	= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mol_mix_conc%cells(i,j,k)
 
 				mixture_cp%cells(i,j,k)	= cp
 				
@@ -736,12 +736,12 @@ contains
 					T_f%cells(dim,i,j,k)	= p_f%cells(dim,i,j,k) / rho_f%cells(dim,i,j,k) / r_gase_J * average_molar_mass
 					t_initial				= T_f%cells(dim,i,j,k)
 				
-					cp = this%thermo%thermo_ptr%calculate_mixture_cp(t_initial, concs)
+					cp = this%thermo%thermo_ptr%mixture_cp_molar(t_initial, concs)
 					cv = cp - r_gase_J 
 
 					gamma_f%cells(dim,i,j,k)	= cp / cv
 
-					e_i_f%cells(dim,i,j,k)	= this%thermo%thermo_ptr%calculate_mixture_energy(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)
+					e_i_f%cells(dim,i,j,k)	= this%thermo%thermo_ptr%mixture_internal_energy_molar(T_f%cells(dim,i,j,k), concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)
 					
 				!# Experimental iterative procedure. Due to discontnuity in T=1000K for sensible enthalpy this approach provides poor results		
 					!h_s					= this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_f%cells(dim,i,j,k), concs)
@@ -945,13 +945,13 @@ contains
 											concs(specie_index)		= concs(specie_index) * mol_mix_conc / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 									
-										cp = this%thermo%thermo_ptr%calculate_mixture_cp(farfield_temperature, concs)
+										cp = this%thermo%thermo_ptr%mixture_cp_molar(farfield_temperature, concs)
 										cv = cp - r_gase_J
 
 										farfield_gamma	= cp / cv	
 								
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs)/ mol_mix_conc
-										farfield_e_i	= (this%thermo%thermo_ptr%calculate_mixture_energy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)) / mol_mix_conc
+										farfield_e_i	= (this%thermo%thermo_ptr%mixture_internal_energy_molar(farfield_temperature, concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mol_mix_conc
 										
                                         !farfield_velocity	=  sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
                                         
@@ -968,7 +968,7 @@ contains
 										E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	farfield_E_f 
 										call bc%boundary_types(bound_number)%set_farfield_energy(farfield_E_f)
                                         
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs) - this%thermo%thermo_ptr%calculate_mixture_enthalpy(T_ref, concs)) / mol_mix_conc
+										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%mixture_enthalpy_molar(farfield_temperature, concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mol_mix_conc
 										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
 										
 								end select
