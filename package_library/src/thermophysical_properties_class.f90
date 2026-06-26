@@ -277,7 +277,7 @@ contains
         real(dp)                :: hs_molar
         integer                 :: i, coeff_set
 
-        hs_molar = this%specie_entropy_molar(temperature, specie_number)
+        hs_molar = this%specie_enthalpy_molar(temperature, specie_number)
         
         ! Ideal-gas molar internal energy: e_k = h_k - R_u T.
         e_molar = hs_molar - r_gase_J*temperature
