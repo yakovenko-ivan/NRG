@@ -127,6 +127,7 @@ module fds_low_mach_solver_class
 		procedure	,private	:: calculate_velocity
 		procedure	,private	:: calculate_interm_Y_corrector
 		procedure	,private	:: CHARM_flux_limiter
+		procedure	,private	:: eos_corrected_species_face_density
 		procedure	,private	:: apply_boundary_conditions
 		procedure	,private	:: apply_poisson_boundary_conditions
 		procedure	,private	:: farfield_values_modifier
@@ -864,9 +865,8 @@ contains
 						do dim = 1, dimensions
 													
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
-								flux_right = this%CHARM_flux_limiter(rho%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3))*		&
-																	 Y%pr(spec)%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3)),	&
-																	 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+								flux_right = this%eos_corrected_species_face_density(rho,Y,dim,i,j,k,1, &
+														 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),spec)
 							else
 								if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
 									flux_right = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
@@ -876,9 +876,8 @@ contains
 							end if
 						
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
-								flux_left = this%CHARM_flux_limiter(rho%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3))*		&
-																	Y%pr(spec)%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3)),	&
-																	v_f%pr(dim)%cells(dim,i,j,k))
+								flux_left = this%eos_corrected_species_face_density(rho,Y,dim,i,j,k,-1, &
+														 v_f%pr(dim)%cells(dim,i,j,k),spec)
 							else
 								if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
 									flux_left = rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
@@ -922,13 +921,19 @@ contains
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
+					! Apply boundedness correction to conservative species densities,
+					! then reconstruct rho and Y consistently.
 					spec_summ = 0.0_dp
 					do spec = 1,species_number
-						spec_summ = spec_summ + max(Y_int%pr(spec)%cells(i,j,k), 0.0_dp)
+						Y_rho_int(spec) = max(rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k), 0.0_dp)
+						spec_summ = spec_summ + Y_rho_int(spec)
 					end do
-					do spec = 1,species_number
-						Y_int%pr(spec)%cells(i,j,k) = max(Y_int%pr(spec)%cells(i,j,k), 0.0_dp) / spec_summ
-					end do
+					if (spec_summ > tiny(1.0_dp)) then
+						rho_int%cells(i,j,k) = spec_summ
+						do spec = 1,species_number
+							Y_int%pr(spec)%cells(i,j,k) = Y_rho_int(spec) / rho_int%cells(i,j,k)
+						end do
+					end if
 				end if
 			end do
 			end do
@@ -1092,10 +1097,7 @@ contains
 						end do		
                     end if
 					
-                    do dim = 1,dimensions
-                        div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + rho%cells(i,j,k) * this%g(dim) * 0.5_dp * (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v_f%pr(dim)%cells(dim,i,j,k))
-                    end do
-                    
+                   
 					do dim = 1,dimensions
 					
 						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
@@ -1139,9 +1141,8 @@ contains
 						do dim = 1, dimensions
 					
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
-								flux_right = this%CHARM_flux_limiter(rho%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3))*		&
-																	 Y%pr(spec)%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3)),	&
-																	 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+								flux_right = this%eos_corrected_species_face_density(rho,Y,dim,i,j,k,1, &
+														 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),spec)
 							else
 								if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
 									flux_right = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
@@ -1151,9 +1152,8 @@ contains
 							end if	
 						
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
-								flux_left = this%CHARM_flux_limiter(rho%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3))*		&
-																	Y%pr(spec)%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3)),	&
-																	v_f%pr(dim)%cells(dim,i,j,k))
+								flux_left = this%eos_corrected_species_face_density(rho,Y,dim,i,j,k,-1, &
+														 v_f%pr(dim)%cells(dim,i,j,k),spec)
 							else
 								if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
 									flux_left = rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
@@ -1266,6 +1266,7 @@ contains
 		real(dp)	:: H_center, H_left, H_right, F_a_left, F_a_right, F_b_left, F_b_right, sub_F_summ, r_summ1, r_summ2
 		real(dp)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm, a_norm_prev, a_normfinal, H_summ, sum_ddiv_v_dt, grad_F_a_summ, grad_F_b_summ
 		real(dp)	:: farfield_density, farfield_pressure, farfield_velocity
+			real(dp)	:: rho_face
 		
 		real(dp), dimension (3,3)	:: lame_coeffs
 		character(len=20)				:: coordinate_system
@@ -1344,7 +1345,7 @@ contains
                         mesh			    => this%mesh%mesh_ptr		    , &
                         bc				    => this%boundary%bc_ptr		)
 
-			!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity,sign,bound_number,bound_number1,bound_number2,bound_number3,plus,boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3,bc_coeff) !, &
+			!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,loop,lame_coeffs,farfield_velocity,rho_face,sign,bound_number,bound_number1,bound_number2,bound_number3,plus,boundary_type_name,boundary_type_name1,boundary_type_name2,boundary_type_name3,bc_coeff) !, &
 			!!$omp& firstprivate(this)
             !!$omp& shared(sum_ddiv_v_dt,grad_F_a_summ,cons_inner_loop,cons_utter_loop,flow_inner_loop,dimensions,predictor,cell_size,coordinate_system,time_step,r_summ)					
                         
@@ -1568,8 +1569,10 @@ contains
 				do i = loop(1,1),loop(1,2)
 					if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then 
 						if (predictor) then
-							if (abs(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) > 1e-010) then
-								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) *(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
+							rho_face = 0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))
+							if (abs(this%rho_0 - rho_face) > 1e-010_dp) then
+								! Consistent face-centered buoyancy: F contains -((rho-rho0)g)/rho.
+								F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) - ((this%rho_0 - rho_face) * this%g(dim)) / rho_face
 							end if
 
 							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * (0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
@@ -1584,8 +1587,10 @@ contains
 							    end do		
 						    end if
                         else
-							if (abs(this%rho_0 - rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) > 1e-010) then
-								F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) *(this%rho_0 - rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))* this%g(dim))
+							rho_face = 0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))
+							if (abs(this%rho_0 - rho_face) > 1e-010_dp) then
+								! Consistent face-centered buoyancy: F contains -((rho-rho0)g)/rho.
+								F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) - ((this%rho_0 - rho_face) * this%g(dim)) / rho_face
 							end if
 								
 							if (this%viscosity_flag)		F_a%cells(dim,i,j,k)	=  F_a%cells(dim,i,j,k) - (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * (0.5_dp*(v_prod_visc%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
@@ -1777,7 +1782,7 @@ contains
                             mesh			=> this%mesh%mesh_ptr		, &
                             bc				=> this%boundary%bc_ptr		)
 
-				!$omp parallel default(shared)  private(i,j,k,dim,dim2,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,farfield_velocity) !, &
+				!$omp parallel default(shared)  private(i,j,k,dim,dim2,loop,plus,sign,bound_number,boundary_type_name,residual,lame_coeffs,farfield_velocity,rho_face) !, &
                 !!$omp& firstprivate(this)
                 !!$omp& shared(grad_F_b_summ,predictor,cons_utter_loop,cons_inner_loop,dimensions,cell_size,coordinate_system,a_norm_init,time_step,farfield_velocity_array,r_summ)                
 
@@ -1972,12 +1977,12 @@ contains
 				beta				= 2.0_dp/3.0_dp
 				v_cycle_converged	= .false.
 			
-				nu_0 = 5
+				nu_0 = 8
 				nu_1 = 2
 				nu_2 = 2
 				V_cycle_depth = this%number_of_meshes - 2
 
-				tolerance = 1e-02_dp
+				tolerance = 1e-04_dp
 					
                 call fds_multigrid_timer%tic()
 					
@@ -2647,7 +2652,7 @@ contains
 					v_f_old			=> this%v_f_old%v_ptr		, &
 					bc				=> this%boundary%bc_ptr)
 	
-			!$omp parallel default(shared)  private(i,j,k,dim,vel_abs,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_pressure) !, &
+			!$omp parallel default(shared)  private(i,j,k,dim,dim2,vel_abs,plus,sign,bound_number,boundary_type_name,farfield_density,farfield_pressure) !, &
 			!!$omp& firstprivate(this)
             !!$omp& shared(predictor,cons_inner_loop,dimensions,cell_size)	
 
@@ -2678,7 +2683,12 @@ contains
 									case('wall')
 										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 
-										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*(	v%pr(dim)%cells(i,j,k) **2)  
+										vel_abs = 0.0_dp
+										do dim2 = 1,dimensions
+											vel_abs = vel_abs + v%pr(dim2)%cells(i,j,k)**2
+										end do
+										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= &
+											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*vel_abs  
 										if (predictor) then	
 											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										else
@@ -2701,7 +2711,12 @@ contains
 											
 										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 
-										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*(	v%pr(dim)%cells(i,j,k) **2)   
+										vel_abs = 0.0_dp
+										do dim2 = 1,dimensions
+											vel_abs = vel_abs + v%pr(dim2)%cells(i,j,k)**2
+										end do
+										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= &
+											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*vel_abs   
 										if (predictor) then	
 											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										else
@@ -2711,7 +2726,12 @@ contains
 									case('inlet')
 										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 
-										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*(	v%pr(dim)%cells(i,j,k) **2)   
+										vel_abs = 0.0_dp
+										do dim2 = 1,dimensions
+											vel_abs = vel_abs + v%pr(dim2)%cells(i,j,k)**2
+										end do
+										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= &
+											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*vel_abs   
 										if (predictor) then	
 											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										else
@@ -3022,9 +3042,8 @@ contains
 						rhs = 0.0_dp
 						do dim = 1, dimensions	
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
-								flux_right = this%CHARM_flux_limiter(rho_int%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3))*		&
-																	 Y_int%pr(spec)%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3)),	&
-																	 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
+								flux_right = this%eos_corrected_species_face_density(rho_int,Y_int,dim,i,j,k,1, &
+														 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),spec)
 							else
 								if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
 									flux_right = rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k)
@@ -3034,9 +3053,8 @@ contains
 							end if
 						
 							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
-								flux_left = this%CHARM_flux_limiter(rho_int%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3))*		&
-																	Y_int%pr(spec)%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3)),	&
-																	v_f%pr(dim)%cells(dim,i,j,k))
+								flux_left = this%eos_corrected_species_face_density(rho_int,Y_int,dim,i,j,k,-1, &
+														 v_f%pr(dim)%cells(dim,i,j,k),spec)
 							else
 								if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
 									flux_left = rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * Y_int%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
@@ -3082,13 +3100,19 @@ contains
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then
+					! Apply boundedness correction to conservative species densities,
+					! then reconstruct rho and Y consistently.
 					spec_summ = 0.0_dp
 					do spec = 1,species_number
-						spec_summ = spec_summ + max(Y%pr(spec)%cells(i,j,k), 0.0_dp)
+						Y_rho_int(spec) = max(rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k), 0.0_dp)
+						spec_summ = spec_summ + Y_rho_int(spec)
 					end do
-					do spec = 1,species_number
-						Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dp) / spec_summ
-					end do
+					if (spec_summ > tiny(1.0_dp)) then
+						rho%cells(i,j,k) = spec_summ
+						do spec = 1,species_number
+							Y%pr(spec)%cells(i,j,k) = Y_rho_int(spec) / rho%cells(i,j,k)
+						end do
+					end if
 				end if
 			end do
 			end do
@@ -3107,516 +3131,1239 @@ contains
 
 
 	subroutine stabilizing_inlet_1D(this,time,stabilized)
-		class(fds_solver)	,intent(inout)	:: this
-		real(dp)			,intent(in)		:: time
-		logical				,intent(out)	:: stabilized
-		
-		real(dp)	,dimension(3)		:: cell_size		
-		
-		real(dp)				:: max_val_lp, left_val, right_val, left_val2, right_val2, left_val3, right_val3, flame_velocity, flame_surface_length, surface_factor
-		real(dp)				:: a, b 
-		real(dp)				:: time_track, time_delay, time_stabilization
-		real(dp), dimension(2), save		:: previous_flame_location = 0.0_dp,	current_flame_location = 0.0_dp
+!		! Generalized stabilizing inlet routine with two explicit workflows:
+!		!   1) stabilize -> write 1D flamelet -> perturb inlet -> measure S_L -> return stabilized=.true.;
+!		!   2) stabilize/anchor flame for long-term observation without flamelet or drift measurement.
+!		! Anchored-v3 revision: keeps the heat-release gate and spatial anchor of v2,
+!		! but adds a fast capture mode for cases where the initial inlet velocity
+!		! convects the flame toward the outlet before the fine controller can react.
+!		! The routine keeps the old public signature, but the
+!		! controlled observable is no longer a single leading point.  It is the
+!		! heat-release-weighted flame centroid projected on the inlet axis.
+!		!
+!		! Main stabilizing changes relative to the first generalized version:
+!		!   1. sample-and-hold control: after every inlet correction the velocity
+!		!      history is cleared and the controller waits for inlet ramp/settling;
+!		!   2. tracking and control intervals are separated;
+!		!   3. the inlet velocity is changed through a target/applied ramp, not by
+!		!      an instantaneous boundary jump;
+!		!   4. proportional gain is small and adaptively damped after sign changes
+!		!      or error growth;
+!		!   5. when two measurements bracket V_f=0, the next target is chosen by a
+!		!      safeguarded bisection step;
+!		!   6. a damped secant step is used only when the measured response slope is
+!		!      reliable; otherwise the code falls back to a small proportional step;
+!		!   7. the controller now uses a weak safe-window anchor.  Inside a broad
+!		!      safe band the control target is V_f only; positional feedback is
+!		!      activated only when the flame approaches the edge of the allowed window;
+!		!   8. heat-release validity is checked explicitly.  H-radical and T-gradient
+!		!      centroids are diagnostics/fallback locations only and are not allowed
+!		!      to drive the feedback after the burning front is lost.
+!		!
+!		! Convention: front_axis=1 corresponds to the present 1D setup.  For an
+!		! inlet normal along another direction, replace this by a boundary-derived
+!		! inlet-normal coordinate.
+!
+		class(fds_solver), intent(inout) :: this
+		real(dp),          intent(in)    :: time
+		logical,           intent(out)   :: stabilized
 
-		real(dp), dimension(2), save		:: previous_flame_location_E = 0.0_dp, current_flame_location_E = 0.0_dp, farfield_velocity_E = 0.0_dp
-		real(dp), dimension(2), save		:: previous_flame_location_T = 0.0_dp, current_flame_location_T = 0.0_dp, farfield_velocity_T = 0.0_dp
-		real(dp), dimension(2), save		:: previous_flame_location_H = 0.0_dp, current_flame_location_H = 0.0_dp, farfield_velocity_H = 0.0_dp
+		integer, parameter :: max_hist_size = 120
+		integer, parameter :: max_diag_hist_size = 200
+		integer, parameter :: min_hist_for_control = 12
+		integer, parameter :: min_hist_for_capture = 6
+		integer, parameter :: stable_required_count = 50
+		integer, parameter :: flamelet_required_count = 50
+		integer, parameter :: post_flamelet_hold_required_count = 100
 
-		real(dp), save			:: flame_velocity_E, max_val_E, flame_velocity_T, max_val_T, flame_velocity_H, max_val_H, farfield_velocity = 0.0_dp, av_flame_velocity = 0.0
+		real(dp), parameter :: time_delay_default         = 1.0e-03_dp
+		real(dp), parameter :: time_track_default         = 1.0e-04_dp
+		real(dp), parameter :: time_control_default       = 1.0e-03_dp
+		real(dp), parameter :: time_control_capture       = 2.0e-04_dp
+		real(dp), parameter :: response_settle_default    = 1.0e-03_dp
+		real(dp), parameter :: response_settle_capture    = 2.0e-04_dp
+		real(dp), parameter :: inlet_ramp_time_fine       = 5.0e-03_dp
+		real(dp), parameter :: inlet_ramp_time_capture    = 1.0e-03_dp
+		real(dp), parameter :: controller_gain_initial    = 5.0e-02_dp
+		real(dp), parameter :: controller_gain_min        = 5.0e-03_dp
+		real(dp), parameter :: controller_gain_max        = 8.0e-02_dp
+		real(dp), parameter :: controller_gain_capture    = 5.0e-01_dp
+		real(dp), parameter :: controller_max_fraction    = 5.0e-02_dp
+		real(dp), parameter :: controller_max_fraction_capture = 1.0e-01_dp
+		real(dp), parameter :: controller_max_fraction_emergency = 2.5e-01_dp
+		real(dp), parameter :: min_abs_velocity_step      = 1.0e-04_dp
+		real(dp), parameter :: min_abs_velocity_step_capture = 1.0e-03_dp
+		real(dp), parameter :: emergency_min_fraction     = 1.0e-01_dp
+		real(dp), parameter :: velocity_tolerance_on      = 2.0e-05_dp
+		real(dp), parameter :: velocity_tolerance_off     = 5.0e-06_dp
+		real(dp), parameter :: filter_alpha               = 1.0e-01_dp
+		real(dp), parameter :: secant_relaxation          = 2.0e-01_dp
+		real(dp), parameter :: feedback_sign_default      = -1.0_dp
+		real(dp), parameter :: heat_release_cut_fraction  = 1.0e-08_dp
+		real(dp), parameter :: heat_release_valid_relative = 1.0e-07_dp
+		real(dp), parameter :: heat_release_valid_absolute = 1.0e-20_dp
+		real(dp), parameter :: position_relaxation_time   = 5.0e-02_dp
+		real(dp), parameter :: position_tolerance_cells   = 4.0_dp
+		real(dp), parameter :: capture_position_tolerance_cells = 12.0_dp
+		real(dp), parameter :: capture_velocity_threshold = 2.0e-02_dp
+		real(dp), parameter :: outlet_guard_cells         = 20.0_dp
+		real(dp), parameter :: outlet_guard_fraction      = 1.5e-01_dp
+		real(dp), parameter :: min_secant_du              = 5.0e-05_dp
+		real(dp), parameter :: max_response_slope_abs     = 1.0e+03_dp
+		real(dp), parameter :: persistent_error_factor    = 5.0_dp
+		real(dp), parameter :: ramp_settle_fraction       = 1.0e-03_dp
+		real(dp), parameter :: tiny_weight                = tiny(1.0_dp)
+		logical,  parameter :: use_secant_control         = .false.
 
-		real(dp), save			:: previous_time = 0.0_dp, current_time = 0.0_dp, previous_correction_time = 0.0_dp
+!		! Workflow selector.
+!		! workflow_flamelet_sl:
+!		!   Stabilize the flame, write 1D flamelet/chemistry data, perturb the inlet,
+!		!   measure the linear drift velocity, write the laminar-burning-velocity result,
+!		!   and return stabilized=.true. so the external driver can stop/pause.
+!		! workflow_anchor_observation:
+!		!   Keep the flame anchored for long-term observation.  No flamelet output, no
+!		!   open-loop drift measurement, and no final stop signal is generated.
+		integer,  parameter :: workflow_flamelet_sl = 1
+		integer,  parameter :: workflow_anchor_observation = 2
+		integer,  parameter :: active_workflow = workflow_flamelet_sl
+		logical,  parameter :: enable_flamelet_output = (active_workflow == workflow_flamelet_sl)
+		logical,  parameter :: enable_drift_measurement = (active_workflow == workflow_flamelet_sl)
+		logical,  parameter :: pause_after_sl_measurement = (active_workflow == workflow_flamelet_sl)
+		integer,  parameter :: stage_anchor_control = 0
+		integer,  parameter :: stage_flamelet_ready = 1
+		integer,  parameter :: stage_measurement_ramp = 2
+		integer,  parameter :: stage_drift_measurement = 3
+		integer,  parameter :: stage_measurement_done = 4
+		integer,  parameter :: stage_measurement_failed = 5
+		integer,  parameter :: min_hist_for_sl_measurement = 40
+		real(dp), parameter :: measurement_delta_fraction = 3.0e-02_dp
+		real(dp), parameter :: measurement_delta_sign = 1.0_dp
+		real(dp), parameter :: measurement_delta_min = 5.0e-03_dp
+		real(dp), parameter :: measurement_delta_max_fraction = 3.0e-01_dp
+		real(dp), parameter :: measurement_delta_growth = 2.0_dp
+		real(dp), parameter :: measurement_max_duration = 2.0e-02_dp
+		real(dp), parameter :: measurement_no_motion_displacement_cells = 0.5_dp
+		integer,  parameter :: measurement_max_attempts = 5
+		real(dp), parameter :: measurement_ramp_time = 1.0e-03_dp
+		real(dp), parameter :: measurement_settle_time = 1.0e-03_dp
+		real(dp), parameter :: measurement_min_displacement_cells = 6.0_dp
+		real(dp), parameter :: measurement_min_duration = 5.0e-03_dp
+		real(dp), parameter :: measurement_r2_min = 9.95e-01_dp
+		real(dp), parameter :: measurement_split_slope_rel_tol = 2.5e-01_dp
+		real(dp), parameter :: measurement_split_slope_abs_tol = 2.0e-04_dp
+		real(dp), parameter :: measurement_residual_cells = 1.0_dp
 
-		real(dp), dimension(500), save	:: flame_velocity_hist = 0.0
-		integer		,save			:: track_counter = 0, correction_counter = 0, stabilization_counter = 0, hist_indx
+		integer :: dimensions, species_number, boundary_types
+		integer :: front_axis
+		integer :: i, j, k, dim, bound_number, specie_number, specie_index
+		integer :: H2_index, H_index
+		integer :: cons_inner_loop(3,2)
+		integer :: active_track_number
 
-		character(len=200)			:: file_name
-		
-		integer				,dimension(:), allocatable, save	:: flame_front_index
-		real(dp)			,dimension(:), allocatable, save	:: max_val, max_coord
-		real(dp)			,dimension(:), allocatable, save	:: data_array, test
-        real(dp)			,dimension(:), allocatable, save	:: farfield_concentrations, concs
-        character(len=10)	,dimension(:), allocatable, save	:: farfield_species_names
-        
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
+		real(dp) :: cell_size(3), cell_volume
+		real(dp) :: current_flame_location(3)
+		real(dp) :: heat_release_centroid(3)
+		real(dp) :: H_centroid(3)
+		real(dp) :: Tgrad_centroid(3)
+		real(dp) :: current_front_coord
+		real(dp) :: flame_velocity_lsq, flame_velocity_filtered
+		real(dp) :: diag_flame_velocity_lsq, diag_flame_velocity_filtered
+		real(dp) :: control_velocity, position_error, position_velocity, position_control_error
+		real(dp) :: front_spread, heat_release_integral
+		real(dp) :: heat_release_max, heat_release_valid_limit, H_max, Tgrad_max
+		real(dp) :: measured_inlet_velocity, proposed_inlet_velocity
+		real(dp) :: du_raw, du_limited, max_velocity_step, X_H2
+		real(dp) :: time_delay, time_track, time_control, response_settle_time, inlet_ramp_time
+		real(dp) :: time_control_effective, response_settle_effective
+		real(dp) :: coord(3), weight, qdot_cut, qdot, hval, tgrad
+		real(dp) :: sum_weight, sum_s, sum_s2
+		real(dp) :: sum_H_weight, sum_Tgrad_weight
+		real(dp) :: s_coord
+		real(dp) :: ramp_elapsed, ramp_fraction, ramp_residual, ramp_tolerance
+		real(dp) :: target_step_for_log
+		real(dp) :: sl_displacement, linear_r2, linear_rms, split_slope_diff
+		real(dp) :: measurement_elapsed, measurement_displacement, measurement_delta
+		logical :: measurement_linear_ok
+		real(dp) :: front_position_tolerance, capture_position_tolerance
+		real(dp) :: domain_front_min, domain_front_max, domain_front_length
+		real(dp) :: outlet_guard_distance, outlet_distance
+		real(dp) :: front_safe_min, front_safe_max
+		real(dp), allocatable, save :: time_hist(:), front_coord_hist(:)
+		real(dp), allocatable, save :: diag_time_hist(:), diag_front_coord_hist(:)
+		real(dp), allocatable, save :: farfield_concentrations(:), concs(:)
+		character(len=10), allocatable, save :: farfield_species_names(:)
+		character(len=5) :: axis_names(3)
+		character(len=20) :: flame_data_file
+		character(len=500) :: av_header
+		character(len=200), save :: data_table_filename, chem_table_filename
+		character(len=100) :: chemical_mechanism
+		logical :: found_inlet_farfield, trace_success, flame_detected, control_performed
+		logical :: measurement_enabled, ramp_settled, reset_history_after_log
+		logical :: capture_mode, emergency_mode
 
-		real(dp)					:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x, velocity_deviation, X_H2
-		real(dp)	,dimension(3)	:: coords_lp
-		integer						:: i_lp, j_lp, lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2
-		integer		,save			:: j_lp_E = 1
-		
-		integer						:: hist_size
-		real(dp)					:: s, diff, var_s, z
-        
-		integer :: specie_index, H2_index, CO_index, H2O2_index, HO2_index, OH_index, H_index
-		integer	:: boundary_types,sign
-		integer :: i,j,k,plus,dim,dim1,bound_number, specie_number, spec, lp_index,lp_index2,lp_index3
-		
-		logical	,save				:: correction_flag = .true.
-		character(len=20)			:: boundary_type_name
-		character(len=20)			:: flame_data_file
-        character(len=500)			:: av_header
-        character(len=200)	,save	:: data_table_filename, chem_table_filename
-        character(len=100)			:: chemical_mechanism
-        character(len=5)	,dimension(3)	:: axis_names
-        
-        integer	,save			:: flame_loc_unit
-        integer					:: flame_loc_unit_old, stat
-        
-		dimensions		= this%domain%get_domain_dimensions()
-        axis_names      = this%domain%get_axis_names()
-		species_number	= this%chem%chem_ptr%species_number
-        boundary_types	= this%boundary%bc_ptr%get_boundary_types()
-        
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-
-        cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-
-        H2_index		= this%chem%chem_ptr%get_chemical_specie_index('H2')
-!		CO_index		= this%chem%chem_ptr%get_chemical_specie_index('CO')
-!		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
-!		OH_index		= this%chem%chem_ptr%get_chemical_specie_index('OH')
-		H_index			= this%chem%chem_ptr%get_chemical_specie_index('H')
-!		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
+		integer, save :: track_counter = 0
+		integer, save :: correction_counter = 0
+		integer, save :: stabilization_counter = 0
+		integer, save :: hist_count = 0
+		integer, save :: diag_hist_count = 0
+		integer, save :: same_sign_error_counter = 0
+		integer, save :: post_flamelet_hold_counter = 0
+		integer, save :: measurement_attempt = 0
+		integer, save :: flame_loc_unit = -1
+		real(dp), save :: previous_correction_time = -huge(1.0_dp)
+		real(dp), save :: filtered_velocity_save = 0.0_dp
+		real(dp), save :: diag_filtered_velocity_save = 0.0_dp
+		real(dp), save :: previous_front_coord = 0.0_dp
+		real(dp), save :: adaptive_gain = 5.0e-02_dp
+		real(dp), save :: inlet_velocity_target = 0.0_dp
+		real(dp), save :: inlet_velocity_applied = 0.0_dp
+		real(dp), save :: ramp_start_time = 0.0_dp
+		real(dp), save :: ramp_start_velocity = 0.0_dp
+		real(dp), save :: active_inlet_ramp_time = inlet_ramp_time_fine
+		real(dp), save :: previous_control_velocity = 0.0_dp
+		real(dp), save :: previous_control_inlet_velocity = 0.0_dp
+		real(dp), save :: front_reference_coord = 0.0_dp
+		real(dp), save :: heat_release_peak_save = 0.0_dp
+		real(dp), save :: bracket_u_a = 0.0_dp, bracket_v_a = 0.0_dp
+		real(dp), save :: bracket_u_b = 0.0_dp, bracket_v_b = 0.0_dp
+		logical, save :: initialized = .false.
+		logical, save :: inlet_velocity_initialized = .false.
+		logical, save :: output_initialized = .false.
+		logical, save :: final_output_written = .false.
+		logical, save :: flamelet_output_written = .false.
+		logical, save :: sl_output_written = .false.
+		logical, save :: have_previous_control_point = .false.
+		logical, save :: has_bracket = .false.
+		logical, save :: front_reference_initialized = .false.
+		integer, save :: control_stage = stage_anchor_control
+		real(dp), save :: stabilized_inlet_velocity = 0.0_dp
+		real(dp), save :: measurement_inlet_velocity = 0.0_dp
+		real(dp), save :: measurement_start_time = 0.0_dp
+		real(dp), save :: measurement_start_coord = 0.0_dp
+		real(dp), save :: sl_displacement_save = 0.0_dp
+		real(dp), save :: measurement_velocity_save = 0.0_dp
+		real(dp), save :: measurement_r2_save = 0.0_dp
+		real(dp), save :: measurement_rms_save = 0.0_dp
+		real(dp), save :: measurement_split_slope_diff_save = 0.0_dp
+		real(dp), save :: current_measurement_delta = 0.0_dp
 
 		stabilized = .false.
-		
-		if (.not.allocated(flame_front_index)) then
-			allocate(flame_front_index(cons_inner_loop(2,1):cons_inner_loop(2,2)))
-			allocate(max_val(cons_inner_loop(2,1):cons_inner_loop(2,2)))
-			allocate(max_coord(cons_inner_loop(2,1):cons_inner_loop(2,2)))
-            allocate(data_array(3*dimensions+14), test(3*dimensions+14))
-            allocate(concs(species_number))
-            do bound_number = 1, boundary_types
-                if (this%boundary%bc_ptr%boundary_types(bound_number)%get_type_name() == 'inlet') then
+
+		dimensions      = this%domain%get_domain_dimensions()
+		axis_names      = this%domain%get_axis_names()
+		species_number  = this%chem%chem_ptr%species_number
+		boundary_types  = this%boundary%bc_ptr%get_boundary_types()
+		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
+		cell_size       = this%mesh%mesh_ptr%get_cell_edges_length()
+
+		front_axis = 1
+		if (front_axis > dimensions) front_axis = 1
+
+		cell_volume = 1.0_dp
+		do dim = 1, dimensions
+			cell_volume = cell_volume * cell_size(dim)
+		end do
+		front_position_tolerance = max(position_tolerance_cells * cell_size(front_axis), 1.0e-8_dp)
+		capture_position_tolerance = max(capture_position_tolerance_cells * cell_size(front_axis), &
+			front_position_tolerance)
+		domain_front_min = (real(cons_inner_loop(front_axis,1),dp) - 0.5_dp) * cell_size(front_axis)
+		domain_front_max = (real(cons_inner_loop(front_axis,2),dp) - 0.5_dp) * cell_size(front_axis)
+		domain_front_length = max(domain_front_max - domain_front_min, cell_size(front_axis))
+		outlet_guard_distance = max(outlet_guard_cells * cell_size(front_axis), &
+			outlet_guard_fraction * domain_front_length)
+
+		H2_index = this%chem%chem_ptr%get_chemical_specie_index('H2')
+		H_index  = this%chem%chem_ptr%get_chemical_specie_index('H')
+
+		if (.not. allocated(time_hist)) then
+			allocate(time_hist(max_hist_size), front_coord_hist(max_hist_size))
+			time_hist        = 0.0_dp
+			front_coord_hist = 0.0_dp
+		end if
+
+		if (.not. allocated(diag_time_hist)) then
+			allocate(diag_time_hist(max_diag_hist_size), diag_front_coord_hist(max_diag_hist_size))
+			diag_time_hist        = 0.0_dp
+			diag_front_coord_hist = 0.0_dp
+		end if
+
+		if (.not. initialized) then
+			allocate(concs(species_number))
+			concs = 0.0_dp
+
+			found_inlet_farfield = .false.
+			do bound_number = 1, boundary_types
+				if (this%boundary%bc_ptr%boundary_types(bound_number)%get_type_name() == 'inlet') then
 					call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
 					call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
-                end if
-            end do
-                
-            concs = 0.0_dp
-			do specie_number = 1, size(farfield_species_names)
-				specie_index		= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
-				concs(specie_index) = farfield_concentrations(specie_number)
-			end do
-        
-			X_H2 = concs(H2_index)/sum(concs) * 100.0_dp
-            
-            chemical_mechanism = trim(this%chem%chem_ptr%get_chemical_mechanism())
-            
-			data_table_filename =	'H2-Air_flamelet_' // trim(chemical_mechanism) //'_'// trim(str_r(X_H2)) // &
-									'_pcnt_'// trim(str_e(cell_size(1)))//'_dx' // '.dat'
-            chem_table_filename =  	'H2-Air_chem_table_' // trim(chemical_mechanism) //'_'// trim(str_r(X_H2)) // &
-									'_pcnt_'// trim(str_e(cell_size(1)))//'_dx' // '.dat'
-            
-        end if
-						
-
-        
-        data_array = 0.0_dp
-        
-		associate (	v				=> this%v%v_ptr				, &
-					v_f				=> this%v_f%v_ptr			, &
-					T				=> this%T%s_ptr				, &
-					Y				=> this%Y%v_ptr				, &
-					E_f_prod_chem 		=> this%E_f_prod_chem%s_ptr	, &
-					bc				=> this%boundary%bc_ptr)
-
-		time_delay			= 1e-03_dp!1e-05_dp!1e-05_dp!1e-05_dp			
-		time_track			= 1e-04_dp!2e-04_dp!1e-05_dp!2e-04_dp
-		time_stabilization	= 1e-04_dp!5e-06_dp!1e-05_dp!5e-06_dp		
-       
-		if ( (time - time_delay) / time_track  > track_counter + 1) then			
-					
-            if (track_counter == 0) then
- 				write(flame_data_file,'(A,I2,A)') 'av_flame_data_',this%load_counter,'.dat'
-				open(newunit = flame_loc_unit, file = flame_data_file, status = 'replace', form = 'formatted')
-
-                av_header = 'VARIABLES="time" '
-                
-                do dim = 1, dimensions
-                    av_header =  trim(av_header) // '"lp_H' // trim(axis_names(dim)) // ' "'
-                end do
-                
-                av_header = trim(av_header) // '"Ufl_H" "avUfl_H" "U_in" "U_tot" "max_H" '
-                
-                do dim = 1, dimensions
-                    av_header =  trim(av_header) // '"lp_T' // trim(axis_names(dim)) // ' "'
-                end do
-                
-                av_header = trim(av_header) // '"Ufl_T" "max_T" '
-                
-                do dim = 1, dimensions
-                    av_header =  trim(av_header) // '"lp_E' // trim(axis_names(dim)) // ' "'
-                end do
-                
-                av_header = trim(av_header) // '"Ufl_E" "max_E" "z" "corr_cont" "stab_count" "track_count" ' 
-
-                write (flame_loc_unit,'(A)')	trim(av_header)
-                
-				if (this%load_counter > 1) then
-					write(flame_data_file,'(A,I2,A)') 'av_flame_data_',this%load_counter-1,'.dat'
-					open(newunit = flame_loc_unit_old, file = flame_data_file, status = 'old', form = 'formatted')
+					found_inlet_farfield = .true.
+					exit
 				end if
-            end if            
-            
-			current_time = time
-		
-			!# 1D front tracer
-			flame_front_index	= 0 
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-                
-				max_val(j)		= 1.0e07_dp
-                max_coord(j)	= cons_inner_loop(1,2) * cell_size(1)
-                
-				do i = cons_inner_loop(1,1)+10,cons_inner_loop(1,2)-10
-					if(bc%bc_markers(i,j,k) == 0) then	
-						if ((E_f_prod_chem%cells(i,j,k)) > max_val(j)) then
-							max_val(j)				= E_f_prod_chem%cells(i,j,k)
-							flame_front_index(j)	= i
-						end if
-					end if
-                end do
-                
-                if ( flame_front_index(j) /= 0) then
-					left_val		= E_f_prod_chem%cells(flame_front_index(j)-1,j,1)
-					right_val		= E_f_prod_chem%cells(flame_front_index(j)+1,j,1)	            
-              
-					max_coord(j)	= (flame_front_index(j) - 0.5_dp)*cell_size(1)
-                
-					a = (right_val + left_val - 2.0_dp * max_val(j))/2.0_dp/cell_size(1)**2
-					b = (right_val - left_val)/2.0_dp/cell_size(1) - 2.0_dp*a*max_coord(j) 
-                
-					max_coord(j) = -b/2.0_dp/a
-                end if
-			end do
-            end do
-			
-            j_lp		= minloc(max_coord, dim = 1)
-            i_lp		= flame_front_index(j_lp)
-			max_val_lp	= max_val(j_lp)
-			
-			j_lp_E		= j_lp
-
-			coords_lp(1)	= (i_lp - 0.5_dp)*cell_size(1)
-			coords_lp(2)	= (j_lp - 0.5_dp)*cell_size(1)
-
-			left_val	= E_f_prod_chem%cells(i_lp-1,j_lp,1)
-			right_val	= E_f_prod_chem%cells(i_lp+1,j_lp,1)	            
-
-			left_val2	= E_f_prod_chem%cells(i_lp-2,j_lp,1)
-			right_val2	= E_f_prod_chem%cells(i_lp+2,j_lp,1)	
-
-			left_val3	= E_f_prod_chem%cells(i_lp-3,j_lp,1)
-			right_val3	= E_f_prod_chem%cells(i_lp+3,j_lp,1)            
-			a = (right_val + left_val - 2.0_dp * max_val_lp)/2.0_dp/cell_size(1)**2
-			b = (right_val - left_val)/2.0_dp/cell_size(1) - 2.0_dp*a*coords_lp(1)
-			
-			max_val_E = max_val_lp
-
-			current_flame_location_E(1) = -b/2.0_dp/a	
-
-			current_flame_location_E(1) = Newton(coords_lp(1),(/left_val3,left_val2,left_val,max_val_E,right_val,right_val2,right_val3/),cell_size(1),1e-10*max_val_E)
-			current_flame_location_E(2) = coords_lp(2)
-            
-			!# 1D front tracer
-			flame_front_index	= 0
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-                
-				max_val(j) 		= 0.0_dp
-                max_coord(j)	= cons_inner_loop(1,2) * cell_size(1)
-                
-				do i = cons_inner_loop(1,1)+10,cons_inner_loop(1,2)-10
-					if(bc%bc_markers(i,j,k) == 0) then	
-						if ((T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val(j)) then
-							max_val(j) 		= T%cells(i+1,j,k)-T%cells(i-1,j,k)
-							flame_front_index(j)	= i
-						end if
-					end if
-                end do                
-                
-                if ( flame_front_index(j) /= 0) then                
-					left_val	= T%cells(i_lp,j_lp,1) - T%cells(i_lp-2,j_lp,1)
-					right_val	= T%cells(i_lp+2,j_lp,1) - T%cells(i_lp,j_lp,1)                 
-                
-					max_coord(j)	= (flame_front_index(j) - 0.5_dp)*cell_size(1)
-                
-					a = (right_val + left_val - 2.0_dp * max_val(j))/2.0_dp/cell_size(1)**2
-					b = (right_val - left_val)/2.0_dp/cell_size(1) - 2.0_dp*a*max_coord(j) 
-                
-					max_coord(j) = -b/2.0_dp/a
-                end if
-			end do
-            end do
-
-            j_lp		= minloc(max_coord, dim = 1)
-            i_lp		= flame_front_index(j_lp)
-            max_val_lp	= max_val(j_lp)
-
-			coords_lp(1)	= (i_lp - 0.5_dp)*cell_size(1)
-			coords_lp(2)	= (j_lp - 0.5_dp)*cell_size(1)
-
-			left_val	= T%cells(i_lp,j_lp,1) - T%cells(i_lp-2,j_lp,1)
-			right_val	= T%cells(i_lp+2,j_lp,1) - T%cells(i_lp,j_lp,1)            
-
-			left_val2	= T%cells(i_lp-1,j_lp,1) - T%cells(i_lp-3,j_lp,1)
-			right_val2	= T%cells(i_lp+3,j_lp,1) - T%cells(i_lp+1,j_lp,1)
-
-			left_val3	= T%cells(i_lp-2,j_lp,1) - T%cells(i_lp-4,j_lp,1)
-			right_val3	= T%cells(i_lp+4,j_lp,1) - T%cells(i_lp+2,j_lp,1)           
-            
-			a = (right_val + left_val - 2.0_dp * max_val_lp)/2.0_dp/cell_size(1)**2
-			b = (right_val - left_val)/2.0_dp/cell_size(1) - 2.0_dp*a*coords_lp(1)
-			
-			max_val_T = max_val_lp
-
-			current_flame_location_T(1) = -b/2.0_dp/a
-
-			current_flame_location_T(1) = Newton(coords_lp(1),(/left_val3,left_val2,left_val,max_val_T,right_val,right_val2,right_val3/),cell_size(1),1e-06*max_val_T)
-			current_flame_location_T(2) = coords_lp(2)
-
-			!# 1D front tracer
-			flame_front_index	= 0
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-                
-				max_val(j) 		= 0.0_dp
-                max_coord(j)	= cons_inner_loop(1,2) * cell_size(1)
-                
-				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
-					if(bc%bc_markers(i,j,k) == 0) then	
-						! max H
-						if (abs(Y%pr(H_index)%cells(i,j,k)) > max_val(j)) then
-							max_val(j) 		= Y%pr(H_index)%cells(i,j,k)
-							flame_front_index(j)	= i
-						end if					
-					end if
-                end do
-                
-                if ( flame_front_index(j) /= 0) then  
-					left_val	= Y%pr(H_index)%cells(i_lp-1,j_lp,1)
-					right_val	= Y%pr(H_index)%cells(i_lp+1,j_lp,1)                
-                
-					max_coord(j)	= (flame_front_index(j) - 0.5_dp)*cell_size(1)
-                
-					a = (right_val + left_val - 2.0_dp * max_val(j))/2.0_dp/cell_size(1)**2
-					b = (right_val - left_val)/2.0_dp/cell_size(1) - 2.0_dp*a*max_coord(j) 
-                
-					max_coord(j) = -b/2.0_dp/a
-                end if
-			end do
 			end do
 
-            j_lp		= minloc(max_coord, dim = 1)
-            i_lp		= flame_front_index(j_lp)
-			max_val_lp	= max_val(j_lp)
-			
-			coords_lp(1)	= (i_lp - 0.5_dp)*cell_size(1)
-			coords_lp(2)	= (j_lp - 0.5_dp)*cell_size(1)
-
-			left_val	= Y%pr(H_index)%cells(i_lp-1,j_lp,1)
-			right_val	= Y%pr(H_index)%cells(i_lp+1,j_lp,1)	            
-
-			left_val2	= Y%pr(H_index)%cells(i_lp-2,j_lp,1)
-			right_val2	= Y%pr(H_index)%cells(i_lp+2,j_lp,1)
-
-			left_val3	= Y%pr(H_index)%cells(i_lp-3,j_lp,1)
-			right_val3	= Y%pr(H_index)%cells(i_lp+3,j_lp,1)           
-            
-			a = (right_val + left_val - 2.0_dp * max_val_lp)/2.0_dp/cell_size(1)**2
-			b = (right_val - left_val)/2.0_dp/cell_size(1) - 2.0_dp*a*coords_lp(1)
-			
-			max_val_H = max_val_lp
-
-			current_flame_location_H(1) = -b/2.0_dp/a
-
-			current_flame_location_H(1) = Newton(coords_lp(1),(/left_val3,left_val2,left_val,max_val_H,right_val,right_val2,right_val3/),cell_size(1),1e-06*max_val_H)
-			current_flame_location_H(2) = coords_lp(2)
-
-			current_flame_location = current_flame_location_H
-
-			flame_velocity = 0.0_dp
-			if(track_counter == 0) then
-				farfield_velocity = farfield_velocity_array(1)
-				previous_flame_location = current_flame_location
-				previous_time = current_time
-                if (this%load_counter > 1) then
-                    do 
-						read (flame_loc_unit_old,'(20E20.12)', iostat = stat) test
-                        if (stat == 0) then
-                            data_array = test
-                        else
-                            exit
-                        end if
-                    end do
-                    
-					previous_time			= data_array(1)
-                    do dim = 1, dimensions
-                        previous_flame_location(dim)	= data_array(dim+1)
-                    end do
-                    av_flame_velocity		= data_array(dimensions+3)
-                    track_counter           = data_array(3*dimensions+14)
-
-                    if( track_counter < size(flame_velocity_hist)) then
-                        flame_velocity_hist(:mod(track_counter,size(flame_velocity_hist))) = av_flame_velocity
-                    else
-                        flame_velocity_hist = av_flame_velocity
-                    end if
-                    
-                    flame_velocity_hist(mod(track_counter,size(flame_velocity_hist))+1) = data_array(dimensions+2)
-                end if
- 			end if  
-
-        
-
-			if( (track_counter /= 0).and.(track_counter /= nint(data_array(3*dimensions+13))).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
-!            if( (correction /= 0).and.(current_flame_location(1) /=  previous_flame_location(1)) )then 
-                
-				flame_velocity		= (current_flame_location(1) - previous_flame_location(1))/(current_time - previous_time)
-                
-				flame_velocity_T	= (current_flame_location_T(1) - previous_flame_location_T(1))/(current_time - previous_time)
-				flame_velocity_H	= (current_flame_location_H(1) - previous_flame_location_H(1))/(current_time - previous_time)
-				flame_velocity_E	= (current_flame_location_E(1) - previous_flame_location_E(1))/(current_time - previous_time)
-
-				flame_velocity_hist(mod(track_counter,size(flame_velocity_hist))+1) = flame_velocity
-                
-!				av_flame_velocity = sum(flame_velocity_hist)/(count((flame_velocity_hist) > 1e-10_dp) + count((flame_velocity_hist) < -1e-10_dp))         
-
-				av_flame_velocity = sum(flame_velocity_hist)/(count(abs(flame_velocity_hist) > 1e-18_dp)) 
-                
-                print *, 'Velo hist:'
-                print *, flame_velocity_hist
-                print *, '----'
-                print *, 'Non-zero velocities:', count(abs(flame_velocity_hist) > 1e-18_dp)
-                print *, 'Av. flame velocity:', av_flame_velocity
-                
-                velocity_deviation = 0.0_dp
-                do hist_indx = 1, size(flame_velocity_hist)
-                    if(abs(flame_velocity_hist(hist_indx)) > 1e-18_dp) then
-					!	velocity_deviation = velocity_deviation + (av_flame_velocity - flame_velocity_hist(hist_indx))**2
-                        velocity_deviation = velocity_deviation + (av_flame_velocity - flame_velocity_hist(hist_indx))
+			if (found_inlet_farfield .and. allocated(farfield_species_names)) then
+				do specie_number = 1, size(farfield_species_names)
+					specie_index = this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
+					if (specie_index >= 1 .and. specie_index <= species_number) then
+						concs(specie_index) = farfield_concentrations(specie_number)
 					end if
-                end do
-                
-                !print *, 'Velocity deviation (before norm):', velocity_deviation
+				end do
+			end if
 
-                ! Simplified Mann-Kendall Test (No Tie Adjustment)
-                hist_size = size(flame_velocity_hist)
-                
-                if (count(abs(flame_velocity_hist) > 1e-18_dp) == hist_size) then
+			if (sum(concs) > 0.0_dp .and. H2_index >= 1 .and. H2_index <= species_number) then
+				X_H2 = concs(H2_index) / sum(concs) * 100.0_dp
+			else
+				X_H2 = 0.0_dp
+			end if
 
-					s = 0.0_dp
-					! Calculate S statistic (no ties expected)
-					do i = 1, hist_size-1
-					do j = i+1, hist_size
-						diff = flame_velocity_hist(j) - flame_velocity_hist(i)
-						if (diff > 0.0_dp) then
-							s = s + 1.0_dp    ! Increasing
-						else if (diff < 0.0_dp) then
-							s = s - 1.0_dp    ! Decreasing
-						end if
-					end do
-					end do
+			chemical_mechanism = trim(this%chem%chem_ptr%get_chemical_mechanism())
+			data_table_filename = 'H2-Air_flamelet_' // trim(chemical_mechanism) // '_' // &
+				trim(str_r(X_H2)) // '_pcnt_' // trim(str_e(cell_size(1))) // '_dx.dat'
+			chem_table_filename = 'H2-Air_chem_table_' // trim(chemical_mechanism) // '_' // &
+				trim(str_r(X_H2)) // '_pcnt_' // trim(str_e(cell_size(1))) // '_dx.dat'
 
-					! Simplified variance (no tie adjustment)
-					var_s = real(hist_size)*(hist_size-1)*(2*hist_size+5)/18.0_dp
+			previous_correction_time = time
+			adaptive_gain = controller_gain_initial
+			initialized = .true.
+		end if
 
-					! Z-score with continuity correction
-					if (s > 0.0_dp) then
-						z = (s - 1.0_dp) / sqrt(var_s)
-					else if (s < 0.0_dp) then
-						z = (s + 1.0_dp) / sqrt(var_s)
-					else
-						z = 0.0
-                    end if
-                end if
-                
-                !velocity_deviation = sqrt(velocity_deviation / (count(abs(flame_velocity_hist) > 1e-18_dp))) / abs(av_flame_velocity) * 100.0_dp
-                !velocity_deviation = (velocity_deviation / (count(abs(flame_velocity_hist) > 1e-18_dp))) / abs(av_flame_velocity) * 100.0_dp
-                
-                !print *, 'Velocity deviation (after norm):', velocity_deviation
-                
-                !pause
+		if (.not. inlet_velocity_initialized) then
+			inlet_velocity_target  = farfield_velocity_array(1)
+			inlet_velocity_applied = farfield_velocity_array(1)
+			ramp_start_velocity = inlet_velocity_applied
+			ramp_start_time = time
+			inlet_velocity_initialized = .true.
+		end if
 
-				!if (av_flame_velocity < 0.0_dp) then
-				!	correction_flag = .true.
-				!else
-				!	correction_flag = .false.
-				!end if
-                
-				!if ((track_counter > 10).and.(correction_flag).and.(abs(velocity_deviation) < 1e+01_dp).and.((time - previous_correction_time) / time_stabilization > 1)) then
-                if ((count(abs(flame_velocity_hist) > 1e-18_dp) == hist_size).and.(correction_flag))  then
-                    print *, abs(z)
-                    print *, (time - previous_correction_time) / time_stabilization
-                !    pause
-					if ((abs(z) > 1.96_dp).and.((time - previous_correction_time) / time_stabilization > 1)) then
-						farfield_velocity_array = max(farfield_velocity_array - 0.01_dp*av_flame_velocity, 0.0_dp)
-						previous_correction_time = time
-						correction_counter = correction_counter + 1 
-					end if
-                end if
-				
-                data_array(1)		                = time
-                do dim = 1, dimensions
-                    data_array(dim+1)	            = current_flame_location(dim)
-                end do
-                
-                data_array(dimensions+2)            = flame_velocity
-                data_array(dimensions+3)	        = av_flame_velocity
-                data_array(dimensions+4)	        = farfield_velocity_array(1)
-                data_array(dimensions+5)	        = abs(farfield_velocity_array(1))+abs(av_flame_velocity)
-                data_array(dimensions+6)	        = max_val_H
-                do dim = 1, dimensions
-                    data_array(dimensions+6+dim)    = current_flame_location_T(dim)
-                end do
-                data_array(2*dimensions+7)		    = flame_velocity_T
-                data_array(2*dimensions+8)		    = max_val_T
-                do dim = 1, dimensions
-                    data_array(2*dimensions+8+dim)	= current_flame_location_E(dim)
-                end do
-                data_array(3*dimensions+9)          = flame_velocity_E
-                data_array(3*dimensions+10)         = max_val_E
-                data_array(3*dimensions+11)         = z
-                data_array(3*dimensions+12)         = correction_counter
-                data_array(3*dimensions+13)         = stabilization_counter
-                data_array(3*dimensions+14)         = track_counter
-				
-				if (mod(track_counter,1) == 0) then
-					write (flame_loc_unit,'(20E20.12)') data_array
+		time_delay           = time_delay_default
+		time_track           = time_track_default
+		time_control         = time_control_default
+		response_settle_time = response_settle_default
+		inlet_ramp_time      = active_inlet_ramp_time
+
+!		! Apply a finite-duration linear inlet ramp on every call, not only on
+!		! tracking calls.  This avoids an acoustic jump but also avoids the very
+!		! long tail of exponential relaxation.
+		if (inlet_ramp_time > 0.0_dp) then
+			ramp_elapsed = max(time - ramp_start_time, 0.0_dp)
+			ramp_fraction = min(ramp_elapsed / inlet_ramp_time, 1.0_dp)
+		else
+			ramp_fraction = 1.0_dp
+		end if
+		inlet_velocity_applied = ramp_start_velocity + &
+			ramp_fraction * (inlet_velocity_target - ramp_start_velocity)
+		farfield_velocity_array(1) = inlet_velocity_applied
+
+		ramp_residual = abs(inlet_velocity_target - inlet_velocity_applied)
+		ramp_tolerance = max(ramp_settle_fraction * max(abs(inlet_velocity_target), min_abs_velocity_step), &
+			1.0e-12_dp)
+		ramp_settled = (ramp_residual <= ramp_tolerance .or. ramp_fraction >= 1.0_dp)
+
+		if ((time - time_delay) / time_track <= real(track_counter + 1, dp)) return
+
+		associate (T => this%T%s_ptr, &
+				   Y => this%Y%v_ptr, &
+				   E_f_prod_chem => this%E_f_prod_chem%s_ptr, &
+				   bc => this%boundary%bc_ptr)
+
+			if (.not. output_initialized) call initialize_output_file()
+
+!			! --- First pass: maxima for robust thresholds and diagnostics.
+			heat_release_max = 0.0_dp
+			H_max            = 0.0_dp
+			Tgrad_max        = 0.0_dp
+			do k = cons_inner_loop(3,1), cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1), cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1), cons_inner_loop(1,2)
+				if (bc%bc_markers(i,j,k) /= 0) cycle
+
+				qdot = max(E_f_prod_chem%cells(i,j,k), 0.0_dp)
+				heat_release_max = max(heat_release_max, qdot)
+
+				if (H_index >= 1 .and. H_index <= species_number) then
+					hval = abs(Y%pr(H_index)%cells(i,j,k))
+					H_max = max(H_max, hval)
 				end if
 
-				previous_flame_location		= current_flame_location
+				tgrad = temperature_gradient_norm(i,j,k)
+				Tgrad_max = max(Tgrad_max, tgrad)
+			end do
+			end do
+			end do
 
-				previous_flame_location_T	= current_flame_location_T
-				previous_flame_location_H	= current_flame_location_H
-				previous_flame_location_E	= current_flame_location_E
+			heat_release_peak_save = max(heat_release_peak_save, heat_release_max)
+			heat_release_valid_limit = max(heat_release_valid_absolute, &
+				heat_release_valid_relative * heat_release_peak_save)
 
-				previous_time = current_time
-				
-				if( (track_counter /= 0).and.(abs(av_flame_velocity) < 1e-06))then 
+!			! --- Second pass: heat-release centroid and fallback centroids.
+			heat_release_centroid = 0.0_dp
+			H_centroid            = 0.0_dp
+			Tgrad_centroid        = 0.0_dp
+			sum_weight            = 0.0_dp
+			sum_H_weight          = 0.0_dp
+			sum_Tgrad_weight      = 0.0_dp
+			sum_s                 = 0.0_dp
+			sum_s2                = 0.0_dp
+			heat_release_integral = 0.0_dp
+
+			qdot_cut = heat_release_cut_fraction * heat_release_max
+
+			do k = cons_inner_loop(3,1), cons_inner_loop(3,2)
+			do j = cons_inner_loop(2,1), cons_inner_loop(2,2)
+			do i = cons_inner_loop(1,1), cons_inner_loop(1,2)
+				if (bc%bc_markers(i,j,k) /= 0) cycle
+
+				coord = cell_center_coordinates(i,j,k)
+				s_coord = coord(front_axis)
+
+				qdot = max(E_f_prod_chem%cells(i,j,k), 0.0_dp)
+				if (qdot > qdot_cut) then
+					weight = qdot * cell_volume
+					heat_release_centroid = heat_release_centroid + weight * coord
+					sum_weight = sum_weight + weight
+					sum_s  = sum_s  + weight * s_coord
+					sum_s2 = sum_s2 + weight * s_coord * s_coord
+					heat_release_integral = heat_release_integral + weight
+				end if
+
+				if (H_index >= 1 .and. H_index <= species_number) then
+					hval = max(Y%pr(H_index)%cells(i,j,k), 0.0_dp)
+					if (hval > 0.0_dp) then
+						weight = hval * cell_volume
+						H_centroid = H_centroid + weight * coord
+						sum_H_weight = sum_H_weight + weight
+					end if
+				end if
+
+				tgrad = temperature_gradient_norm(i,j,k)
+				if (tgrad > 0.0_dp) then
+					weight = tgrad * cell_volume
+					Tgrad_centroid = Tgrad_centroid + weight * coord
+					sum_Tgrad_weight = sum_Tgrad_weight + weight
+				end if
+			end do
+			end do
+			end do
+
+			trace_success = .false.
+			flame_detected = .false.
+			current_flame_location = 0.0_dp
+			front_spread = 0.0_dp
+
+			if (sum_weight > tiny_weight) then
+				current_flame_location = heat_release_centroid / sum_weight
+				front_spread = max(sum_s2 / sum_weight - (sum_s / sum_weight)**2, 0.0_dp)
+				front_spread = sqrt(front_spread)
+				trace_success = .true.
+				flame_detected = (heat_release_max >= heat_release_valid_limit)
+			else if (sum_H_weight > tiny_weight) then
+!				! Diagnostic fallback only.  Do not use this point for feedback control.
+				current_flame_location = H_centroid / sum_H_weight
+				trace_success = .true.
+			else if (sum_Tgrad_weight > tiny_weight) then
+!				! Diagnostic fallback only.  Do not use this point for feedback control.
+				current_flame_location = Tgrad_centroid / sum_Tgrad_weight
+				trace_success = .true.
+			end if
+
+			if (.not. trace_success) then
+				track_counter = track_counter + 1
+				return
+			end if
+
+			current_front_coord = current_flame_location(front_axis)
+			if (flame_detected .and. .not. front_reference_initialized) then
+				front_reference_coord = current_front_coord
+				front_reference_initialized = .true.
+			end if
+
+			front_safe_min = domain_front_min + outlet_guard_distance
+			front_safe_max = domain_front_max - outlet_guard_distance
+			if (front_reference_initialized) then
+				front_safe_min = max(front_safe_min, front_reference_coord - capture_position_tolerance)
+				front_safe_max = min(front_safe_max, front_reference_coord + capture_position_tolerance)
+			end if
+			if (front_safe_min >= front_safe_max) then
+				front_safe_min = domain_front_min + outlet_guard_distance
+				front_safe_max = domain_front_max - outlet_guard_distance
+			end if
+
+			diag_flame_velocity_lsq = 0.0_dp
+			diag_flame_velocity_filtered = 0.0_dp
+			if (flame_detected) then
+				call append_diagnostic_history(time, current_front_coord)
+				diag_flame_velocity_lsq = diagnostic_least_squares_velocity()
+				if (diag_hist_count <= 2) then
+					diag_flame_velocity_filtered = diag_flame_velocity_lsq
+					diag_filtered_velocity_save = diag_flame_velocity_filtered
+				else
+					diag_flame_velocity_filtered = (1.0_dp - filter_alpha) * diag_filtered_velocity_save + &
+						filter_alpha * diag_flame_velocity_lsq
+					diag_filtered_velocity_save = diag_flame_velocity_filtered
+				end if
+			else
+				diag_hist_count = 0
+				diag_filtered_velocity_save = 0.0_dp
+			end if
+
+			control_performed = .false.
+			reset_history_after_log = .false.
+			du_raw = 0.0_dp
+			du_limited = 0.0_dp
+			target_step_for_log = 0.0_dp
+			flame_velocity_lsq = diag_flame_velocity_lsq
+			flame_velocity_filtered = diag_flame_velocity_filtered
+			position_error = 0.0_dp
+			position_control_error = 0.0_dp
+			position_velocity = 0.0_dp
+			control_velocity = 0.0_dp
+			sl_displacement = sl_displacement_save
+			linear_r2 = measurement_r2_save
+			linear_rms = measurement_rms_save
+			split_slope_diff = measurement_split_slope_diff_save
+			measurement_elapsed = 0.0_dp
+			measurement_displacement = 0.0_dp
+			measurement_linear_ok = .false.
+			capture_mode = .false.
+			emergency_mode = .false.
+
+			if (front_reference_initialized) then
+				position_error = current_front_coord - front_reference_coord
+				position_control_error = safe_window_error(current_front_coord, front_safe_min, front_safe_max)
+				position_velocity = position_control_error / max(position_relaxation_time, time_track)
+				outlet_distance = domain_front_max - current_front_coord
+				capture_mode = (position_control_error /= 0.0_dp) .or. &
+					(outlet_distance < outlet_guard_distance)
+				emergency_mode = (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
+					(abs(position_control_error) > capture_position_tolerance)
+			end if
+
+			if (capture_mode) then
+				response_settle_effective = response_settle_capture
+				time_control_effective = time_control_capture
+			else
+				response_settle_effective = response_settle_time
+				time_control_effective = time_control
+			end if
+
+!			! Do not collect velocity statistics while the inlet is still ramping,
+!			! while the flow is inside the post-correction settling interval, or when
+!			! the actual heat-release front is lost.  H/T-gradient fallback points are
+!			! logged but never allowed to drive the inlet.
+			measurement_enabled = flame_detected .and. front_reference_initialized .and. ramp_settled .and. &
+				((control_stage == stage_anchor_control) .or. &
+				 (control_stage == stage_flamelet_ready)) .and. &
+				((time - previous_correction_time) >= response_settle_effective)
+
+			if (measurement_enabled) then
+				call append_front_history(time, current_front_coord)
+				flame_velocity_lsq = least_squares_velocity()
+
+				if (hist_count <= 2) then
+					flame_velocity_filtered = flame_velocity_lsq
+					filtered_velocity_save  = flame_velocity_filtered
+				else
+					flame_velocity_filtered = (1.0_dp - filter_alpha) * filtered_velocity_save + &
+						filter_alpha * flame_velocity_lsq
+					filtered_velocity_save = flame_velocity_filtered
+				end if
+
+				position_error = current_front_coord - front_reference_coord
+				position_control_error = safe_window_error(current_front_coord, front_safe_min, front_safe_max)
+				position_velocity = position_control_error / max(position_relaxation_time, time_track)
+				control_velocity = flame_velocity_filtered + position_velocity
+				outlet_distance = domain_front_max - current_front_coord
+				capture_mode = (position_control_error /= 0.0_dp) .or. &
+					(abs(flame_velocity_filtered) > capture_velocity_threshold) .or. &
+					(outlet_distance < outlet_guard_distance)
+				emergency_mode = (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
+					(abs(position_control_error) > capture_position_tolerance)
+				if (capture_mode) then
+					time_control_effective = time_control_capture
+				else
+					time_control_effective = time_control
+				end if
+			else if (control_stage == stage_anchor_control) then
+				call clear_control_history()
+				if (.not. flame_detected) has_bracket = .false.
+			else if (.not. flame_detected) then
+				call clear_control_history()
+				has_bracket = .false.
+			end if
+
+!			! --- Open-loop drift measurement after the flame has first been stabilized.
+!			!     In this stage the inlet target is fixed.  The flame-front coordinate
+!			!     must be well approximated by a straight line in time.  The displacement
+!			!     flame-speed estimate is then S_L = U_in - V_f for the current sign
+!			!     convention.  For other coordinate conventions only this diagnostic sign
+!			!     may need to be changed.
+			if (control_stage == stage_measurement_ramp) then
+				if (flame_detected .and. ramp_settled .and. &
+					(time - ramp_start_time) >= measurement_settle_time) then
+					call clear_control_history()
+					measurement_start_time = time
+					measurement_start_coord = current_front_coord
+					control_stage = stage_drift_measurement
+				end if
+			else if (control_stage == stage_drift_measurement) then
+				if (flame_detected .and. ramp_settled) then
+					call append_front_history(time, current_front_coord)
+					flame_velocity_lsq = least_squares_velocity()
+					flame_velocity_filtered = flame_velocity_lsq
+					measurement_velocity_save = flame_velocity_lsq
+					control_velocity = flame_velocity_lsq
+					measurement_elapsed = time - measurement_start_time
+					measurement_displacement = current_front_coord - measurement_start_coord
+					call drift_linearity_diagnostics(linear_r2, linear_rms, split_slope_diff)
+					measurement_r2_save = linear_r2
+					measurement_rms_save = linear_rms
+					measurement_split_slope_diff_save = split_slope_diff
+					sl_displacement = inlet_velocity_target - flame_velocity_lsq
+					sl_displacement_save = sl_displacement
+					measurement_linear_ok = (hist_count >= min_hist_for_sl_measurement) .and. &
+						(measurement_elapsed >= measurement_min_duration) .and. &
+						(abs(measurement_displacement) >= measurement_min_displacement_cells * cell_size(front_axis)) .and. &
+						(linear_r2 >= measurement_r2_min) .and. &
+						(linear_rms <= measurement_residual_cells * cell_size(front_axis)) .and. &
+						(split_slope_diff <= max(measurement_split_slope_abs_tol, &
+							measurement_split_slope_rel_tol * max(abs(flame_velocity_lsq), velocity_tolerance_on)))
+					if (measurement_linear_ok) then
+						measurement_velocity_save = flame_velocity_lsq
+						control_stage = stage_measurement_done
+						stabilization_counter = stable_required_count
+						call write_laminar_velocity_once()
+					else if (measurement_elapsed >= measurement_max_duration .and. &
+						abs(measurement_displacement) < measurement_no_motion_displacement_cells * cell_size(front_axis)) then
+!						! The perturbation did not move the heat-release centroid by even a
+!						! fraction of a cell.  This usually means numerical pinning or that the
+!						! imposed velocity perturbation is too small compared with the discrete
+!						! front-location uncertainty.  Retry with a larger open-loop perturbation.
+						if (measurement_attempt < measurement_max_attempts) then
+							measurement_attempt = measurement_attempt + 1
+							current_measurement_delta = min(measurement_delta_growth * max(current_measurement_delta, &
+								measurement_delta_min), measurement_delta_max_fraction * &
+								max(abs(stabilized_inlet_velocity), min_abs_velocity_step))
+							measurement_inlet_velocity = max(stabilized_inlet_velocity + &
+								measurement_delta_sign * current_measurement_delta, 0.0_dp)
+							inlet_velocity_target = measurement_inlet_velocity
+							ramp_start_velocity = inlet_velocity_applied
+							ramp_start_time = time
+							active_inlet_ramp_time = measurement_ramp_time
+							control_stage = stage_measurement_ramp
+							sl_displacement_save = 0.0_dp
+							measurement_velocity_save = 0.0_dp
+							measurement_r2_save = 0.0_dp
+							measurement_rms_save = 0.0_dp
+							measurement_split_slope_diff_save = 0.0_dp
+							call clear_control_history()
+						else
+							control_stage = stage_measurement_failed
+						end if
+					end if
+				else
+					call clear_control_history()
+				end if
+			end if
+
+!			! --- Feedback control.  The correction is rare and based on the response
+!			!     measured after the previous target velocity has settled.
+			if (measurement_enabled .and. &
+				hist_count >= merge(min_hist_for_capture, min_hist_for_control, capture_mode)) then
+				if ((time - previous_correction_time) >= time_control_effective) then
+					if (control_action_needed()) then
+						measured_inlet_velocity = inlet_velocity_target
+
+						call update_adaptive_gain(control_velocity)
+						call update_bracket(measured_inlet_velocity, control_velocity)
+						call choose_new_inlet_target(measured_inlet_velocity, control_velocity, &
+							proposed_inlet_velocity, du_raw, du_limited)
+
+						if (abs(proposed_inlet_velocity - measured_inlet_velocity) > 0.0_dp) then
+							inlet_velocity_target = proposed_inlet_velocity
+							target_step_for_log = inlet_velocity_target - measured_inlet_velocity
+							if (capture_mode) then
+								active_inlet_ramp_time = inlet_ramp_time_capture
+							else
+								active_inlet_ramp_time = inlet_ramp_time_fine
+							end if
+							ramp_start_velocity = inlet_velocity_applied
+							ramp_start_time = time
+							previous_correction_time = time
+							correction_counter = correction_counter + 1
+							control_performed = .true.
+							reset_history_after_log = .true.
+						end if
+
+						previous_control_inlet_velocity = measured_inlet_velocity
+						previous_control_velocity = control_velocity
+						have_previous_control_point = .true.
+					end if
+				end if
+			end if
+
+			if (control_stage == stage_anchor_control) then
+				if (measurement_enabled .and. ramp_settled .and. hist_count >= min_hist_for_control .and. &
+					abs(diag_flame_velocity_filtered) < velocity_tolerance_off .and. &
+					position_control_error == 0.0_dp) then
 					stabilization_counter = stabilization_counter + 1
+				else if (control_performed .or. .not. flame_detected .or. &
+					abs(diag_flame_velocity_filtered) > velocity_tolerance_on .or. &
+					position_control_error /= 0.0_dp) then
+					stabilization_counter = 0
 				end if
-				
+			else if (control_stage == stage_flamelet_ready) then
+				if (measurement_enabled .and. ramp_settled .and. hist_count >= min_hist_for_control .and. &
+					abs(diag_flame_velocity_filtered) < velocity_tolerance_off .and. &
+					position_control_error == 0.0_dp) then
+					post_flamelet_hold_counter = post_flamelet_hold_counter + 1
+					stabilization_counter = post_flamelet_hold_counter
+				else if (control_performed .or. .not. flame_detected .or. &
+					abs(diag_flame_velocity_filtered) > velocity_tolerance_on .or. &
+					position_control_error /= 0.0_dp) then
+					post_flamelet_hold_counter = 0
+					stabilization_counter = 0
+				end if
+			else if (control_stage == stage_measurement_done) then
+				stabilization_counter = stable_required_count
 			end if
 
-			if(stabilization_counter > 100) then
-				stabilized = .true.
-                if (stabilized) then
-					call this%chem_kin_solver%write_chemical_kinetics_table(chem_table_filename)
-					call this%write_data_table(data_table_filename)
-					stop
-				end if
+			if (control_stage == stage_anchor_control .or. control_stage == stage_flamelet_ready) then
+				flame_velocity_lsq = diag_flame_velocity_lsq
+				flame_velocity_filtered = diag_flame_velocity_filtered
+			else if (control_stage == stage_measurement_done) then
+				flame_velocity_lsq = measurement_velocity_save
+				flame_velocity_filtered = measurement_velocity_save
+				control_velocity = measurement_velocity_save
+				sl_displacement = sl_displacement_save
+				linear_r2 = measurement_r2_save
+				linear_rms = measurement_rms_save
+				split_slope_diff = measurement_split_slope_diff_save
 			end if
-			
+
+			active_track_number = track_counter
+			call write_tracking_line()
+
+			if (reset_history_after_log) call clear_control_history()
+
+			previous_front_coord = current_front_coord
 			track_counter = track_counter + 1
-			
-		end if	
-			
+
+			if (control_stage == stage_anchor_control .and. &
+				stabilization_counter >= flamelet_required_count) then
+				if (active_workflow == workflow_flamelet_sl) then
+!					! Scenario 1: the first stabilization stage is complete.  Write the
+!					! flamelet before any open-loop velocity perturbation is applied.
+					if (enable_flamelet_output) call write_flamelet_tables_once()
+					control_stage = stage_flamelet_ready
+					stabilization_counter = 0
+					post_flamelet_hold_counter = 0
+					call clear_control_history()
+				else
+!					! Scenario 2: keep anchoring indefinitely.  Do not write flamelet
+!					! data, do not perturb the inlet, and do not return a stop signal.
+					stabilized = .false.
+				end if
+
+			else if (control_stage == stage_flamelet_ready .and. &
+				post_flamelet_hold_counter >= post_flamelet_hold_required_count) then
+				if (enable_drift_measurement .and. dimensions == 1) then
+					call start_drift_measurement_ramp(time)
+				else if (pause_after_sl_measurement) then
+					stabilized = .true.
+				end if
+
+			else if (control_stage == stage_measurement_done) then
+				if (pause_after_sl_measurement) stabilized = .true.
+			end if
+
 		end associate
 
-    end subroutine	
+	contains
+
+		subroutine initialize_output_file()
+			integer :: local_dim
+
+			write(flame_data_file,'(A,I0,A)') 'av_flame_data_', this%load_counter, '.dat'
+			open(newunit = flame_loc_unit, file = flame_data_file, status = 'replace', form = 'formatted')
+
+			av_header = 'VARIABLES="time" '
+			do local_dim = 1, dimensions
+				av_header = trim(av_header) // '"xf_' // trim(axis_names(local_dim)) // '" '
+			end do
+			av_header = trim(av_header) // '"Vfl_lsq" "Vfl_filtered" "Vfl_diag_lsq" "Vfl_diag_filtered" "Vfl_measurement_lsq" "Vcontrol" "pos_error" "x_ref" '
+			av_header = trim(av_header) // '"U_in_applied" "U_in_target" '
+			av_header = trim(av_header) // '"dU_target" "adaptive_gain" "hist_count" ' // &
+				'"measurement_on" "bracket_on" "capture_on" "emergency_on" "flame_detected" '
+			av_header = trim(av_header) // '"front_spread" "Qint" "Qmax" "Qvalid" "Hmax" "Tgradmax" '
+			av_header = trim(av_header) // '"stage" "SL_disp" "lin_R2" "lin_RMS" "split_dV" '
+			av_header = trim(av_header) // '"corr_count" "stab_count" "track_count"'
+
+			write(flame_loc_unit,'(A)') trim(av_header)
+			output_initialized = .true.
+		end subroutine initialize_output_file
+
+		function cell_center_coordinates(ii,jj,kk) result(xc)
+			integer, intent(in) :: ii, jj, kk
+			real(dp) :: xc(3)
+
+			xc = 0.0_dp
+			xc(1) = (real(ii,dp) - 0.5_dp) * cell_size(1)
+			if (dimensions >= 2) xc(2) = (real(jj,dp) - 0.5_dp) * cell_size(2)
+			if (dimensions >= 3) xc(3) = (real(kk,dp) - 0.5_dp) * cell_size(3)
+		end function cell_center_coordinates
+
+		function temperature_gradient_norm(ii,jj,kk) result(grad_norm)
+			integer, intent(in) :: ii, jj, kk
+			real(dp) :: grad_norm
+			real(dp) :: g2, gd
+
+			g2 = 0.0_dp
+			if (dimensions >= 1) then
+				if (ii > cons_inner_loop(1,1) .and. ii < cons_inner_loop(1,2)) then
+					gd = (this%T%s_ptr%cells(ii+1,jj,kk) - this%T%s_ptr%cells(ii-1,jj,kk)) / (2.0_dp * cell_size(1))
+					g2 = g2 + gd * gd
+				end if
+			end if
+			if (dimensions >= 2) then
+				if (jj > cons_inner_loop(2,1) .and. jj < cons_inner_loop(2,2)) then
+					gd = (this%T%s_ptr%cells(ii,jj+1,kk) - this%T%s_ptr%cells(ii,jj-1,kk)) / (2.0_dp * cell_size(2))
+					g2 = g2 + gd * gd
+				end if
+			end if
+			if (dimensions >= 3) then
+				if (kk > cons_inner_loop(3,1) .and. kk < cons_inner_loop(3,2)) then
+					gd = (this%T%s_ptr%cells(ii,jj,kk+1) - this%T%s_ptr%cells(ii,jj,kk-1)) / (2.0_dp * cell_size(3))
+					g2 = g2 + gd * gd
+				end if
+			end if
+			grad_norm = sqrt(g2)
+		end function temperature_gradient_norm
+
+		subroutine append_front_history(t_new, s_new)
+			real(dp), intent(in) :: t_new, s_new
+
+			if (hist_count < max_hist_size) then
+				hist_count = hist_count + 1
+				time_hist(hist_count) = t_new
+				front_coord_hist(hist_count) = s_new
+			else
+				time_hist(1:max_hist_size-1) = time_hist(2:max_hist_size)
+				front_coord_hist(1:max_hist_size-1) = front_coord_hist(2:max_hist_size)
+				time_hist(max_hist_size) = t_new
+				front_coord_hist(max_hist_size) = s_new
+			end if
+		end subroutine append_front_history
+
+
+		subroutine append_diagnostic_history(t_new, s_new)
+			real(dp), intent(in) :: t_new, s_new
+
+			if (diag_hist_count < max_diag_hist_size) then
+				diag_hist_count = diag_hist_count + 1
+				diag_time_hist(diag_hist_count) = t_new
+				diag_front_coord_hist(diag_hist_count) = s_new
+			else
+				diag_time_hist(1:max_diag_hist_size-1) = diag_time_hist(2:max_diag_hist_size)
+				diag_front_coord_hist(1:max_diag_hist_size-1) = diag_front_coord_hist(2:max_diag_hist_size)
+				diag_time_hist(max_diag_hist_size) = t_new
+				diag_front_coord_hist(max_diag_hist_size) = s_new
+			end if
+		end subroutine append_diagnostic_history
+
+
+		subroutine clear_control_history()
+			hist_count = 0
+			filtered_velocity_save = 0.0_dp
+			time_hist = 0.0_dp
+			front_coord_hist = 0.0_dp
+		end subroutine clear_control_history
+
+		function least_squares_velocity() result(vfit)
+			real(dp) :: vfit
+			integer :: n
+			real(dp) :: t_av, s_av, numerator, denominator
+
+			if (hist_count < 2) then
+				vfit = 0.0_dp
+				return
+			end if
+
+			t_av = sum(time_hist(1:hist_count)) / real(hist_count, dp)
+			s_av = sum(front_coord_hist(1:hist_count)) / real(hist_count, dp)
+			numerator   = 0.0_dp
+			denominator = 0.0_dp
+			do n = 1, hist_count
+				numerator = numerator + (time_hist(n) - t_av) * (front_coord_hist(n) - s_av)
+				denominator = denominator + (time_hist(n) - t_av)**2
+			end do
+
+			if (denominator > tiny(denominator)) then
+				vfit = numerator / denominator
+			else
+				vfit = 0.0_dp
+			end if
+		end function least_squares_velocity
+
+
+
+		function diagnostic_least_squares_velocity() result(vfit)
+			real(dp) :: vfit
+			integer :: n
+			real(dp) :: t_av, s_av, numerator, denominator
+
+			if (diag_hist_count < 2) then
+				vfit = 0.0_dp
+				return
+			end if
+
+			t_av = sum(diag_time_hist(1:diag_hist_count)) / real(diag_hist_count, dp)
+			s_av = sum(diag_front_coord_hist(1:diag_hist_count)) / real(diag_hist_count, dp)
+			numerator   = 0.0_dp
+			denominator = 0.0_dp
+			do n = 1, diag_hist_count
+				numerator = numerator + (diag_time_hist(n) - t_av) * &
+					(diag_front_coord_hist(n) - s_av)
+				denominator = denominator + (diag_time_hist(n) - t_av)**2
+			end do
+
+			if (denominator > tiny(denominator)) then
+				vfit = numerator / denominator
+			else
+				vfit = 0.0_dp
+			end if
+		end function diagnostic_least_squares_velocity
+
+
+		subroutine drift_linearity_diagnostics(r2_out, rms_out, split_slope_diff_out)
+			real(dp), intent(out) :: r2_out, rms_out, split_slope_diff_out
+			integer :: n, mid
+			real(dp) :: v_all, t_av, s_av, intercept, ss_tot, ss_res, residual
+			real(dp) :: v_first, v_second
+
+			r2_out = 0.0_dp
+			rms_out = huge(1.0_dp)
+			split_slope_diff_out = huge(1.0_dp)
+			if (hist_count < 4) return
+
+			v_all = least_squares_velocity()
+			t_av = sum(time_hist(1:hist_count)) / real(hist_count, dp)
+			s_av = sum(front_coord_hist(1:hist_count)) / real(hist_count, dp)
+			intercept = s_av - v_all * t_av
+			ss_tot = 0.0_dp
+			ss_res = 0.0_dp
+			do n = 1, hist_count
+				residual = front_coord_hist(n) - (intercept + v_all * time_hist(n))
+				ss_res = ss_res + residual * residual
+				ss_tot = ss_tot + (front_coord_hist(n) - s_av)**2
+			end do
+			rms_out = sqrt(ss_res / real(hist_count, dp))
+			if (ss_tot > tiny(ss_tot)) then
+				r2_out = max(0.0_dp, 1.0_dp - ss_res / ss_tot)
+			else
+				r2_out = 0.0_dp
+			end if
+
+			mid = hist_count / 2
+			v_first = least_squares_velocity_range(1, mid)
+			v_second = least_squares_velocity_range(mid + 1, hist_count)
+			split_slope_diff_out = abs(v_second - v_first)
+		end subroutine drift_linearity_diagnostics
+
+		function least_squares_velocity_range(n_first, n_last) result(vfit)
+			integer, intent(in) :: n_first, n_last
+			real(dp) :: vfit
+			integer :: n, n_local
+			real(dp) :: t_av, s_av, numerator, denominator
+
+			n_local = n_last - n_first + 1
+			if (n_local < 2) then
+				vfit = 0.0_dp
+				return
+			end if
+
+			t_av = 0.0_dp
+			s_av = 0.0_dp
+			do n = n_first, n_last
+				t_av = t_av + time_hist(n)
+				s_av = s_av + front_coord_hist(n)
+			end do
+			t_av = t_av / real(n_local, dp)
+			s_av = s_av / real(n_local, dp)
+
+			numerator = 0.0_dp
+			denominator = 0.0_dp
+			do n = n_first, n_last
+				numerator = numerator + (time_hist(n) - t_av) * (front_coord_hist(n) - s_av)
+				denominator = denominator + (time_hist(n) - t_av)**2
+			end do
+			if (denominator > tiny(denominator)) then
+				vfit = numerator / denominator
+			else
+				vfit = 0.0_dp
+			end if
+		end function least_squares_velocity_range
+
+		pure function deadband_error(value, tolerance) result(error_out)
+			real(dp), intent(in) :: value, tolerance
+			real(dp) :: error_out
+
+			if (abs(value) <= tolerance) then
+				error_out = 0.0_dp
+			else
+				error_out = sign(abs(value) - tolerance, value)
+			end if
+		end function deadband_error
+
+		pure function safe_window_error(value, lower_bound, upper_bound) result(error_out)
+			real(dp), intent(in) :: value, lower_bound, upper_bound
+			real(dp) :: error_out
+
+			if (value < lower_bound) then
+				error_out = value - lower_bound
+			else if (value > upper_bound) then
+				error_out = value - upper_bound
+			else
+				error_out = 0.0_dp
+			end if
+		end function safe_window_error
+
+		logical function control_action_needed()
+			control_action_needed = (abs(flame_velocity_filtered) > velocity_tolerance_on) .or. &
+				(abs(position_control_error) > 0.0_dp .and. abs(control_velocity) > velocity_tolerance_on)
+		end function control_action_needed
+
+		subroutine update_adaptive_gain(v_current)
+			real(dp), intent(in) :: v_current
+
+!			The previous version damped the gain whenever the measured velocity
+!			magnitude increased.  In the supplied logs this drove the gain to its
+!			minimum while the flame was still drifting monotonically.  Here the gain
+!			is reduced only after a true sign reversal of the anchored control error.
+!			Same-sign errors are treated as persistent drift and the gain is allowed
+!			to recover.  The finite step limiter and inlet ramp remain responsible for
+!			preventing acoustic forcing.
+			if (have_previous_control_point) then
+				if (v_current * previous_control_velocity < 0.0_dp) then
+					same_sign_error_counter = 0
+					adaptive_gain = max(0.7_dp * adaptive_gain, controller_gain_min)
+				else
+					same_sign_error_counter = same_sign_error_counter + 1
+					if (same_sign_error_counter >= 2) then
+						adaptive_gain = min(1.10_dp * adaptive_gain, controller_gain_max)
+					else
+						adaptive_gain = min(1.03_dp * adaptive_gain, controller_gain_max)
+					end if
+				end if
+			else
+				same_sign_error_counter = 0
+			end if
+		end subroutine update_adaptive_gain
+
+		subroutine update_bracket(u_current, v_current)
+			real(dp), intent(in) :: u_current, v_current
+
+			if (abs(v_current) <= velocity_tolerance_off) return
+
+			if (have_previous_control_point) then
+				if (abs(u_current - previous_control_inlet_velocity) >= min_secant_du .and. &
+					v_current * previous_control_velocity < 0.0_dp) then
+					bracket_u_a = previous_control_inlet_velocity
+					bracket_v_a = previous_control_velocity
+					bracket_u_b = u_current
+					bracket_v_b = v_current
+					has_bracket = .true.
+				end if
+			end if
+
+			if (has_bracket) then
+				if (v_current * bracket_v_a > 0.0_dp) then
+					bracket_u_a = u_current
+					bracket_v_a = v_current
+				else if (v_current * bracket_v_b > 0.0_dp) then
+					bracket_u_b = u_current
+					bracket_v_b = v_current
+				end if
+				if (bracket_v_a * bracket_v_b > 0.0_dp) has_bracket = .false.
+				if (abs(bracket_u_a - bracket_u_b) < min_secant_du) has_bracket = .false.
+			end if
+		end subroutine update_bracket
+
+		subroutine choose_new_inlet_target(u_current, v_current, u_new, du_unlimited, du_final)
+			real(dp), intent(in)  :: u_current, v_current
+			real(dp), intent(out) :: u_new, du_unlimited, du_final
+			real(dp) :: dU, dV, response_slope, secant_step, bracket_target
+			real(dp) :: gain_effective, max_fraction_effective, min_step_effective
+
+			if (emergency_mode) then
+				gain_effective = controller_gain_capture
+				max_fraction_effective = controller_max_fraction_emergency
+				min_step_effective = max(min_abs_velocity_step_capture, &
+					emergency_min_fraction * max(abs(u_current), min_abs_velocity_step))
+			else if (capture_mode) then
+				gain_effective = controller_gain_capture
+				max_fraction_effective = controller_max_fraction_capture
+				min_step_effective = min_abs_velocity_step_capture
+			else
+				gain_effective = adaptive_gain
+				max_fraction_effective = controller_max_fraction
+				min_step_effective = min_abs_velocity_step
+			end if
+
+			max_velocity_step = max(max_fraction_effective * &
+				max(abs(u_current), min_abs_velocity_step), min_step_effective)
+
+			du_unlimited = feedback_sign_default * gain_effective * v_current
+			if (emergency_mode) then
+!				! When the flame is close to leaving the useful domain, the controller
+!				! must reduce the inflow even if the filtered velocity estimate is
+!				! temporarily small.  The direction still follows feedback_sign_default.
+				if (abs(du_unlimited) < min_step_effective) then
+					du_unlimited = sign(min_step_effective, feedback_sign_default * max(abs(v_current), velocity_tolerance_on))
+				end if
+			else if (has_bracket .and. .not. capture_mode) then
+				bracket_target = 0.5_dp * (bracket_u_a + bracket_u_b)
+				du_unlimited = bracket_target - u_current
+			else if (use_secant_control .and. have_previous_control_point .and. .not. capture_mode) then
+				dU = u_current - previous_control_inlet_velocity
+				dV = v_current - previous_control_velocity
+				if (abs(dU) >= min_secant_du .and. abs(dV) > velocity_tolerance_off) then
+					response_slope = dV / dU
+!					! Accept the secant only if the observed response has the sign required
+!					! by the stabilizing feedback.  Otherwise it is most likely contaminated
+!					! by delayed flame/acoustic transients and would turn the controller into
+!					! positive feedback.
+					if (response_slope * feedback_sign_default < 0.0_dp .and. &
+						abs(response_slope) > 1.0e-12_dp .and. &
+						abs(response_slope) < max_response_slope_abs) then
+						secant_step = -secant_relaxation * v_current / response_slope
+						if (abs(secant_step) <= 5.0_dp * max_velocity_step) then
+							du_unlimited = secant_step
+						end if
+					end if
+				end if
+			end if
+
+!			! Even a capture/bisection/secant target is passed through a step limiter.
+!			! The applied boundary value is additionally ramped in physical time.
+			du_final = min(max(du_unlimited, -max_velocity_step), max_velocity_step)
+
+!			! Persistent nonzero drift must produce a finite control action.  This lower
+!			! bound is active only outside the velocity/position deadband.
+			if (abs(control_velocity) > persistent_error_factor * velocity_tolerance_on .or. &
+				abs(position_control_error) > 0.0_dp) then
+				if (abs(du_final) < min_step_effective) then
+					if (du_unlimited /= 0.0_dp) then
+						du_final = sign(min_step_effective, du_unlimited)
+					else
+						du_final = feedback_sign_default * sign(min_step_effective, v_current)
+					end if
+				end if
+			end if
+
+			u_new = max(u_current + du_final, 0.0_dp)
+		end subroutine choose_new_inlet_target
+
+		subroutine write_flamelet_tables_once()
+			if (.not. flamelet_output_written) then
+				call this%chem_kin_solver%write_chemical_kinetics_table(chem_table_filename)
+				call this%write_data_table(data_table_filename)
+				flamelet_output_written = .true.
+				final_output_written = .true.
+			end if
+		end subroutine write_flamelet_tables_once
+
+		subroutine write_laminar_velocity_once()
+			integer :: sl_unit
+			character(len=200) :: sl_file_name
+
+			if (.not. sl_output_written) then
+				write(sl_file_name,'(A,I0,A)') 'laminar_flame_velocity_', this%load_counter, '.dat'
+				open(newunit = sl_unit, file = sl_file_name, status = 'replace', form = 'formatted')
+				write(sl_unit,'(A)') 'VARIABLES="time" "U_in" "Vfl_measurement" "SL_disp" "lin_R2" "lin_RMS" "split_dV" "attempt"'
+				write(sl_unit,'(100E20.12)') time, measurement_inlet_velocity, measurement_velocity_save, &
+					sl_displacement_save, measurement_r2_save, measurement_rms_save, &
+					measurement_split_slope_diff_save, real(measurement_attempt,dp)
+				close(sl_unit)
+				sl_output_written = .true.
+			end if
+		end subroutine write_laminar_velocity_once
+
+
+		subroutine start_drift_measurement_ramp(t_now)
+			real(dp), intent(in) :: t_now
+
+			stabilized_inlet_velocity = inlet_velocity_target
+			measurement_attempt = 1
+			current_measurement_delta = max(measurement_delta_fraction * &
+				max(abs(stabilized_inlet_velocity), min_abs_velocity_step), measurement_delta_min)
+			current_measurement_delta = min(current_measurement_delta, measurement_delta_max_fraction * &
+				max(abs(stabilized_inlet_velocity), min_abs_velocity_step))
+			measurement_inlet_velocity = max(stabilized_inlet_velocity + &
+				measurement_delta_sign * current_measurement_delta, 0.0_dp)
+			inlet_velocity_target = measurement_inlet_velocity
+			ramp_start_velocity = inlet_velocity_applied
+			ramp_start_time = t_now
+			active_inlet_ramp_time = measurement_ramp_time
+			sl_displacement_save = 0.0_dp
+			measurement_velocity_save = 0.0_dp
+			measurement_r2_save = 0.0_dp
+			measurement_rms_save = 0.0_dp
+			measurement_split_slope_diff_save = 0.0_dp
+			control_stage = stage_measurement_ramp
+			stabilization_counter = 0
+			post_flamelet_hold_counter = 0
+			call clear_control_history()
+		end subroutine start_drift_measurement_ramp
+
+
+		subroutine write_tracking_line()
+			real(dp) :: measurement_flag, bracket_flag, capture_flag, emergency_flag, flame_detected_flag
+
+			if (measurement_enabled) then
+				measurement_flag = 1.0_dp
+			else
+				measurement_flag = 0.0_dp
+			end if
+
+			if (has_bracket) then
+				bracket_flag = 1.0_dp
+			else
+				bracket_flag = 0.0_dp
+			end if
+
+			if (capture_mode) then
+				capture_flag = 1.0_dp
+			else
+				capture_flag = 0.0_dp
+			end if
+
+			if (emergency_mode) then
+				emergency_flag = 1.0_dp
+			else
+				emergency_flag = 0.0_dp
+			end if
+
+			if (flame_detected) then
+				flame_detected_flag = 1.0_dp
+			else
+				flame_detected_flag = 0.0_dp
+			end if
+
+			write(flame_loc_unit,'(100E20.12)') &
+				time, current_flame_location(1:dimensions), &
+				flame_velocity_lsq, flame_velocity_filtered, diag_flame_velocity_lsq, &
+				diag_flame_velocity_filtered, measurement_velocity_save, &
+				control_velocity, position_error, front_reference_coord, &
+				inlet_velocity_applied, inlet_velocity_target, &
+				target_step_for_log, adaptive_gain, real(hist_count,dp), measurement_flag, bracket_flag, &
+				capture_flag, emergency_flag, flame_detected_flag, &
+				front_spread, heat_release_integral, heat_release_max, heat_release_valid_limit, H_max, Tgrad_max, &
+				real(control_stage,dp), sl_displacement, linear_r2, linear_rms, split_slope_diff, &
+				real(correction_counter,dp), real(stabilization_counter,dp), real(active_track_number,dp)
+		end subroutine write_tracking_line
+
+	end subroutine stabilizing_inlet_1D
+
 
 	subroutine stabilizing_inlet(this,time)
 		class(fds_solver)	,intent(inout)	:: this
@@ -4156,6 +4903,73 @@ contains
 	
 		end associate
 	end subroutine
+
+
+	function eos_corrected_species_face_density(this,rho_field,Y_field,dim,i,j,k,face_side,velocity,spec) result(phi)
+		class(fds_solver)		,intent(in)	:: this
+		type(field_scalar_cons)	,intent(in)	:: rho_field
+		type(field_vector_cons)	,intent(in)	:: Y_field
+		integer					,intent(in)	:: dim, i, j, k, face_side, spec
+		real(dp)				,intent(in)	:: velocity
+		real(dp)						:: phi
+
+		real(dp), dimension(4)	:: scalar_array, rho_over_w_array
+		real(dp), allocatable	:: rhoY_face(:)
+		real(dp)				:: rho_over_w_face, sum_not_gamma
+		integer					:: species_number, n, s, gamma, offset0, offset
+		integer					:: ii, jj, kk
+
+		species_number = this%chem%chem_ptr%species_number
+		allocate(rhoY_face(species_number))
+
+		if (face_side > 0) then
+			offset0 = -1
+		else
+			offset0 = -2
+		end if
+
+		rho_over_w_array = 0.0_dp
+		do n = 1,4
+			offset = offset0 + n - 1
+			ii = i + offset*I_m(dim,1)
+			jj = j + offset*I_m(dim,2)
+			kk = k + offset*I_m(dim,3)
+			do s = 1,species_number
+				rho_over_w_array(n) = rho_over_w_array(n) + &
+					rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk) / &
+					this%thermo%thermo_ptr%molar_masses(s)
+			end do
+		end do
+
+		rho_over_w_face = this%CHARM_flux_limiter(rho_over_w_array,velocity)
+
+		gamma = 1
+		do s = 1,species_number
+			do n = 1,4
+				offset = offset0 + n - 1
+				ii = i + offset*I_m(dim,1)
+				jj = j + offset*I_m(dim,2)
+				kk = k + offset*I_m(dim,3)
+				scalar_array(n) = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
+			end do
+			rhoY_face(s) = this%CHARM_flux_limiter(scalar_array,velocity)
+			if (rhoY_face(s) > rhoY_face(gamma)) gamma = s
+		end do
+
+		if (spec == gamma) then
+			sum_not_gamma = 0.0_dp
+			do s = 1,species_number
+				if (s /= gamma) sum_not_gamma = sum_not_gamma + &
+					rhoY_face(s) / this%thermo%thermo_ptr%molar_masses(s)
+			end do
+			phi = this%thermo%thermo_ptr%molar_masses(gamma) * &
+				(rho_over_w_face - sum_not_gamma)
+		else
+			phi = rhoY_face(spec)
+		end if
+
+		deallocate(rhoY_face)
+	end function
 
 	pure function CHARM_flux_limiter(this,scalar_array,velocity)
 		class(fds_solver)					,intent(in)	:: this
