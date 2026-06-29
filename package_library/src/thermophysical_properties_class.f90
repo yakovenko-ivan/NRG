@@ -172,7 +172,7 @@ contains
         this%omega_c(1,1,5) = 1.03587_dp
         this%omega_c(1,1,6) = 1.52996_dp
         this%omega_c(1,1,7) = 1.76474_dp
-        this%omega_c(1,1,2) = 3.89411_dp
+        this%omega_c(1,1,8) = 3.89411_dp
 
         this%omega_c(1,2,1) = 1.00220_dp
         this%omega_c(1,2,2) = 0.15530_dp
@@ -181,7 +181,7 @@ contains
         this%omega_c(1,2,5) = 0.86125_dp
         this%omega_c(1,2,6) = 2.06848_dp
         this%omega_c(1,2,7) = 1.95162_dp
-        this%omega_c(1,2,2) = 4.84492_dp        
+        this%omega_c(1,2,8) = 4.84492_dp        
 
         this%omega_c(2,2,1) = 1.16145_dp
         this%omega_c(2,2,2) = 0.14874_dp
@@ -190,7 +190,7 @@ contains
         this%omega_c(2,2,5) = 2.16178_dp
         this%omega_c(2,2,6) = 2.43787_dp
         this%omega_c(2,2,7) = 0.0_dp
-        this%omega_c(2,2,2) = 0.0_dp        
+        this%omega_c(2,2,8) = 0.0_dp        
         
 	end subroutine
 	
