@@ -216,7 +216,7 @@ contains
 
 			do specie_number = 1,species_number
 				if (molar_masses(specie_number) /= 0.0_dp) then
-					this%thermal_c_coeff_constant(specie_number)    = 2.6319e-05_dp * sqrt(1.0_dp / molar_masses(specie_number))/collision_diameter(specie_number)/collision_diameter(specie_number)
+					this%thermal_c_coeff_constant(specie_number)    =  2.6319066471262813e-05_dp * sqrt(1.0_dp / molar_masses(specie_number))/collision_diameter(specie_number)/collision_diameter(specie_number)     ! 3.0_dp/2.0_dp*25.0_dp/32.0_dp/sqrt(pi)/1.0e-18_dp*sqrt(k_B**3 * N_a)
 				end if
 			end do
 

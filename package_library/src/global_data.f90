@@ -38,6 +38,8 @@ module global_data
     real(dp)	,parameter	:: T_ref        = 298.15_dp                     ! [K]
     real(dp)	,parameter	:: P_atm		= 101325.0_dp                   ! [Pa]
     real(dp)    ,parameter  :: sigma_SB     = 5.669e-08_dp                  ! [J/(s * m^2 * K^4)]
+    real(dp)    ,parameter  :: N_A          = 6.02214076e23_dp              ! [1/mol] 
+    real(dp)    ,parameter  :: k_B          = r_gase_J / N_A                ! [J/K]
     
     real(dp)    ,parameter  :: tables_temperature_ceiling  = 6000.0               ! [K]
 	
