@@ -3153,9 +3153,11 @@ contains
 !		!      safeguarded bisection step;
 !		!   6. a damped secant step is used only when the measured response slope is
 !		!      reliable; otherwise the code falls back to a small proportional step;
-!		!   7. the controller now uses a weak safe-window anchor.  Inside a broad
-!		!      safe band the control target is V_f only; positional feedback is
-!		!      activated only when the flame approaches the edge of the allowed window;
+!		!   7. the controller now uses a domain-safe-window anchor.  Inside the
+!		!      usable domain the control target is V_f only; positional feedback is
+!		!      activated only when the flame approaches a guarded boundary.  The
+!		!      initial flame coordinate is diagnostic and is not used as an exact
+!		!      positional set point;
 !		!   8. heat-release validity is checked explicitly.  H-radical and T-gradient
 !		!      centroids are diagnostics/fallback locations only and are not allowed
 !		!      to drive the feedback after the burning front is lost.
@@ -3579,13 +3581,16 @@ contains
 
 			front_safe_min = domain_front_min + outlet_guard_distance
 			front_safe_max = domain_front_max - outlet_guard_distance
-			if (front_reference_initialized) then
-				front_safe_min = max(front_safe_min, front_reference_coord - capture_position_tolerance)
-				front_safe_max = min(front_safe_max, front_reference_coord + capture_position_tolerance)
-			end if
+!			! Do not intersect the safe window with front_reference_coord +/-
+!			! capture_position_tolerance.  In coarse-grid runs the flame can settle at a
+!			! nearby discrete equilibrium that is slightly shifted from the first detected
+!			! centroid.  Treating this harmless offset as a positional error produces
+!			! two-level inlet-velocity dithering.  The reference coordinate is therefore
+!			! kept for diagnostics, while positional feedback is used only as boundary
+!			! protection.
 			if (front_safe_min >= front_safe_max) then
-				front_safe_min = domain_front_min + outlet_guard_distance
-				front_safe_max = domain_front_max - outlet_guard_distance
+				front_safe_min = domain_front_min
+				front_safe_max = domain_front_max
 			end if
 
 			diag_flame_velocity_lsq = 0.0_dp
@@ -4363,6 +4368,7 @@ contains
 		end subroutine write_tracking_line
 
 	end subroutine stabilizing_inlet_1D
+
 
 
 	subroutine stabilizing_inlet(this,time)
