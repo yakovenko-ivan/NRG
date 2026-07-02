@@ -3180,20 +3180,20 @@ contains
 
 		real(dp), parameter :: time_delay_default         = 1.0e-03_dp
 		real(dp), parameter :: time_track_default         = 1.0e-04_dp
-		real(dp), parameter :: time_control_default       = 1.0e-03_dp
+		real(dp), parameter :: time_control_default       = 5.0e-04_dp
 		real(dp), parameter :: time_control_capture       = 2.0e-04_dp
-		real(dp), parameter :: response_settle_default    = 1.0e-03_dp
+		real(dp), parameter :: response_settle_default    = 5.0e-04_dp
 		real(dp), parameter :: response_settle_capture    = 2.0e-04_dp
-		real(dp), parameter :: inlet_ramp_time_fine       = 5.0e-03_dp
+		real(dp), parameter :: inlet_ramp_time_fine       = 2.0e-03_dp
 		real(dp), parameter :: inlet_ramp_time_capture    = 1.0e-03_dp
-		real(dp), parameter :: controller_gain_initial    = 5.0e-02_dp
-		real(dp), parameter :: controller_gain_min        = 5.0e-03_dp
-		real(dp), parameter :: controller_gain_max        = 8.0e-02_dp
+		real(dp), parameter :: controller_gain_initial    = 2.5e-01_dp
+		real(dp), parameter :: controller_gain_min        = 2.0e-02_dp
+		real(dp), parameter :: controller_gain_max        = 5.0e-01_dp
 		real(dp), parameter :: controller_gain_capture    = 5.0e-01_dp
 		real(dp), parameter :: controller_max_fraction    = 5.0e-02_dp
 		real(dp), parameter :: controller_max_fraction_capture = 1.0e-01_dp
 		real(dp), parameter :: controller_max_fraction_emergency = 2.5e-01_dp
-		real(dp), parameter :: min_abs_velocity_step      = 1.0e-04_dp
+		real(dp), parameter :: min_abs_velocity_step      = 2.0e-05_dp
 		real(dp), parameter :: min_abs_velocity_step_capture = 1.0e-03_dp
 		real(dp), parameter :: emergency_min_fraction     = 1.0e-01_dp
 		real(dp), parameter :: velocity_tolerance_on      = 2.0e-05_dp
@@ -4368,6 +4368,7 @@ contains
 		end subroutine write_tracking_line
 
 	end subroutine stabilizing_inlet_1D
+
 
 
 
