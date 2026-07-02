@@ -90,7 +90,7 @@ contains
 		
 		integer	:: particles_phase_counter
 
-		namelist /particles_phase/	particles_diameter, particles_material_heat_capacity, particles_material_density, &
+		namelist /dispersed_phase/	particles_diameter, particles_material_heat_capacity, particles_material_density, &
                                     particles_material_latent_heat, particles_material_boiling_temperature, particles_material, &
                                     particles_evaporating, particles_heating, particles_inertial
 		
@@ -98,7 +98,7 @@ contains
 		call constructor_file%read_properties(io_unit)
 		
 		do particles_phase_counter = 1, size(constructor_file%particles)
-			read(unit = io_unit, nml = particles_phase)
+			read(unit = io_unit, nml = dispersed_phase)
 			constructor_file%particles(particles_phase_counter)%diameter					    = particles_diameter
 			constructor_file%particles(particles_phase_counter)%material					    = particles_material
 			constructor_file%particles(particles_phase_counter)%material_heat_capacity		    = particles_material_heat_capacity
@@ -106,8 +106,8 @@ contains
             constructor_file%particles(particles_phase_counter)%material_latent_heat		    = particles_material_latent_heat
 			constructor_file%particles(particles_phase_counter)%material_boiling_temperature	= particles_material_boiling_temperature
 			constructor_file%particles(particles_phase_counter)%evaporating				        = particles_evaporating
-            constructor_file%particles(particles_phase_counter)%heating                    = particles_heating
-            constructor_file%particles(particles_phase_counter)%inertial                   = particles_inertial
+            constructor_file%particles(particles_phase_counter)%heating                         = particles_heating
+            constructor_file%particles(particles_phase_counter)%inertial                        = particles_inertial
 		end do
 		
 		rewind(io_unit)
@@ -316,7 +316,7 @@ contains
 		
 		integer	:: particles_phase_counter
 
-		namelist /particles_params/	particles_diameter, particles_material_heat_capacity, particles_material_density, &
+		namelist /dispersed_phase/	particles_diameter, particles_material_heat_capacity, particles_material_density, &
                                     particles_material_latent_heat, particles_material_boiling_temperature, particles_material, &
                                     particles_evaporating, particles_heating, particles_inertial
 
@@ -341,7 +341,7 @@ contains
         particles_heating   				    = this%particles(this%particles_phase_counter)%heating
         particles_inertial   				    = this%particles(this%particles_phase_counter)%inertial
             
-		write(unit = io_unit, nml = particles_params)
+		write(unit = io_unit, nml = dispersed_phase)
 		close(io_unit)
 
 
