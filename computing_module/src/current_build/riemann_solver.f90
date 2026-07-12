@@ -331,6 +331,7 @@ contains
         real(dp) :: delta_p, p_0, p_c_old, p_c, u_c
         real(dp) :: func_value, func_deriv_value
         real(dp) :: p_min, p_scale, tol_abs, tol_rel
+        real(dp) :: p_tol_contact, u_tol_contact, u_scale_contact
         integer  :: iter
         logical  :: converged
 
@@ -348,6 +349,24 @@ contains
 
         this%c_l = sqrt(max(this%gamma_l*this%p_l/this%rho_l, 0.0_dp))
         this%c_r = sqrt(max(this%gamma_r*this%p_r/this%rho_r, 0.0_dp))
+
+        ! Degenerate moving contact: no acoustic waves are present.
+        ! Avoid the nonlinear p* iteration, whose shock/rarefaction formulae
+        ! become ill-conditioned in the zero-strength-wave limit.
+        u_scale_contact = max(1.0_dp, abs(this%u_l), abs(this%u_r), this%c_l, this%c_r)
+        p_tol_contact = max(1.0e-10_dp*p_scale, 1000.0_dp*epsilon(1.0_dp)*p_scale)
+        u_tol_contact = max(1.0e-10_dp*u_scale_contact, 1000.0_dp*epsilon(1.0_dp)*u_scale_contact)
+        if (abs(this%p_l - this%p_r) <= p_tol_contact .and. &
+            abs(this%u_l - this%u_r) <= u_tol_contact) then
+            this%p_star = 0.5_dp*(this%p_l + this%p_r)
+            this%u_contact = 0.5_dp*(this%u_l + this%u_r)
+            call this%sample_gamma(0.0_dp, this%rho, this%u, this%p, this%gamma)
+            this%T = 0.0_dp
+            this%success = this%finite_positive(this%rho) .and. this%finite_positive(this%p) .and. (this%u == this%u)
+            if (.not. this%success) this%failure_counter = this%failure_counter + 1
+            return
+        end if
+
         p_0 = 0.5_dp*(this%p_l + this%p_r) - 0.125_dp*(this%u_r - this%u_l)*(this%rho_l + this%rho_r)*(this%c_l + this%c_r)
         p_0 = max(p_min, p_0)
 
@@ -404,6 +423,7 @@ contains
         real(dp) :: p_candidate, p_bad
         real(dp) :: f_low, f_high, f_trial, f_new, f_candidate
         real(dp) :: p_scale, tol_abs, tol_rel, vel_scale
+        real(dp) :: p_tol_contact, u_tol_contact, u_scale_contact
         real(dp) :: p_pvrs, dp_fd, p_minus, p_plus, f_minus, f_plus, deriv
         integer :: iter, iter_bracket
         logical :: bracketed, use_newton, converged
@@ -425,6 +445,23 @@ contains
         vel_scale = max(this%c_l, this%c_r, abs(this%u_l), abs(this%u_r), 1.0_dp)
         tol_rel = 1.0e-8_dp
         tol_abs = 1.0e-10_dp*p_scale
+
+        ! Degenerate moving material contact: no acoustic waves are present.
+        ! For p_L=p_R and u_L=u_R, the exact star state is p*=p and u*=u;
+        ! the sampled state at xi=0 is selected only by the contact speed.
+        u_scale_contact = vel_scale
+        p_tol_contact = max(1.0e-10_dp*p_scale, 1000.0_dp*epsilon(1.0_dp)*p_scale)
+        u_tol_contact = max(1.0e-10_dp*u_scale_contact, 1000.0_dp*epsilon(1.0_dp)*u_scale_contact)
+        if (abs(this%p_l - this%p_r) <= p_tol_contact .and. &
+            abs(this%u_l - this%u_r) <= u_tol_contact) then
+            this%p_star = 0.5_dp*(this%p_l + this%p_r)
+            this%u_contact = 0.5_dp*(this%u_l + this%u_r)
+            call this%sample_thermally_perfect(0.0_dp, this%rho, this%u, this%p, this%T, this%gamma, this%Y)
+            this%success = this%finite_positive(this%rho) .and. this%finite_positive(this%p) .and. &
+                           this%finite_positive(this%T) .and. (this%u == this%u)
+            if (.not. this%success) this%failure_counter = this%failure_counter + 1
+            return
+        end if
 
         ! PVRS estimate provides the first Newton point and a useful upper-bound scale.
         p_pvrs = 0.5_dp*(this%p_l + this%p_r) - &
@@ -1163,12 +1200,23 @@ contains
         real(dp), intent(out) :: rho_out, u_out, p_out, T_out, gamma_out
         real(dp), dimension(:), intent(out) :: Y_out
         real(dp) :: rho_star, T_star, c_star, mass_flux, wave_speed, pressure
+        real(dp) :: dp_wave, dv_wave, tol_p_wave, tol_v_wave
 
         if (xi <= this%u_contact) then
             Y_out = this%Y_l
             if (this%p_star > this%p_l) then
                 rho_star = this%shock_density_tp(.true., this%p_star)
-                mass_flux = sqrt(max((this%p_star - this%p_l)/(1.0_dp/this%rho_l - 1.0_dp/rho_star), 0.0_dp))
+                dp_wave = this%p_star - this%p_l
+                dv_wave = 1.0_dp/max(this%rho_l,this%rho_floor) - 1.0_dp/max(rho_star,this%rho_floor)
+                tol_p_wave = max(1.0e-12_dp*max(abs(this%p_l),this%p_floor), &
+                                 100.0_dp*epsilon(1.0_dp)*max(abs(this%p_l),this%p_floor))
+                tol_v_wave = max(1.0e-12_dp/max(this%rho_l,this%rho_floor), &
+                                 100.0_dp*epsilon(1.0_dp)/max(this%rho_l,this%rho_floor))
+                if (dp_wave <= tol_p_wave .or. dv_wave <= tol_v_wave) then
+                    mass_flux = max(this%rho_l,this%rho_floor)*max(this%c_l,tiny(1.0_dp))
+                else
+                    mass_flux = sqrt(max(dp_wave/dv_wave, 0.0_dp))
+                end if
                 wave_speed = this%u_l - mass_flux/this%rho_l
                 if (xi < wave_speed) then
                     rho_out = this%rho_l; u_out = this%u_l; p_out = this%p_l; T_out = this%T_l
@@ -1196,7 +1244,17 @@ contains
             Y_out = this%Y_r
             if (this%p_star > this%p_r) then
                 rho_star = this%shock_density_tp(.false., this%p_star)
-                mass_flux = sqrt(max((this%p_star - this%p_r)/(1.0_dp/this%rho_r - 1.0_dp/rho_star), 0.0_dp))
+                dp_wave = this%p_star - this%p_r
+                dv_wave = 1.0_dp/max(this%rho_r,this%rho_floor) - 1.0_dp/max(rho_star,this%rho_floor)
+                tol_p_wave = max(1.0e-12_dp*max(abs(this%p_r),this%p_floor), &
+                                 100.0_dp*epsilon(1.0_dp)*max(abs(this%p_r),this%p_floor))
+                tol_v_wave = max(1.0e-12_dp/max(this%rho_r,this%rho_floor), &
+                                 100.0_dp*epsilon(1.0_dp)/max(this%rho_r,this%rho_floor))
+                if (dp_wave <= tol_p_wave .or. dv_wave <= tol_v_wave) then
+                    mass_flux = max(this%rho_r,this%rho_floor)*max(this%c_r,tiny(1.0_dp))
+                else
+                    mass_flux = sqrt(max(dp_wave/dv_wave, 0.0_dp))
+                end if
                 wave_speed = this%u_r + mass_flux/this%rho_r
                 if (xi > wave_speed) then
                     rho_out = this%rho_r; u_out = this%u_r; p_out = this%p_r; T_out = this%T_r
@@ -1234,13 +1292,25 @@ contains
         real(dp), intent(out) :: rho_out, u_out, p_out, gamma_out
         real(dp) :: rho_star, c_side, c_star, mass_flux, wave_speed
         real(dp) :: gamma_side, p_side, rho_side, u_side, s_side, pfan, cfan
+        real(dp) :: dp_wave, dv_wave, tol_p_wave, tol_v_wave
 
         if (xi <= this%u_contact) then
             gamma_side = this%gamma_l; p_side = this%p_l; rho_side = this%rho_l; u_side = this%u_l; s_side = this%s_l
             gamma_out = this%gamma_l
             if (this%p_star > this%p_l) then
                 rho_star = this%rho_l/max(this%a_l(this%p_star), tiny(1.0_dp))
-                mass_flux = sqrt(max((this%p_star - this%p_l)/(1.0_dp/this%rho_l - 1.0_dp/rho_star), 0.0_dp))
+                dp_wave = this%p_star - this%p_l
+                dv_wave = 1.0_dp/max(this%rho_l,this%rho_floor) - 1.0_dp/max(rho_star,this%rho_floor)
+                tol_p_wave = max(1.0e-12_dp*max(abs(this%p_l),this%p_floor), &
+                                 100.0_dp*epsilon(1.0_dp)*max(abs(this%p_l),this%p_floor))
+                tol_v_wave = max(1.0e-12_dp/max(this%rho_l,this%rho_floor), &
+                                 100.0_dp*epsilon(1.0_dp)/max(this%rho_l,this%rho_floor))
+                c_side = sqrt(max(this%gamma_l*this%p_l/max(this%rho_l,this%rho_floor), 0.0_dp))
+                if (dp_wave <= tol_p_wave .or. dv_wave <= tol_v_wave) then
+                    mass_flux = max(this%rho_l,this%rho_floor)*max(c_side,tiny(1.0_dp))
+                else
+                    mass_flux = sqrt(max(dp_wave/dv_wave, 0.0_dp))
+                end if
                 wave_speed = this%u_l - mass_flux/this%rho_l
                 if (xi < wave_speed) then
                     rho_out = this%rho_l; u_out = this%u_l; p_out = this%p_l
@@ -1268,7 +1338,18 @@ contains
             gamma_out = this%gamma_r
             if (this%p_star > this%p_r) then
                 rho_star = this%rho_r/max(this%a_r(this%p_star), tiny(1.0_dp))
-                mass_flux = sqrt(max((this%p_star - this%p_r)/(1.0_dp/this%rho_r - 1.0_dp/rho_star), 0.0_dp))
+                dp_wave = this%p_star - this%p_r
+                dv_wave = 1.0_dp/max(this%rho_r,this%rho_floor) - 1.0_dp/max(rho_star,this%rho_floor)
+                tol_p_wave = max(1.0e-12_dp*max(abs(this%p_r),this%p_floor), &
+                                 100.0_dp*epsilon(1.0_dp)*max(abs(this%p_r),this%p_floor))
+                tol_v_wave = max(1.0e-12_dp/max(this%rho_r,this%rho_floor), &
+                                 100.0_dp*epsilon(1.0_dp)/max(this%rho_r,this%rho_floor))
+                c_side = sqrt(max(this%gamma_r*this%p_r/max(this%rho_r,this%rho_floor), 0.0_dp))
+                if (dp_wave <= tol_p_wave .or. dv_wave <= tol_v_wave) then
+                    mass_flux = max(this%rho_r,this%rho_floor)*max(c_side,tiny(1.0_dp))
+                else
+                    mass_flux = sqrt(max(dp_wave/dv_wave, 0.0_dp))
+                end if
                 wave_speed = this%u_r + mass_flux/this%rho_r
                 if (xi > wave_speed) then
                     rho_out = this%rho_r; u_out = this%u_r; p_out = this%p_r
