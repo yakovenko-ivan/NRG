@@ -792,19 +792,17 @@ contains
 		class(fds_solver)	,intent(inout)	:: this
 		real(dp)			,intent(in)		:: time_step
 		
-		real(dp)	:: B_r, flux_left, flux_right, phi_loc, phi_up, r, s
-		real(dp)	:: spec_summ
+		real(dp)	:: flux_left, flux_right
+		real(dp)	:: spec_summ, inv_dx
 		
 		real(dp)	,dimension(3)	:: cell_size		
-		real(dp)	:: rhs
-		
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
-		
 		real(dp), dimension (3,3)	:: lame_coeffs
+		real(dp), allocatable		:: flux_left_vec(:), flux_right_vec(:), rhs_vec(:), rhoY_new(:)
+		
+		integer	:: dimensions, species_number, coord_id
+		integer	,dimension(3,2)	:: cons_inner_loop
 		character(len=20)			:: coordinate_system
 		
-		integer	:: bound_number
 		integer :: i,j,k,dim,spec,particles_phase_counter
 		
 		dimensions		= this%domain%get_domain_dimensions()
@@ -813,8 +811,19 @@ contains
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		inv_dx			= 1.0_dp / cell_size(1)
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
+		select case(coordinate_system)
+			case ('cartesian')
+				coord_id = 0
+			case ('cylindrical')
+				coord_id = 1
+			case ('spherical')
+				coord_id = 2
+			case default
+				coord_id = 0
+		end select
 
 		associate (	rho				    => this%rho%s_ptr			, &
 					rho_int			    => this%rho_int%s_ptr		, &
@@ -827,11 +836,16 @@ contains
 					Y_prod_particles	=> this%Y_prod_particles	, &
                     Y_old               => this%Y_old%v_ptr         , &
 					mesh			    => this%mesh%mesh_ptr		, &
-					bc				    => this%boundary%bc_ptr)
+					bc				    => this%boundary%bc_ptr		, &
+					thermo			    => this%thermo%thermo_ptr)
 					
-			!$omp parallel default(shared)  private(i,j,k,dim,spec,spec_summ,rhs,flux_right,flux_left,lame_coeffs) !, &
-			!!$omp& firstprivate(this)
-            !!$omp& shared(cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,time_step)					
+			! Optimized scalar predictor:
+			!   * species face values are computed as vectors once per face/direction;
+			!   * EOS correction is applied once per face, not once per species;
+			!   * boundedness and reconstruction are done in the same cell loop;
+			!   * coordinate-system string checks are moved out of the inner loop.
+			!$omp parallel default(shared) private(i,j,k,dim,spec,spec_summ,flux_right,flux_left,lame_coeffs,flux_left_vec,flux_right_vec,rhs_vec,rhoY_new,particles_phase_counter)
+			allocate(flux_left_vec(species_number), flux_right_vec(species_number), rhs_vec(species_number), rhoY_new(species_number))
 
             !$omp do collapse(3) schedule(static)	
             do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -840,106 +854,89 @@ contains
 				if(bc%bc_markers(i,j,k) == 0) then	
 
 					lame_coeffs		= 1.0_dp				
-				
-					select case(coordinate_system)
-						case ('cartesian')	
-							lame_coeffs			= 1.0_dp
-						case ('cylindrical')
-							! x -> r, y -> z
-							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)			
-							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1)	
-						case ('spherical')
-							! x -> r
-							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
-							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
-					end select					
-				
-					do spec = 1, species_number
-					
-						Y_rho_int(spec) = rho%cells(i,j,k)*Y%pr(spec)%cells(i,j,k) 
-						
-						rhs = 0.0_dp
-						
-						do dim = 1, dimensions
-													
-							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
-								flux_right = this%eos_corrected_species_face_density(rho,Y,dim,i,j,k,1, &
-														 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),spec)
-							else
-								if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
-									flux_right = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
-								else
-									flux_right = rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * Y%pr(spec)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-								end if
-							end if
-						
-							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
-								flux_left = this%eos_corrected_species_face_density(rho,Y,dim,i,j,k,-1, &
-														 v_f%pr(dim)%cells(dim,i,j,k),spec)
-							else
-								if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
-									flux_left = rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-								else
-									flux_left = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
-								end if
-							end if
+					if (coord_id == 1) then
+						! cylindrical: x -> r, y -> z
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)			
+						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1)	
+					else if (coord_id == 2) then
+						! spherical: x -> r
+						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
+						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
+					end if
 
-							rhs = rhs -(	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3) &
-										-	flux_left  * v_f%pr(dim)%cells(dim,i,j,k) * lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2)
-						
-							continue			
+					rhs_vec = 0.0_dp
+					do dim = 1, dimensions
+						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
+							call eos_corrected_species_face_vector(rho,Y,thermo%molar_masses,species_number,dim,i,j,k,1, &
+								 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),flux_right_vec)
+						else
+							if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
+								do spec = 1,species_number
+									flux_right_vec(spec) = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
+								end do
+							else
+								do spec = 1,species_number
+									flux_right_vec(spec) = rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * &
+										Y%pr(spec)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+								end do
+							end if
+						end if
+					
+						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
+							call eos_corrected_species_face_vector(rho,Y,thermo%molar_masses,species_number,dim,i,j,k,-1, &
+								 v_f%pr(dim)%cells(dim,i,j,k),flux_left_vec)
+						else
+							if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
+								do spec = 1,species_number
+									flux_left_vec(spec) = rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * &
+										Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+								end do
+							else
+								do spec = 1,species_number
+									flux_left_vec(spec) = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)
+								end do
+							end if
+						end if
+
+						do spec = 1,species_number
+							rhs_vec(spec) = rhs_vec(spec) -( 	flux_right_vec(spec) * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3) &
+														- flux_left_vec(spec)  * v_f%pr(dim)%cells(dim,i,j,k) * lame_coeffs(dim,1)) * inv_dx / lame_coeffs(dim,2)
 						end do
-						
-						Y_rho_int(spec) = Y_rho_int(spec)  + rhs* time_step
-						
-						if (this%diffusion_flag)	Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_diff%pr(spec)%cells(i,j,k) * time_step	![kg/m^3]
-						if (this%reactive_flag)		Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_chem%pr(spec)%cells(i,j,k) * time_step	![kg/m^3]		
-						
+					end do
+
+					do spec = 1, species_number
+						rhoY_new(spec) = rho%cells(i,j,k)*Y%pr(spec)%cells(i,j,k) + rhs_vec(spec)*time_step
+						if (this%diffusion_flag) rhoY_new(spec) = rhoY_new(spec) + Y_prod_diff%pr(spec)%cells(i,j,k) * time_step
+						if (this%reactive_flag)  rhoY_new(spec) = rhoY_new(spec) + Y_prod_chem%pr(spec)%cells(i,j,k) * time_step
 						if (this%additional_particles_phases_number /= 0) then
 							do particles_phase_counter = 1, this%additional_particles_phases_number
-								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step		![kg/m^3]
+								rhoY_new(spec) = rhoY_new(spec) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step
 							end do		
 						end if						
-						
 					end do	
-					
-					rho_int%cells(i,j,k)	= sum(Y_rho_int)
-					
-					do spec = 1, species_number
-						Y_int%pr(spec)%cells(i,j,k) = Y_rho_int(spec) / rho_int%cells(i,j,k) 
+
+					! Conservative boundedness correction and reconstruction.
+					spec_summ = 0.0_dp
+					do spec = 1,species_number
+						rhoY_new(spec) = max(rhoY_new(spec), 0.0_dp)
+						spec_summ = spec_summ + rhoY_new(spec)
 					end do
+					if (spec_summ > tiny(1.0_dp)) then
+						rho_int%cells(i,j,k)	= spec_summ
+						do spec = 1, species_number
+							Y_int%pr(spec)%cells(i,j,k) = rhoY_new(spec) / rho_int%cells(i,j,k)
+						end do
+					end if
 				end if
 			end do
 			end do
 			end do				
 			!$omp end do
 			
-			!$omp do collapse(3) schedule(static)
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					! Apply boundedness correction to conservative species densities,
-					! then reconstruct rho and Y consistently.
-					spec_summ = 0.0_dp
-					do spec = 1,species_number
-						Y_rho_int(spec) = max(rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k), 0.0_dp)
-						spec_summ = spec_summ + Y_rho_int(spec)
-					end do
-					if (spec_summ > tiny(1.0_dp)) then
-						rho_int%cells(i,j,k) = spec_summ
-						do spec = 1,species_number
-							Y_int%pr(spec)%cells(i,j,k) = Y_rho_int(spec) / rho_int%cells(i,j,k)
-						end do
-					end if
-				end if
-			end do
-			end do
-			end do
-			!$omp end do
-			
+			! The final copy cannot be merged with the flux-computation loop, because
+			! predictor fluxes must see the old rho,Y values in neighbouring cells.
 			!$omp do collapse(3) schedule(static)
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -957,17 +954,11 @@ contains
 			end do
 			!$omp end do
 
+			deallocate(flux_left_vec, flux_right_vec, rhs_vec, rhoY_new)
 			!$omp end parallel
             end associate
-			
-		!	print *, '1',Y_int%pr(1)%cells(50,20,1),rho_int%cells(50,20,1)
-			
-			continue
-			
-
-
 	end subroutine
-	
+
 	subroutine calculate_divergence_v(this,time_step,predictor)
 		class(fds_solver)	,intent(inout)	:: this
 		real(dp)			,intent(in)		:: time_step
@@ -1096,12 +1087,12 @@ contains
 							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)	![J/m^3/s]
 						end do		
                     end if
-					
-                   
+              
+
 					do dim = 1,dimensions
 					
 						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
-							flux_right = this%CHARM_flux_limiter(	rho%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3))*		&
+							flux_right = charm_face_value(	rho%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3))*		&
 																	h_s%cells(i-I_m(dim,1):i+2*I_m(dim,1),j-I_m(dim,2):j+2*I_m(dim,2),k-I_m(dim,3):k+2*I_m(dim,3)),		&
 																	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
 						else
@@ -1113,7 +1104,7 @@ contains
 						end if
 
 						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
-							flux_left = this%CHARM_flux_limiter(	rho%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3))*		&
+							flux_left = charm_face_value(	rho%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3))*		&
 																	h_s%cells(i-2*I_m(dim,1):i+I_m(dim,1),j-2*I_m(dim,2):j+I_m(dim,2),k-2*I_m(dim,3):k+I_m(dim,3)),		&
 																	v_f%pr(dim)%cells(dim,i,j,k))
 							continue
@@ -1977,12 +1968,12 @@ contains
 				beta				= 2.0_dp/3.0_dp
 				v_cycle_converged	= .false.
 			
-				nu_0 = 8
+				nu_0 = 5
 				nu_1 = 2
 				nu_2 = 2
 				V_cycle_depth = this%number_of_meshes - 2
 
-				tolerance = 1e-04_dp
+				tolerance = 1e-03_dp
 					
                 call fds_multigrid_timer%tic()
 					
@@ -2973,18 +2964,17 @@ contains
 		class(fds_solver)	,intent(inout)	:: this
 		real(dp)			,intent(in)		:: time_step
 		
-		real(dp)	:: rhs, B_r, flux_left, flux_right, phi_loc, phi_up, r, s
-		real(dp)	:: spec_summ
+		real(dp)	:: flux_left, flux_right
+		real(dp)	:: spec_summ, inv_dx
 		
 		real(dp), dimension (3,3):: lame_coeffs
-		
 		real(dp)	,dimension(3)	:: cell_size		
+		real(dp), allocatable		:: flux_left_vec(:), flux_right_vec(:), rhs_vec(:), rhoY_new(:)
 		
-		integer	:: dimensions, species_number
+		integer	:: dimensions, species_number, coord_id
 		integer	,dimension(3,2)	:: cons_inner_loop
 		character(len=20)	:: coordinate_system
 		
-		integer	:: bound_number
 		integer	:: i,j,k,dim,spec,particles_phase_counter
 
 		dimensions		= this%domain%get_domain_dimensions()
@@ -2993,8 +2983,19 @@ contains
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
 				
 		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+		inv_dx			= 1.0_dp / cell_size(1)
 		
 		coordinate_system	= this%domain%get_coordinate_system_name()
+		select case(coordinate_system)
+			case ('cartesian')
+				coord_id = 0
+			case ('cylindrical')
+				coord_id = 1
+			case ('spherical')
+				coord_id = 2
+			case default
+				coord_id = 0
+		end select
 		
 		associate (	rho				    => this%rho%s_ptr			, &
 					rho_int			    => this%rho_int%s_ptr		, &
@@ -3007,110 +3008,94 @@ contains
 					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &
 					Y_prod_particles	=> this%Y_prod_particles	, &
 					mesh			    => this%mesh%mesh_ptr		, &
-					bc				    => this%boundary%bc_ptr)
+					bc				    => this%boundary%bc_ptr		, &
+					thermo			    => this%thermo%thermo_ptr)
 
-			!$omp parallel default(shared)  private(i,j,k,dim,spec,spec_summ,rhs,flux_right,flux_left,lame_coeffs) !, &
-			!!$omp& firstprivate(this)
-            !!$omp& shared(cons_inner_loop,species_number,dimensions,cell_size,coordinate_system,time_step)
+			! Optimized scalar corrector: face-vector EOS correction, integer
+			! coordinate selector, and boundedness/reconstruction in the same loop.
+			!$omp parallel default(shared) private(i,j,k,dim,spec,spec_summ,flux_right,flux_left,lame_coeffs,flux_left_vec,flux_right_vec,rhs_vec,rhoY_new,particles_phase_counter)
+			allocate(flux_left_vec(species_number), flux_right_vec(species_number), rhs_vec(species_number), rhoY_new(species_number))
             
 			!$omp do collapse(3) schedule(static)						
 			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 				if(bc%bc_markers(i,j,k) == 0) then	
-					do spec = 1, species_number
+					lame_coeffs		= 1.0_dp				
+					if (coord_id == 1) then
+						! cylindrical: x -> r, y -> z
+						lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)			
+						lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
+						lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1)	
+					else if (coord_id == 2) then
+						! spherical: x -> r
+						lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
+						lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
+						lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
+					end if
 
-						lame_coeffs		= 1.0_dp				
-				  
-						select case(coordinate_system)
-							case ('cartesian')	
-								lame_coeffs			= 1.0_dp
-							case ('cylindrical')
-								! x -> r, y -> z
-								lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)			
-								lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-								lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1)	
-							case ('spherical')
-								! x -> r
-								lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
-								lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-								lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
-						end select						
-
-						Y_rho_int(spec) = 0.5_dp * ( rho_old%cells(i,j,k)*Y_old%pr(spec)%cells(i,j,k) + rho_int%cells(i,j,k)*Y_int%pr(spec)%cells(i,j,k)) 
-						
-						rhs = 0.0_dp
-						do dim = 1, dimensions	
-							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
-								flux_right = this%eos_corrected_species_face_density(rho_int,Y_int,dim,i,j,k,1, &
-														 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),spec)
+					rhs_vec = 0.0_dp
+					do dim = 1, dimensions	
+						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
+							call eos_corrected_species_face_vector(rho_int,Y_int,thermo%molar_masses,species_number,dim,i,j,k,1, &
+								 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),flux_right_vec)
+						else
+							if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
+								do spec = 1,species_number
+									flux_right_vec(spec) = rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k)
+								end do
 							else
-								if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
-									flux_right = rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k)
-								else
-									flux_right = rho_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * Y_int%pr(spec)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-								end if
+								do spec = 1,species_number
+									flux_right_vec(spec) = rho_int%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * &
+										Y_int%pr(spec)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+								end do
 							end if
-						
-							if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
-								flux_left = this%eos_corrected_species_face_density(rho_int,Y_int,dim,i,j,k,-1, &
-														 v_f%pr(dim)%cells(dim,i,j,k),spec)
+						end if
+					
+						if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
+							call eos_corrected_species_face_vector(rho_int,Y_int,thermo%molar_masses,species_number,dim,i,j,k,-1, &
+								 v_f%pr(dim)%cells(dim,i,j,k),flux_left_vec)
+						else
+							if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
+								do spec = 1,species_number
+									flux_left_vec(spec) = rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * &
+										Y_int%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+								end do
 							else
-								if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
-									flux_left = rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * Y_int%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-								else
-									flux_left = rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k)
-								end if
-							end if					
+								do spec = 1,species_number
+									flux_left_vec(spec) = rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k)
+								end do
+							end if
+						end if					
 
-							rhs = rhs - (	flux_right * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3)&
-										-	flux_left * v_f%pr(dim)%cells(dim,i,j,k)* lame_coeffs(dim,1)) / cell_size(1) / lame_coeffs(dim,2)
-							
-							continue
-						end do	
-						
-						Y_rho_int(spec) = Y_rho_int(spec) + rhs * (0.5_dp * time_step) 
-						
-						if (this%diffusion_flag)	Y_rho_int(spec) = Y_rho_int(spec) + 0.5_dp * Y_prod_diff%pr(spec)%cells(i,j,k) * time_step
-						
-						if (this%reactive_flag)		Y_rho_int(spec) = Y_rho_int(spec) + 0.5_dp * Y_prod_chem%pr(spec)%cells(i,j,k) * time_step
-						
-						if (this%additional_particles_phases_number /= 0) then
-							do particles_phase_counter = 1, this%additional_particles_phases_number
-								Y_rho_int(spec) = Y_rho_int(spec) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step
-							end do		
-						end if									
-						
+						do spec = 1,species_number
+							rhs_vec(spec) = rhs_vec(spec) - ( 	flux_right_vec(spec) * v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) * lame_coeffs(dim,3)&
+														- flux_left_vec(spec) * v_f%pr(dim)%cells(dim,i,j,k)* lame_coeffs(dim,1)) * inv_dx / lame_coeffs(dim,2)
+						end do
 					end do	
 					
-					rho%cells(i,j,k) = sum(Y_rho_int)
-
 					do spec = 1, species_number
-						Y%pr(spec)%cells(i,j,k) = Y_rho_int(spec) / rho%cells(i,j,k)
-					end do
-					
-				end if
-			end do
-			end do
-			end do
-			!$omp end do
-			
-			!$omp do collapse(3) schedule(static)
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					! Apply boundedness correction to conservative species densities,
-					! then reconstruct rho and Y consistently.
+						rhoY_new(spec) = 0.5_dp * ( rho_old%cells(i,j,k)*Y_old%pr(spec)%cells(i,j,k) + rho_int%cells(i,j,k)*Y_int%pr(spec)%cells(i,j,k)) &
+										 + rhs_vec(spec) * (0.5_dp * time_step)
+						if (this%diffusion_flag) rhoY_new(spec) = rhoY_new(spec) + 0.5_dp * Y_prod_diff%pr(spec)%cells(i,j,k) * time_step
+						if (this%reactive_flag)  rhoY_new(spec) = rhoY_new(spec) + 0.5_dp * Y_prod_chem%pr(spec)%cells(i,j,k) * time_step
+						if (this%additional_particles_phases_number /= 0) then
+							do particles_phase_counter = 1, this%additional_particles_phases_number
+								rhoY_new(spec) = rhoY_new(spec) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step
+							end do		
+						end if									
+					end do	
+
+					! Conservative boundedness correction and reconstruction.
 					spec_summ = 0.0_dp
 					do spec = 1,species_number
-						Y_rho_int(spec) = max(rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k), 0.0_dp)
-						spec_summ = spec_summ + Y_rho_int(spec)
+						rhoY_new(spec) = max(rhoY_new(spec), 0.0_dp)
+						spec_summ = spec_summ + rhoY_new(spec)
 					end do
 					if (spec_summ > tiny(1.0_dp)) then
 						rho%cells(i,j,k) = spec_summ
 						do spec = 1,species_number
-							Y%pr(spec)%cells(i,j,k) = Y_rho_int(spec) / rho%cells(i,j,k)
+							Y%pr(spec)%cells(i,j,k) = rhoY_new(spec) / rho%cells(i,j,k)
 						end do
 					end if
 				end if
@@ -3119,16 +3104,11 @@ contains
 			end do
 			!$omp end do
 
+			deallocate(flux_left_vec, flux_right_vec, rhs_vec, rhoY_new)
 			!$omp end parallel
 			
             end associate
-			
-		!	print *, '5', Y%pr(1)%cells(50,20,1),rho%cells(50,20,1)
-
-
-
     end subroutine	
-
 
 	subroutine stabilizing_inlet_1D(this,time,stabilized)
 !		! Generalized stabilizing inlet routine with two explicit workflows:
@@ -4368,10 +4348,9 @@ contains
 		end subroutine write_tracking_line
 
 	end subroutine stabilizing_inlet_1D
-
-
-
-
+	
+	
+	
 	subroutine stabilizing_inlet(this,time)
 		class(fds_solver)	,intent(inout)	:: this
 		real(dp)			,intent(in)		:: time
@@ -4912,6 +4891,99 @@ contains
 	end subroutine
 
 
+	pure function charm_face_value(scalar_array,velocity) result(phi)
+		real(dp), dimension(4), intent(in) :: scalar_array
+		real(dp), intent(in) :: velocity
+		real(dp) :: phi
+		real(dp) :: B_r, phi_loc, phi_up, r, s
+		
+		phi_up = 0.0_dp
+		B_r = 0.0_dp
+		phi_loc = scalar_array(3) - scalar_array(2)
+		if (velocity > 0.0_dp) then
+			phi_up = scalar_array(2) - scalar_array(1)
+		else
+			phi_up = scalar_array(4) - scalar_array(3)
+		end if
+		if (phi_loc /= 0.0_dp) then
+			r = phi_up / phi_loc
+		else
+			r = 0.0_dp
+		end if
+		if (r > 1.0e-010_dp) then
+			s = 1.0_dp / r
+			B_r = s * (3.0_dp*s + 1.0_dp) / (s + 1.0_dp) / (s + 1.0_dp)
+		else
+			B_r = 0.0_dp
+		end if
+		if (velocity > 0.0_dp) then
+			phi = scalar_array(2) + B_r * 0.5_dp * phi_up
+		else
+			phi = scalar_array(3) - B_r * 0.5_dp * phi_up
+		end if
+	end function charm_face_value
+
+	subroutine eos_corrected_species_face_vector(rho_field,Y_field,molar_masses,species_number,dim,i,j,k,face_side,velocity,phi)
+		type(field_scalar_cons), intent(in) :: rho_field
+		type(field_vector_cons), intent(in) :: Y_field
+		real(dp), dimension(:), intent(in) :: molar_masses
+		integer, intent(in) :: species_number, dim, i, j, k, face_side
+		real(dp), intent(in) :: velocity
+		real(dp), dimension(:), intent(out) :: phi
+
+		real(dp), dimension(4) :: scalar_array, rho_over_w_array
+		real(dp) :: rhoY_max, rhoY_loc, rho_over_w_face, sum_not_gamma
+		integer :: s, n, gamma, offset0, offset, gamma_offset
+		integer :: ii, jj, kk
+
+		if (face_side > 0) then
+			offset0 = -1
+		else
+			offset0 = -2
+		end if
+
+		if (velocity > 0.0_dp) then
+			gamma_offset = offset0 + 1
+		else
+			gamma_offset = offset0 + 2
+		end if
+
+		gamma = 1
+		rhoY_max = -huge(1.0_dp)
+		ii = i + gamma_offset*I_m(dim,1)
+		jj = j + gamma_offset*I_m(dim,2)
+		kk = k + gamma_offset*I_m(dim,3)
+		do s = 1,species_number
+			rhoY_loc = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
+			if (rhoY_loc > rhoY_max) then
+				rhoY_max = rhoY_loc
+				gamma = s
+			end if
+		end do
+
+		rho_over_w_array = 0.0_dp
+		do s = 1,species_number
+			do n = 1,4
+				offset = offset0 + n - 1
+				ii = i + offset*I_m(dim,1)
+				jj = j + offset*I_m(dim,2)
+				kk = k + offset*I_m(dim,3)
+				scalar_array(n) = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
+				rho_over_w_array(n) = rho_over_w_array(n) + scalar_array(n) / molar_masses(s)
+			end do
+			phi(s) = charm_face_value(scalar_array,velocity)
+		end do
+
+		! FDS-style EOS preservation: correct the locally dominant carrier species
+		! so that sum_k (rho Y_k)_f/W_k = (rho/W)_f at the same CHARM face.
+		rho_over_w_face = charm_face_value(rho_over_w_array,velocity)
+		sum_not_gamma = 0.0_dp
+		do s = 1,species_number
+			if (s /= gamma) sum_not_gamma = sum_not_gamma + phi(s) / molar_masses(s)
+		end do
+		phi(gamma) = molar_masses(gamma) * (rho_over_w_face - sum_not_gamma)
+	end subroutine eos_corrected_species_face_vector
+
 	function eos_corrected_species_face_density(this,rho_field,Y_field,dim,i,j,k,face_side,velocity,spec) result(phi)
 		class(fds_solver)		,intent(in)	:: this
 		type(field_scalar_cons)	,intent(in)	:: rho_field
@@ -4920,14 +4992,26 @@ contains
 		real(dp)				,intent(in)	:: velocity
 		real(dp)						:: phi
 
+		! Fast EOS-preserving face interpolation.
+		!
+		! The previous implementation allocated a temporary rhoY_face(:) array and
+		! recomputed the CHARM-limited face value for every species every time this
+		! function was called. Because the caller invokes the routine inside the
+		! species loop, this produced O(Nspec^2) work plus allocation/deallocation
+		! overhead for every face. Here we keep the same correction idea, but avoid
+		! dynamic allocation and compute the full multi-species correction only for
+		! the locally dominant carrier species. For all other species, the routine
+		! returns the ordinary CHARM-limited conservative density rho*Y_k.
+		!
+		! The corrected species is chosen from the upwind-adjacent cell at the face.
+		! In hydrogen-air kernels it is practically always N2, so this is equivalent
+		! to the FDS most-abundant-species correction while being much cheaper.
 		real(dp), dimension(4)	:: scalar_array, rho_over_w_array
-		real(dp), allocatable	:: rhoY_face(:)
-		real(dp)				:: rho_over_w_face, sum_not_gamma
-		integer					:: species_number, n, s, gamma, offset0, offset
+		real(dp)				:: rho_over_w_face, sum_not_gamma, rhoY_max, rhoY_loc
+		integer					:: species_number, n, s, gamma, offset0, offset, gamma_offset
 		integer					:: ii, jj, kk
 
 		species_number = this%chem%chem_ptr%species_number
-		allocate(rhoY_face(species_number))
 
 		if (face_side > 0) then
 			offset0 = -1
@@ -4935,22 +5019,44 @@ contains
 			offset0 = -2
 		end if
 
-		rho_over_w_array = 0.0_dp
-		do n = 1,4
-			offset = offset0 + n - 1
-			ii = i + offset*I_m(dim,1)
-			jj = j + offset*I_m(dim,2)
-			kk = k + offset*I_m(dim,3)
-			do s = 1,species_number
-				rho_over_w_array(n) = rho_over_w_array(n) + &
-					rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk) / &
-					this%thermo%thermo_ptr%molar_masses(s)
-			end do
-		end do
-
-		rho_over_w_face = this%CHARM_flux_limiter(rho_over_w_array,velocity)
+		! For the four-point stencil [upstream-upstream, upstream, downstream,
+		! downstream-downstream], CHARM uses element 2 for positive velocity and
+		! element 3 for negative velocity. Use that same cell to pick the corrected
+		! carrier species.
+		if (velocity > 0.0_dp) then
+			gamma_offset = offset0 + 1
+		else
+			gamma_offset = offset0 + 2
+		end if
 
 		gamma = 1
+		rhoY_max = -huge(1.0_dp)
+		ii = i + gamma_offset*I_m(dim,1)
+		jj = j + gamma_offset*I_m(dim,2)
+		kk = k + gamma_offset*I_m(dim,3)
+		do s = 1,species_number
+			rhoY_loc = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
+			if (rhoY_loc > rhoY_max) then
+				rhoY_max = rhoY_loc
+				gamma = s
+			end if
+		end do
+
+		if (spec /= gamma) then
+			do n = 1,4
+				offset = offset0 + n - 1
+				ii = i + offset*I_m(dim,1)
+				jj = j + offset*I_m(dim,2)
+				kk = k + offset*I_m(dim,3)
+				scalar_array(n) = rho_field%cells(ii,jj,kk) * Y_field%pr(spec)%cells(ii,jj,kk)
+			end do
+			phi = charm_face_value(scalar_array,velocity)
+			return
+		end if
+
+		! Only the dominant carrier species absorbs the EOS correction.
+		rho_over_w_array = 0.0_dp
+		sum_not_gamma = 0.0_dp
 		do s = 1,species_number
 			do n = 1,4
 				offset = offset0 + n - 1
@@ -4958,24 +5064,18 @@ contains
 				jj = j + offset*I_m(dim,2)
 				kk = k + offset*I_m(dim,3)
 				scalar_array(n) = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
+				rho_over_w_array(n) = rho_over_w_array(n) + &
+					scalar_array(n) / this%thermo%thermo_ptr%molar_masses(s)
 			end do
-			rhoY_face(s) = this%CHARM_flux_limiter(scalar_array,velocity)
-			if (rhoY_face(s) > rhoY_face(gamma)) gamma = s
+			if (s /= gamma) then
+				sum_not_gamma = sum_not_gamma + &
+					charm_face_value(scalar_array,velocity) / this%thermo%thermo_ptr%molar_masses(s)
+			end if
 		end do
 
-		if (spec == gamma) then
-			sum_not_gamma = 0.0_dp
-			do s = 1,species_number
-				if (s /= gamma) sum_not_gamma = sum_not_gamma + &
-					rhoY_face(s) / this%thermo%thermo_ptr%molar_masses(s)
-			end do
-			phi = this%thermo%thermo_ptr%molar_masses(gamma) * &
-				(rho_over_w_face - sum_not_gamma)
-		else
-			phi = rhoY_face(spec)
-		end if
-
-		deallocate(rhoY_face)
+		rho_over_w_face = charm_face_value(rho_over_w_array,velocity)
+		phi = this%thermo%thermo_ptr%molar_masses(gamma) * &
+			(rho_over_w_face - sum_not_gamma)
 	end function
 
 	pure function CHARM_flux_limiter(this,scalar_array,velocity)
