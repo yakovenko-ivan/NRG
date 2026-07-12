@@ -1042,7 +1042,6 @@ contains
 		integer			,dimension(3)	,intent(in)			:: cell_indexes
 		
 		integer			,dimension(3)	:: cell
-		logical							:: out_flag
 		
 		integer	:: dimensions
 		
@@ -1051,8 +1050,7 @@ contains
 		
 		count_particles_in_cell = 0
 		do part = 1, this%particles_number
-			
-			if (( this%particles(part)%cell(1) == cell_indexes(1)).and.(this%particles(part)%cell(2) == cell_indexes(2)).and.(this%particles(part)%cell(3) == cell_indexes(3)).and.(.not.out_flag))	count_particles_in_cell = count_particles_in_cell + 1
+			if (( this%particles(part)%cell(1) == cell_indexes(1)).and.(this%particles(part)%cell(2) == cell_indexes(2)).and.(this%particles(part)%cell(3) == cell_indexes(3)))	count_particles_in_cell = count_particles_in_cell + 1
 		end do
 		
 	end function
