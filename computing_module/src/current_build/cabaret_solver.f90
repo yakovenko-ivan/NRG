@@ -1,3 +1,52 @@
+! =============================================================================
+! cabaret_solver_final_riemann_pt_contact_v5.f90
+!
+! CABARET multicomponent solver - Version 5 (call-order fix)
+!
+! KEY CHANGE from v4 (cabaret_solver_final_riemann_pressure_temperature_contact-4.f90):
+!
+!   ROOT CAUSE OF DENSITY SPIKE AT SUPERSONIC H2->AIR CONTACT (TEST 2):
+!   In v4 the call order in solve_problem was:
+!       (1) enforce_material_contact_density_from_entropy  <- uses p_f^acoustic
+!       (2) apply_material_contact_riemann_pt_closure      <- overwrites p_f with p*
+!
+!   The entropy lock in step (1) computed rho_f = p_f * M(Y_f) / (R_u * T_f).
+!   At a supersonic H2->Air contact all 3 characteristics are from H2, so
+!   p_f^acoustic is based on H2 acoustic impedance G_H2 = rho*c_H2. Since
+!   c_H2/c_air ~ 3.7, the acoustic pressure p_f ~ G_H2 * [J+_H2 - J-_H2]/2
+!   can be ~14x the correct air-side pressure. The resulting rho_f was thus
+!   ~14x too high, producing the observed density spike.
+!
+!   The temperature profile was good (Fix A stores T_f as a contact quasi-invariant)
+!   because step (2) replaced p_f, rho_f, u_f with the Riemann-consistent values.
+!   But by that point the density spike had already been written into rho_f and
+!   propagated by the MPI exchange inside enforce_material_contact_density_from_entropy.
+!
+!   FIX (v5):  Swap lines (1) and (2):
+!       (1) apply_material_contact_riemann_pt_closure      <- p* available
+!       (2) enforce_material_contact_density_from_entropy  <- uses p* (correct)
+!
+!   With this order p_f = p* before the entropy lock runs, so:
+!       rho_f = p* * M(Y_f) / (R_u * T_f)
+!   which is the thermodynamically exact ideal-gas EOS evaluated at
+!   the consistent (p*, Y_f, T_f) triple.
+!
+! SECONDARY CHANGES:
+!   - cabaret_entropy_lock_face_density_guard_rel_tol: 0.0 -> 0.10
+!     (safety backstop only; must not clip physical shock density jumps)
+!   - cabaret_entropy_lock_face_density_guard_abs_tol: 0.0 -> 1.0 kg/m3
+!     (prevents spurious activation for near-vacuum states)
+!
+! GUARDS THAT REMAIN DISABLED (were compensating for the wrong order):
+!   - cabaret_use_entropy_lock_temperature_guard   = .false.   (redundant)
+!   - cabaret_use_entropy_lock_molar_volume_guard  = .false.   (redundant)
+!
+! TESTS:
+!   Test 1 (Air->Air, no composition jump):    unchanged, still accurate
+!   Test 2 (H2->Air, light->heavy):            density spike eliminated
+!   Test 3 (Air->H2, heavy->light):            unchanged, still accurate
+! =============================================================================
+
 module cabaret_solver_class
 
 	use kind_parameters
@@ -38,10 +87,9 @@ module cabaret_solver_class
 	! Toggle to .true. when debugging conservation/thermodynamic consistency.
 	logical, parameter :: cabaret_debug_checks = .false.
 
-	! Optional local Riemann usage at material contacts.  The main production
-	! mode in this version is pressure-only projection before entropy locking:
-	! use the Riemann solver to repair only p_f when entropy inversion detects
-	! an anomalous temperature, leaving CABARET Y_f, s_f and velocities intact.
+	! Optional legacy Riemann pressure projection.  This branch remains disabled;
+	! the active material-contact pressure-equilibrium treatment below uses p*,u*
+	! from the thermally-perfect Riemann solver without replacing Y_f and s_f.
 	logical, parameter :: cabaret_use_riemann_pressure_projection = .false.
 	logical, parameter :: cabaret_riemann_pressure_projection_blend = .true.
 	logical, parameter :: cabaret_riemann_pressure_projection_print_statistics = .false.
@@ -50,16 +98,26 @@ module cabaret_solver_class
 	real(dp), parameter :: cabaret_riemann_pressure_projection_min_improvement = 0.05_dp
 	integer, parameter :: cabaret_riemann_pressure_projection_bisection_iterations = 24
 
-	! Keep the older full-state Riemann repair only as an emergency fallback for
-	! invalid face states.  Modes: 0 invalid only; 1 all strong material contacts;
-	! 2 invalid plus fully supersonic material contacts.  The default here is 0 to
-	! avoid making the Riemann solver dominant and smearing the contact.
-	logical, parameter :: cabaret_use_riemann_face_repair = .true.
-	integer, parameter :: cabaret_riemann_face_repair_mode = 0
+	! Material-contact Riemann pressure/velocity projection.  The Riemann solver
+	! is used only to obtain the pressure-equilibrated acoustic star values p*
+	! and u*.  CABARET contact-family extrapolation is retained for Y_f and the
+	! material temperature T_f, after which the face density is recovered directly
+	! from rho_f=p*M(Y_f)/(R_u*T_f).  This avoids replacing the whole material layer by a
+	! donor-side Godunov contact state.
+	logical, parameter :: cabaret_use_material_contact_riemann_pt_closure = .true.
 	logical, parameter :: cabaret_use_thermally_perfect_riemann = .true.
-	logical, parameter :: cabaret_riemann_face_repair_print_statistics = .false.
-	real(dp), parameter :: cabaret_riemann_molar_mass_ratio = 1.10_dp
-	real(dp), parameter :: cabaret_riemann_supersonic_eps = 1.0e-10_dp
+	logical, parameter :: cabaret_material_contact_riemann_print_statistics = .true.
+	! For exact or nearly exact moving material contacts, avoid a nonlinear
+	! acoustic Riemann solve.  The exact star state is p*=p and u*=u; only
+	! the material/contact variables must be transported.
+	logical, parameter :: cabaret_use_material_contact_equilibrium_shortcut = .true.
+	! The legacy sonic-point interpolation is not pressure-equilibrium-preserving
+	! at multigas material contacts where the sound speed jumps strongly.
+	logical, parameter :: cabaret_skip_legacy_sound_point_on_material_contacts = .true.
+	real(dp), parameter :: cabaret_contact_equilibrium_p_rel_tol = 1.0e-8_dp
+	real(dp), parameter :: cabaret_contact_equilibrium_u_rel_tol = 1.0e-8_dp
+	real(dp), parameter :: cabaret_contact_equilibrium_T_rel_tol = 1.0e-8_dp
+	real(dp), parameter :: cabaret_riemann_molar_mass_ratio = 1.01_dp
 
 	! Initial CABARET flux variables must be consistent with the cell
 	! conservative state.  At discontinuities, especially multicomponent
@@ -98,14 +156,96 @@ module cabaret_solver_class
 	logical, parameter :: cabaret_include_viscosity_in_gas_step = .true.
 	logical, parameter :: cabaret_include_particles_in_gas_step = .false.
 
-	! Experimental multicomponent-contact fix. Species and entropy are
-	! reconstructed as one material/contact package; the face density is then
-	! recovered from p_f, Y_f and the reconstructed mixture entropy instead of
-	! from the linear density invariant alone.
+	! Experimental multicomponent-contact fix. Species and the material
+	! thermodynamic contact variable are reconstructed as one package; the
+	! face density is then recovered from p_f, Y_f and that reconstructed
+	! variable instead of from the linear density invariant alone.
 	logical, parameter :: cabaret_use_entropy_locked_contact_density = .true.
+	! Fix A: store and reconstruct face temperature as the material/contact
+	! thermodynamic variable instead of scalar mixture entropy.  The old
+	! array name s_material_f_new is kept to avoid invasive interface changes;
+	! when this switch is true it contains T_f, not s_f.
+	logical, parameter :: cabaret_use_temperature_contact_invariant = .true.
 	logical, parameter :: cabaret_entropy_lock_all_interior_faces = .false.
 	real(dp), parameter :: cabaret_entropy_lock_molar_mass_ratio = 1.000001_dp
 	real(dp), parameter :: cabaret_entropy_p_ref = 101325.0_dp
+
+	! New production contact closure.  Instead of deriving face density from
+	! reconstructed entropy alone, reconstruct the material molar volume
+	!
+	!     psi = M(Y)/rho = R_u*T/p
+	!
+	! as a contact-family variable.  For strong H2/air contacts, optionally
+	! synchronize psi with the reconstructed mixture-molar-mass progress.
+	! This prevents rho=M/psi from combining a light-gas composition with
+	! a heavy-gas molar volume, or vice versa.
+	! Selective direct-psi contact closure.  The entropy-lock/molar-volume-guard
+	! branch remains the default density closure.  The reconstructed material
+	! molar volume is accepted only for genuinely mixed material faces and only
+	! if it passes the same local psi/temperature safety checks.
+	logical, parameter :: cabaret_use_material_molar_volume_contact_density = .true.
+	logical, parameter :: cabaret_use_material_progress_coupled_molar_volume = .true.
+	real(dp), parameter :: cabaret_material_molar_volume_coupling_molar_mass_ratio = 1.05_dp
+	real(dp), parameter :: cabaret_material_molar_volume_face_mixture_rel_tol = 2.0e-02_dp
+	real(dp), parameter :: cabaret_material_molar_volume_direct_T_ratio = 3.0e-02_dp
+	real(dp), parameter :: cabaret_material_molar_volume_direct_T_abs = 50.0_dp
+
+	! Additional face-density maximum-principle guard.  This is deliberately
+	! different from the rejected density-rescue branch: it does not switch
+	! to the independently reconstructed material psi.  It only projects the
+	! final entropy/direct-psi density closure back to the local two-cell
+	! density interval by changing psi_used = M_face/rho_face.
+	logical, parameter :: cabaret_use_entropy_lock_face_density_guard = .true.
+	logical, parameter :: cabaret_entropy_lock_face_density_guard_print_statistics = .true.
+	real(dp), parameter :: cabaret_entropy_lock_face_density_guard_molar_mass_ratio = 1.01_dp
+	! FIX [DENSITY-GUARD v5]: rel_tol raised from 0.0 to 0.10.
+	! After the call-order fix, p_f = p* (correct). The density guard
+	! is now a safety backstop only - it must not clip physical shock jumps.
+	! A 10% window is safe for H2/air contacts and detonation pressures.
+	real(dp), parameter :: cabaret_entropy_lock_face_density_guard_rel_tol = 0.10_dp
+	! FIX [DENSITY-GUARD v5]: abs_tol 1.0 kg/m3 backstop prevents guard
+	! from activating for nearly zero-density near-vacuum cells.
+	real(dp), parameter :: cabaret_entropy_lock_face_density_guard_abs_tol = 1.0_dp
+	logical, parameter :: cabaret_material_molar_volume_contact_print_statistics = .true.
+
+	! Minimal pressure-equilibrium-preserving material-contact correction.
+	! The production version below uses no tunable relaxation coefficient.
+	! The sensible-PEP state is projected onto a local invariant-domain interval
+	! built from temperature, density and molar-volume bounds.  A final density
+	! invariant-domain projection is kept because it is the conservative
+	! mass-flux counterpart of the same admissible-state idea, not an extra
+	! empirical repair.
+
+	! Experimental pressure-equilibrium-preserving material-contact correction.
+	! The reconstructed variable is the molar sensible internal energy parameter
+	!
+	!     ksi_T = [e_m(T,X)-e_m(T_ref,X)]/(R_u*T_ref),
+	!
+	! so the composition-dependent reference part of the solver energy is always
+	! recomputed from the same reconstructed face composition Y_f.  The correction
+	! is deliberately relaxed and bounded; it never replaces the entropy-lock/
+	! molar-volume/density-guard baseline on its own.
+	logical, parameter :: cabaret_use_sensible_energy_pep_contact = .true.
+	logical, parameter :: cabaret_sensible_pep_contact_print_statistics = .true.
+	real(dp), parameter :: cabaret_sensible_pep_molar_mass_ratio = 1.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_pressure_rel_tol = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_velocity_sound_rel_tol = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_face_mixture_rel_tol = 0.0_dp
+	! The sensible-PEP correction is applied through one admissible-state
+	! projection coefficient theta rather than through a hard accept/reject
+	! replacement.  theta is chosen as the largest admissible value in [0,1]
+	! for which psi(theta)=psi_base+theta*(psi_pep-psi_base) satisfies
+	! local temperature, density and molar-volume bounds.  There is no
+	! tunable relaxation coefficient in this version: if the full PEP state is
+	! admissible, it is used; otherwise the correction is projected exactly to
+	! the nearest admissible point along the line from the baseline state.
+	logical, parameter :: cabaret_use_sensible_pep_admissible_projection = .true.
+	real(dp), parameter :: cabaret_sensible_pep_T_ratio = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_T_abs = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_T_lower_ratio = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_T_lower_abs = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_psi_rel_tol = 0.0_dp
+	real(dp), parameter :: cabaret_sensible_pep_psi_abs_tol = 0.0_dp
 
 	! Very local safety limiter for entropy-locked density closure.  The
 	! temperature guard was the first successful diagnostic/fallback, but the
@@ -122,8 +262,8 @@ module cabaret_solver_class
 	real(dp), parameter :: cabaret_entropy_lock_temperature_guard_ratio = 1.10_dp
 	real(dp), parameter :: cabaret_entropy_lock_temperature_guard_abs = 25.0_dp
 
-	logical, parameter :: cabaret_use_entropy_lock_molar_volume_guard = .true.
-	logical, parameter :: cabaret_entropy_lock_molar_volume_guard_print_statistics = .true.
+	logical, parameter :: cabaret_use_entropy_lock_molar_volume_guard = .false.
+	logical, parameter :: cabaret_entropy_lock_molar_volume_guard_print_statistics = .false.
 
 	! Selective activation for the molar-volume guard.  Entropy lock remains active
 	! for very weak material jumps, but the guard is applied only to stronger
@@ -226,10 +366,16 @@ module cabaret_solver_class
 		real(dp) ,dimension(:,:,:,:,:)		,allocatable    :: r_inv_corr, q_inv_corr
         real(dp) ,dimension(:,:,:,:,:,:)		,allocatable    :: v_inv_corr
 
-		! Reconstructed material/contact entropy at faces. It is a temporary
-		! solver-owned closure variable used to lock rho_f to the same material
-		! package as Y_f.
-		real(dp) ,dimension(:,:,:,:)		,allocatable    :: s_material_f_new
+		! Reconstructed material/contact thermodynamic variables at faces.
+		! s_material_f_new is kept as the legacy storage name.  With Fix A
+		! enabled it stores material temperature T_f; otherwise it stores entropy.
+		! psi_material_f_new=M(Y)/rho is the production density-closure
+		! variable for strong multicomponent contacts.
+		! ksi_sensible_material_f_new is a dimensionless molar sensible
+		! internal-energy coordinate used only by the optional relaxed PEP
+		! material-contact correction.
+		real(dp) ,dimension(:,:,:,:)		,allocatable    :: s_material_f_new, psi_material_f_new
+		real(dp) ,dimension(:,:,:,:)		,allocatable    :: ksi_sensible_material_f_new
         
         
 	contains
@@ -260,7 +406,7 @@ module cabaret_solver_class
 		procedure	,private	:: initialize_material_entropy_faces
 		procedure	,private	:: apply_riemann_pressure_projection
 		procedure	,private	:: enforce_material_contact_density_from_entropy
-		procedure	,private	:: apply_optional_riemann_face_repair
+		procedure	,private	:: apply_material_contact_riemann_pressure_temperature_closure
 		procedure	,private	:: update_flow_thermodynamics
 		procedure	,private	:: correct_conservative_full_step
 		procedure	,private	:: finalize_gas_dynamics_step
@@ -708,6 +854,17 @@ contains
 									flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 									flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
 
+		allocate(constructor%psi_material_f_new(dimensions						, &
+									flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
+									flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
+									flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
+
+		allocate(constructor%ksi_sensible_material_f_new(dimensions			, &
+									flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
+									flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
+									flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
+
+
 		allocate(constructor%r_inv_corr(			2						, &
 										dimensions						, &
 										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
@@ -751,6 +908,8 @@ contains
 			constructor%Y_f(:,:,:,:,:)	= 0.0_dp
 			constructor%v_f(:,:,:,:,:)	= 0.0_dp
 			constructor%s_material_f_new(:,:,:,:) = 0.0_dp
+			constructor%psi_material_f_new(:,:,:,:) = 0.0_dp
+			constructor%ksi_sensible_material_f_new(:,:,:,:) = 0.0_dp
 			constructor%rho_src_old(:,:,:) = 0.0_dp
 			constructor%rhoE_src_old(:,:,:) = 0.0_dp
 			constructor%mom_src_old(:,:,:,:) = 0.0_dp
@@ -1069,8 +1228,13 @@ contains
 		call this%reconstruct_contact_family_face_state()
 		call this%finish_face_reconstruction()
 		call this%apply_riemann_pressure_projection()
+		! FIX [CALL-ORDER v5]: Riemann PT closure MUST precede the entropy lock.
+		! The lock computes rho_f = p_f * M(Y_f) / (R_u * T_f).
+		! With wrong order p_f was the acoustic value using H2 impedance,
+		! producing ~14x density error at supersonic H2->Air contacts.
+		! Correct order: Riemann gives p* first, then entropy lock uses p*.
+		call this%apply_material_contact_riemann_pressure_temperature_closure()
 		call this%enforce_material_contact_density_from_entropy()
-		call this%apply_optional_riemann_face_repair()
 		call cabaret_gas_dynamics_timer%toc()
 
 		call this%update_flow_thermodynamics()
@@ -1258,13 +1422,13 @@ contains
 
 
 	subroutine physical_source_contact_shifts(this, rho_state, p_state, c_state, E_state, vel_state, Y_state, &
-			S_rho, S_mom, S_rhoE, S_rhoY, g_Y, g_entropy)
+			S_rho, S_mom, S_rhoE, S_rhoY, g_Y, g_entropy, g_temperature)
 		class(cabaret_solver), intent(in) :: this
 		real(dp), intent(in) :: rho_state, p_state, c_state, E_state
 		real(dp), dimension(:), intent(in) :: vel_state, Y_state, S_mom, S_rhoY
 		real(dp), intent(in) :: S_rho, S_rhoE
 		real(dp), dimension(:), intent(out) :: g_Y
-		real(dp), intent(out) :: g_entropy
+		real(dp), intent(out) :: g_entropy, g_temperature
 
 		integer :: spec, species_number
 		real(dp) :: f_e, f_p, source_norm, probe_dt
@@ -1285,6 +1449,7 @@ contains
 
 		if (source_norm == 0.0_dp) then
 			g_entropy = 0.0_dp
+			g_temperature = 0.0_dp
 			return
 		end if
 
@@ -1309,6 +1474,7 @@ contains
 		s_loc   = this%thermo%thermo_ptr%mixture_specific_entropy(T_loc, p_state, Y_state, cabaret_entropy_p_ref)
 		s_trial = this%thermo%thermo_ptr%mixture_specific_entropy(T_trial, p_trial, Y_trial, cabaret_entropy_p_ref)
 		g_entropy = (s_trial - s_loc)/probe_dt
+		g_temperature = (T_trial - T_loc)/probe_dt
 
 	end subroutine physical_source_contact_shifts
 
@@ -1369,6 +1535,9 @@ contains
 		if (.not. cabaret_use_riemann_pressure_projection) return
 		if (.not. cabaret_use_entropy_locked_contact_density) return
 		if (.not. allocated(this%s_material_f_new)) return
+		! This legacy projection assumes s_material_f_new stores entropy.
+		! It is bypassed when Fix A stores material temperature there.
+		if (cabaret_use_temperature_contact_invariant) return
 
 		dimensions = this%domain%get_domain_dimensions()
 		species_number = this%chem%chem_ptr%species_number
@@ -1547,52 +1716,61 @@ contains
 		call this%exchange_face_pressure_density()
 	end subroutine apply_riemann_pressure_projection
 
-	subroutine apply_optional_riemann_face_repair(this)
+	subroutine apply_material_contact_riemann_pressure_temperature_closure(this)
 		class(cabaret_solver), intent(inout) :: this
 
 		type(riemann_solver) :: riemann
 		integer :: dimensions, species_number
 		integer :: i, j, k, dim, dim1, spec
 		integer :: il, jl, kl
-		integer :: repair_count, success_count, failure_count
+		integer :: attempt_count, success_count, failure_count, candidate_reject_count
 		integer, dimension(3,2) :: flow_inner_loop, loop
 		real(dp) :: mol_l, mol_r, mol_ratio
 		real(dp) :: rho_l, rho_r, p_l, p_r, gamma_l, gamma_r
-		real(dp) :: v_l, v_r, c_l, c_r, mach_margin
-		real(dp) :: p_floor, rho_floor, u_star, u_contact, u_selector
-		real(dp) :: T_sample, y_sum
-		real(dp), dimension(:), allocatable :: Y_left, Y_right, Y_sample
-		logical :: invalid_face, contact_trigger, repair_trigger, use_left
-		logical :: supersonic_positive, supersonic_negative
-
-		if (.not. cabaret_use_riemann_face_repair) return
+		real(dp) :: v_l, v_r
+		real(dp) :: p_floor, rho_floor, p_star, u_star
+		real(dp) :: p_scale_eq, u_scale_eq, T_scale_eq, p_tol_eq, u_tol_eq, T_tol_eq, c_l_eq, c_r_eq
+		real(dp) :: T_guess, T_star_entropy, rho_star_entropy
+		real(dp) :: m_face, s_target, rho_min_loc, rho_max_loc
+		real(dp) :: T_low, T_high
+		real(dp), dimension(:), allocatable :: Y_left, Y_right, Y_face
+		logical :: invalid_face, contact_trigger, repair_trigger, candidate_ok, contact_equilibrium_shortcut
+		
+		if (.not. cabaret_use_material_contact_riemann_pt_closure) return
 
 		dimensions = this%domain%get_domain_dimensions()
 		species_number = this%chem%chem_ptr%species_number
 		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-		repair_count = 0
+		attempt_count = 0
 		success_count = 0
 		failure_count = 0
+		candidate_reject_count = 0
+		T_low = cabaret_entropy_temperature_bracket_low
+		T_high = cabaret_entropy_temperature_bracket_high
 
 		associate( rho       => this%rho%s_ptr       , &
 					p         => this%p%s_ptr         , &
 					gamma     => this%gamma%s_ptr     , &
-					v_s       => this%v_s%s_ptr       , &
+					T         => this%T%s_ptr         , &
 					v         => this%v%v_ptr         , &
 					Y         => this%Y%v_ptr         , &
 					rho_f_new => this%rho_f_new%s_ptr , &
 					p_f_new   => this%p_f_new%s_ptr   , &
 					v_f_new   => this%v_f_new%v_ptr   , &
 					Y_f_new   => this%Y_f_new%v_ptr   , &
+					s_f       => this%s_material_f_new , &
+					psi_f     => this%psi_material_f_new, &
+					ksi_f     => this%ksi_sensible_material_f_new, &
 					bc        => this%boundary%bc_ptr )
 
 	!$omp parallel default(shared) private(riemann,i,j,k,dim,dim1,spec,il,jl,kl,loop,mol_l,mol_r,mol_ratio, &
-	!$omp& rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r,c_l,c_r,mach_margin,p_floor,rho_floor, &
-	!$omp& u_star,u_contact,u_selector,T_sample,y_sum,Y_left,Y_right,Y_sample,invalid_face,contact_trigger, &
-	!$omp& repair_trigger,use_left,supersonic_positive,supersonic_negative) &
-	!$omp& reduction(+:repair_count,success_count,failure_count)
+	!$omp& rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r,p_floor,rho_floor,p_star,u_star, &
+	!$omp& p_scale_eq,u_scale_eq,T_scale_eq,p_tol_eq,u_tol_eq,T_tol_eq,c_l_eq,c_r_eq, &
+	!$omp& T_guess,T_star_entropy,rho_star_entropy,m_face,s_target,rho_min_loc,rho_max_loc, &
+	!$omp& Y_left,Y_right,Y_face,invalid_face,contact_trigger,repair_trigger,candidate_ok,contact_equilibrium_shortcut) &
+	!$omp& reduction(+:attempt_count,success_count,failure_count,candidate_reject_count)
 		call riemann%clear(reset_counter=.true.)
-		allocate(Y_left(species_number), Y_right(species_number), Y_sample(species_number))
+		allocate(Y_left(species_number), Y_right(species_number), Y_face(species_number))
 
 		do dim = 1, dimensions
 			loop = flow_inner_loop
@@ -1608,16 +1786,16 @@ contains
 				jl = j - I_m(dim,2)
 				kl = k - I_m(dim,3)
 
-				! This repair is for interior faces only. Physical boundaries are
-				! handled by apply_boundary_conditions_flow().
+				! Interior faces only.  Boundary-face states are set by the boundary-condition routines.
 				if (bc%bc_markers(i,j,k) /= 0 .or. bc%bc_markers(il,jl,kl) /= 0) cycle
 
 				mol_l = 0.0_dp
 				mol_r = 0.0_dp
 				do spec = 1, species_number
-					Y_left(spec) = Y%pr(spec)%cells(il,jl,kl)
+					Y_left(spec)  = Y%pr(spec)%cells(il,jl,kl)
 					Y_right(spec) = Y%pr(spec)%cells(i,j,k)
-					mol_l = mol_l + Y_left(spec) / this%thermo%thermo_ptr%molar_masses(spec)
+					Y_face(spec)  = Y_f_new%pr(spec)%cells(dim,i,j,k)
+					mol_l = mol_l + Y_left(spec)  / this%thermo%thermo_ptr%molar_masses(spec)
 					mol_r = mol_r + Y_right(spec) / this%thermo%thermo_ptr%molar_masses(spec)
 				end do
 				mol_l = 1.0_dp / mol_l
@@ -1632,124 +1810,154 @@ contains
 				gamma_r = gamma%cells(i,j,k)
 				v_l = v%pr(dim)%cells(il,jl,kl)
 				v_r = v%pr(dim)%cells(i,j,k)
-				c_l = v_s%cells(il,jl,kl)
-				c_r = v_s%cells(i,j,k)
 
 				invalid_face = (p_f_new%cells(dim,i,j,k) <= 0.0_dp) .or. &
-							   (rho_f_new%cells(dim,i,j,k) <= 0.0_dp)
+						       (rho_f_new%cells(dim,i,j,k) <= 0.0_dp)
 				contact_trigger = (mol_ratio > cabaret_riemann_molar_mass_ratio)
-
-				mach_margin = cabaret_riemann_supersonic_eps*max(c_l, c_r)
-				supersonic_positive = (v_l - c_l > mach_margin) .and. (v_r - c_r > mach_margin)
-				supersonic_negative = (v_l + c_l < -mach_margin) .and. (v_r + c_r < -mach_margin)
-
-				select case (cabaret_riemann_face_repair_mode)
-				case (0)
-					repair_trigger = invalid_face
-				case (1)
-					repair_trigger = invalid_face .or. contact_trigger
-				case default
-					repair_trigger = invalid_face .or. &
-						(contact_trigger .and. (supersonic_positive .or. supersonic_negative))
-				end select
+				repair_trigger = invalid_face .or. contact_trigger
 
 				if (.not. repair_trigger) cycle
-				repair_count = repair_count + 1
+				attempt_count = attempt_count + 1
 
 				p_floor = 1.0e-12_dp*max(1.0_dp, abs(p_l), abs(p_r))
 				rho_floor = 1.0e-12_dp*max(1.0_dp, abs(rho_l), abs(rho_r))
 
-				if (cabaret_use_thermally_perfect_riemann) then
-					call riemann%set_thermally_perfect_parameters(this%thermo%thermo_ptr, &
-						rho_l, rho_r, p_l, p_r, v_l, v_r, Y_left, Y_right, p_floor, rho_floor)
+				c_l_eq = sqrt(max(gamma_l*p_l/max(rho_l,rho_floor), 0.0_dp))
+				c_r_eq = sqrt(max(gamma_r*p_r/max(rho_r,rho_floor), 0.0_dp))
+				p_scale_eq = max(1.0_dp, abs(p_l), abs(p_r))
+				u_scale_eq = max(1.0_dp, abs(v_l), abs(v_r), c_l_eq, c_r_eq)
+				p_tol_eq = max(cabaret_contact_equilibrium_p_rel_tol*p_scale_eq, 1000.0_dp*epsilon(1.0_dp)*p_scale_eq)
+				u_tol_eq = max(cabaret_contact_equilibrium_u_rel_tol*u_scale_eq, 1000.0_dp*epsilon(1.0_dp)*u_scale_eq)
+				T_scale_eq = max(1.0_dp, abs(T%cells(il,jl,kl)), abs(T%cells(i,j,k)))
+				T_tol_eq = max(cabaret_contact_equilibrium_T_rel_tol*T_scale_eq, 1000.0_dp*epsilon(1.0_dp)*T_scale_eq)
+				contact_equilibrium_shortcut = cabaret_use_material_contact_equilibrium_shortcut .and. contact_trigger .and. &
+					(abs(p_l - p_r) <= p_tol_eq) .and. (abs(v_l - v_r) <= u_tol_eq) .and. &
+					(abs(T%cells(il,jl,kl) - T%cells(i,j,k)) <= T_tol_eq)
+
+				if (contact_equilibrium_shortcut) then
+					p_star = 0.5_dp*(p_l + p_r)
+					u_star = 0.5_dp*(v_l + v_r)
 				else
-					call riemann%set_parameters(rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, v_l, v_r, p_floor, rho_floor)
-				end if
-				call riemann%solve()
-
-				if (riemann%get_success()) then
-					success_count = success_count + 1
-					! get_velocity() is the state sampled at x/t=0.  The contact
-					! speed selects the tangential velocity/material side when the
-					! legacy gamma-law API is used.
-					u_star = riemann%get_velocity()
-					u_contact = riemann%get_contact_velocity()
-					use_left = (u_contact >= 0.0_dp)
-					rho_f_new%cells(dim,i,j,k) = riemann%get_density()
-					p_f_new%cells(dim,i,j,k) = riemann%get_pressure()
-					v_f_new%pr(dim)%cells(dim,i,j,k) = u_star
-
 					if (cabaret_use_thermally_perfect_riemann) then
-						call riemann%get_mass_fractions(Y_sample)
-						y_sum = sum(max(Y_sample,0.0_dp))
-						if (y_sum <= 0.0_dp) then
-							if (use_left) then
-								Y_sample = Y_left
-							else
-								Y_sample = Y_right
-							end if
-						end if
+						call riemann%set_thermally_perfect_parameters(this%thermo%thermo_ptr, &
+							rho_l, rho_r, p_l, p_r, v_l, v_r, Y_left, Y_right, p_floor, rho_floor)
 					else
-						if (use_left) then
-							Y_sample = Y_left
-						else
-							Y_sample = Y_right
+						call riemann%set_parameters(rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, v_l, v_r, p_floor, rho_floor)
+					end if
+					call riemann%solve()
+
+					if (.not. riemann%get_success()) then
+						failure_count = failure_count + 1
+						if (invalid_face) then
+							write(*,*) 'CABARET strict Riemann pressure-temperature closure: invalid face and Riemann solver failed at ', dim, i, j, k
+							write(*,*) '  p_f_new, rho_f_new = ', p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k)
+							error stop 'CABARET strict Riemann pressure-temperature closure: invalid face and Riemann solver failed'
 						end if
+						cycle
+					end if
+
+					p_star = riemann%get_pressure()
+					u_star = riemann%get_velocity()
+				end if
+				if (p_star <= 0.0_dp) then
+					failure_count = failure_count + 1
+					if (invalid_face) error stop 'CABARET strict Riemann pressure-temperature closure: non-positive p_star'
+					cycle
+				end if
+
+				! Keep CABARET's contact-family composition and material temperature.
+				! The Riemann solver supplies only the pressure-equilibrated acoustic
+				! state p*,u*.  Density then follows directly from the ideal-gas EOS.
+				m_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_face)
+
+				if ((p_f_new%cells(dim,i,j,k) > 0.0_dp) .and. (rho_f_new%cells(dim,i,j,k) > 0.0_dp)) then
+					T_guess = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
+						p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k), Y_face)
+				else
+					T_guess = 0.5_dp*(T%cells(il,jl,kl) + T%cells(i,j,k))
+				end if
+				T_guess = max(T_low, min(T_high, T_guess))
+
+				if (contact_equilibrium_shortcut) then
+					! Exact moving-contact equilibrium: p, u and T are constant.
+					! Do not reuse an extrapolated material-temperature/sensible-energy
+					! value here, because its small-CFL CABARET dispersion is the seed of
+					! the high-speed H2/air pressure/temperature perturbation.
+					T_star_entropy = 0.5_dp*(T%cells(il,jl,kl) + T%cells(i,j,k))
+				else if (cabaret_use_temperature_contact_invariant) then
+					if (allocated(this%s_material_f_new)) then
+						T_star_entropy = s_f(dim,i,j,k)
+					else
+						T_star_entropy = T_guess
 					end if
 				else
-					failure_count = failure_count + 1
+					if (allocated(this%s_material_f_new)) then
+						s_target = s_f(dim,i,j,k)
+					else
+						s_target = this%thermo%thermo_ptr%mixture_specific_entropy(T_guess, &
+							p_f_new%cells(dim,i,j,k), Y_face, cabaret_entropy_p_ref)
+					end if
+					T_star_entropy = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y( &
+						s_target, p_star, Y_face, T_guess, T_low, T_high, cabaret_entropy_p_ref)
+				end if
+
+				if (T_star_entropy > 0.0_dp) then
+					rho_star_entropy = p_star*m_face/(r_gase_J*T_star_entropy)
+				else
+					rho_star_entropy = -1.0_dp
+				end if
+
+				candidate_ok = (T_star_entropy > 0.0_dp) .and. (rho_star_entropy > 0.0_dp)
+
+				if (.not. candidate_ok) then
+					candidate_reject_count = candidate_reject_count + 1
 					if (invalid_face) then
-						write(*,*) 'CABARET strict Riemann face repair: invalid face and Riemann solver failed at ', dim, i, j, k
-						write(*,*) '  p_f_new, rho_f_new = ', p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k)
-						error stop 'CABARET strict Riemann face repair: invalid face and Riemann solver failed'
+						write(*,*) 'CABARET strict Riemann pressure-temperature closure: invalid face and temperature candidate rejected at ', dim, i, j, k
+						write(*,*) '  p_star, T_star, rho_star = ', p_star, T_star_entropy, rho_star_entropy
+						error stop 'CABARET strict Riemann pressure-temperature closure: invalid temperature candidate'
 					end if
 					cycle
 				end if
 
-				do spec = 1, species_number
-					Y_f_new%pr(spec)%cells(dim,i,j,k) = Y_sample(spec)
-				end do
-
-				if (use_left) then
-					do dim1 = 1, dimensions
-						if (dim1 /= dim) v_f_new%pr(dim1)%cells(dim,i,j,k) = v%pr(dim1)%cells(il,jl,kl)
-					end do
-				else
-					do dim1 = 1, dimensions
-						if (dim1 /= dim) v_f_new%pr(dim1)%cells(dim,i,j,k) = v%pr(dim1)%cells(i,j,k)
-					end do
-				end if
+				p_f_new%cells(dim,i,j,k) = p_star
+				rho_f_new%cells(dim,i,j,k) = rho_star_entropy
+				v_f_new%pr(dim)%cells(dim,i,j,k) = u_star
 
 				if (allocated(this%s_material_f_new)) then
-					if (riemann%get_success() .and. cabaret_use_thermally_perfect_riemann .and. &
-						(riemann%get_temperature() > 0.0_dp)) then
-						T_sample = riemann%get_temperature()
+					if (cabaret_use_temperature_contact_invariant) then
+						s_f(dim,i,j,k) = T_star_entropy
 					else
-						T_sample = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_f_new%cells(dim,i,j,k), &
-							rho_f_new%cells(dim,i,j,k), Y_sample)
+						s_f(dim,i,j,k) = this%thermo%thermo_ptr%mixture_specific_entropy(T_star_entropy, &
+							p_star, Y_face, cabaret_entropy_p_ref)
 					end if
-					this%s_material_f_new(dim,i,j,k) = this%thermo%thermo_ptr%mixture_specific_entropy(T_sample, &
-						p_f_new%cells(dim,i,j,k), Y_sample, cabaret_entropy_p_ref)
 				end if
+				if (allocated(this%psi_material_f_new)) then
+					psi_f(dim,i,j,k) = m_face/rho_star_entropy
+				end if
+				if (allocated(this%ksi_sensible_material_f_new)) then
+					ksi_f(dim,i,j,k) = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
+						T_star_entropy, Y_face)
+				end if
+				success_count = success_count + 1
 			end do
 			end do
 			end do
 		!$omp end do nowait
 		end do
 
-		deallocate(Y_left, Y_right, Y_sample)
+		deallocate(Y_left, Y_right, Y_face)
 	!$omp end parallel
 
         end associate
 
-		if (cabaret_riemann_face_repair_print_statistics .and. repair_count > 0) then
-			print *, 'CABARET Riemann face repair: attempts/success/failure = ', &
-				repair_count, success_count, failure_count
+		if (cabaret_material_contact_riemann_print_statistics .and. attempt_count > 0) then
+			print *, 'CABARET Riemann pressure-temperature closure: attempts/success/failure/rejected_candidate = ', &
+				attempt_count, success_count, failure_count, candidate_reject_count
 		end if
 
-		call this%normalize_face_mass_fractions()
 		call this%exchange_face_primitive_state()
-	end subroutine apply_optional_riemann_face_repair
+	end subroutine apply_material_contact_riemann_pressure_temperature_closure
+
 
 	subroutine predict_conservative_half_step(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -1958,6 +2166,8 @@ contains
 		integer :: i, j, k, dim, dim1, dim2, plus, sign, bound_number, spec
 		integer, dimension(3,2) :: cons_inner_loop, cons_utter_loop, flow_inner_loop, loop
 		real(dp), dimension(3) :: cell_size, characteristic_speed
+		real(dp) :: mol_l_face, mol_r_face, mol_ratio_face
+		logical :: material_contact_face, sound_point_lr, sound_point_rl
 		character(len=20) :: coordinate_system
 		real(dp), dimension(2) :: r_inv, q_inv, r_inv_new, q_inv_new
 		real(dp), dimension(:,:), allocatable :: v_inv, v_inv_corrected, v_inv_new
@@ -2191,6 +2401,7 @@ contains
 					v_s			=> this%v_s%s_ptr		, &
             
 					v			=> this%v%v_ptr	, &
+					Y			=> this%Y%v_ptr	, &
 					
 					v_f			=> this%v_f		, &
 					rho_f		=> this%rho_f	, &
@@ -2206,7 +2417,9 @@ contains
 					
 					bc			=> this%boundary%bc_ptr)
             
-		!$omp parallel default(shared)  private(i,j,k,dim,dim1,loop,G_half_lower,G_half_higher,v_f_approx,v_s_f_approx,characteristic_speed,sign,bound_number)
+			!$omp parallel default(shared)  private(i,j,k,dim,dim1,loop,G_half_lower,G_half_higher, &
+			!$omp& v_f_approx,v_s_f_approx,characteristic_speed,sign,bound_number,spec, &
+			!$omp& mol_l_face,mol_r_face,mol_ratio_face,material_contact_face,sound_point_lr,sound_point_rl)
 
         do dim = 1, dimensions
 
@@ -2228,9 +2441,33 @@ contains
                         
 					v_f_approx		= 0.5_dp*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
 					v_s_f_approx	= 0.5_dp*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))			+ v_s%cells(i,j,k))                    
+
+						mol_l_face = 0.0_dp
+						mol_r_face = 0.0_dp
+						material_contact_face = .false.
+						if (cabaret_skip_legacy_sound_point_on_material_contacts) then
+							do spec = 1, species_number
+								mol_l_face = mol_l_face + Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / &
+									this%thermo%thermo_ptr%molar_masses(spec)
+								mol_r_face = mol_r_face + Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
+							end do
+							if (mol_l_face > 0.0_dp .and. mol_r_face > 0.0_dp) then
+								mol_l_face = 1.0_dp / mol_l_face
+								mol_r_face = 1.0_dp / mol_r_face
+								mol_ratio_face = max(mol_l_face,mol_r_face) / min(mol_l_face,mol_r_face)
+								material_contact_face = (mol_ratio_face > cabaret_riemann_molar_mass_ratio)
+							end if
+						end if
+
+						sound_point_lr = ((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) < &
+							abs(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))) .and. &
+							(v%pr(dim)%cells(i,j,k) > v_s%cells(i,j,k)))
+						sound_point_rl = ((v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) < &
+							-v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) .and. &
+							(abs(v%pr(dim)%cells(i,j,k)) < abs(v_s%cells(i,j,k))))
                     
-					if	((.not.((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	<	abs(	v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))	.and.(	  v%pr(dim)%cells(i,j,k)	>		v_s%cells(i,j,k))))	&
-					.and.(.not.((	 v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	<			-v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	.and.(abs(v%pr(dim)%cells(i,j,k))	< abs(	v_s%cells(i,j,k)))))) then 
+						if	((material_contact_face .or. (.not. sound_point_lr)) .and. &
+							(material_contact_face .or. (.not. sound_point_rl))) then 
 
 						characteristic_speed(1) = v_f_approx + v_s_f_approx
 						characteristic_speed(2) = v_f_approx - v_s_f_approx
@@ -2331,8 +2568,7 @@ contains
 					characteristic_speed(2) = v_f_approx - v_s_f_approx
 					characteristic_speed(3) = v_f_approx
      
-					if (((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	<	abs(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))) &
-					.and.(	  v%pr(dim)%cells(i,j,k)	>	v_s%cells(i,j,k))) )then 
+						if ((.not. material_contact_face) .and. sound_point_lr) then 
 						
                             
 						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dp*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
@@ -2364,8 +2600,7 @@ contains
                             
 					end if
      
-					if (((	 v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	 <	  -v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	&
-					.and.	(abs(v%pr(dim)%cells(i,j,k)) < abs(v_s%cells(i,j,k)))))then 
+						if ((.not. material_contact_face) .and. sound_point_rl) then 
 					
 						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dp*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
 																*0.5_dp*(v_s%cells(i,j,k) + v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
@@ -2420,12 +2655,16 @@ contains
 		real(dp), dimension(:,:), allocatable :: Y_inv, Y_inv_corrected, Y_inv_new
 		real(dp), dimension(:), allocatable :: Y_inv_half, Y_inv_old
 		real(dp), dimension(:), allocatable :: vel_state, Y_state, S_mom, S_rhoY, g_Y
-		real(dp) :: g_inv, alpha_loc, g_entropy
+		real(dp) :: g_inv, alpha_loc, g_entropy, g_temperature, S_inv_lower_bound
 		real(dp) :: v_f_approx_lower, v_f_approx_higher
 		real(dp) :: diss_l, diss_r
 		real(dp), dimension(2) :: S_inv, S_inv_new, S_inv_corrected
-		real(dp) :: S_inv_half
+		real(dp), dimension(2) :: Psi_inv, Psi_inv_new, Psi_inv_corrected
+		real(dp), dimension(2) :: Ksi_inv, Ksi_inv_new, Ksi_inv_corrected
+		real(dp) :: S_inv_half, Psi_inv_half, Ksi_inv_half
 		real(dp) :: T_face_lower, T_face_higher
+		real(dp) :: m_face_lower, m_face_higher, m_cell, m_corr, molar_ratio_contact
+		real(dp) :: y_pos, y_sum_corr, molar_denom_corr, progress
 
 		dimensions      = this%domain%get_domain_dimensions()
 		species_number  = this%chem%chem_ptr%species_number
@@ -2457,9 +2696,18 @@ contains
 					rhoY_src_old	=> this%rhoY_src_old, &
 					Y_f_new		=> this%Y_f_new%v_ptr		, &
 					s_material_f_new => this%s_material_f_new, &
+					psi_material_f_new => this%psi_material_f_new, &
+					ksi_sensible_material_f_new => this%ksi_sensible_material_f_new, &
 					bc			=> this%boundary%bc_ptr)
         
-		!$omp parallel default(shared)  private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old,g_inv,alpha_loc,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher,bound_number,diss_r,diss_l,S_inv,S_inv_new,S_inv_corrected,S_inv_half,T_face_lower,T_face_higher,vel_state,Y_state,S_mom,S_rhoY,g_Y,g_entropy) !, &
+		!$omp parallel default(shared) &
+		!$omp& private(i,j,k,dim,loop,spec,Y_inv,Y_inv_half,Y_inv_new,Y_inv_old, &
+		!$omp& g_inv,alpha_loc,Y_inv_corrected,v_f_approx_lower,v_f_approx_higher, &
+		!$omp& bound_number,diss_r,diss_l,S_inv,S_inv_new,S_inv_corrected,S_inv_half, &
+		!$omp& Psi_inv,Psi_inv_new,Psi_inv_corrected,Psi_inv_half,Ksi_inv,Ksi_inv_new, &
+		!$omp& Ksi_inv_corrected,Ksi_inv_half,T_face_lower,T_face_higher, &
+		!$omp& m_face_lower,m_face_higher,m_cell,m_corr,molar_ratio_contact,y_pos, &
+		!$omp& y_sum_corr,molar_denom_corr,progress,vel_state,Y_state,S_mom,S_rhoY,g_Y,g_entropy,g_temperature,S_inv_lower_bound)
 		allocate(Y_inv(species_number,2), Y_inv_corrected(species_number,2), Y_inv_new(species_number,2))
 		allocate(Y_inv_half(species_number), Y_inv_old(species_number))
 		allocate(vel_state(dimensions), S_mom(dimensions))
@@ -2492,18 +2740,41 @@ contains
 						y_inv_old(spec)		= y_old(spec,i,j,k)
                     end do
 
-					! Entropy is reconstructed with the same contact-family stencil as Y_k.
-					! The final density closure will use this entropy together with the
-					! normalized face mass fractions, so the density and composition
-					! contacts cannot drift apart numerically.
+					! Entropy and molar volume are reconstructed with the same
+					! contact-family stencil as Y_k.  The production density closure uses
+					! psi=M(Y)/rho, because rho=M/psi is the quantity that becomes
+					! nonphysical when composition and thermodynamic contact layers drift.
 					T_face_lower  = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(this%p_f(dim,i,j,k), &
 						this%rho_f(dim,i,j,k), Y_f(:,dim,i,j,k))
 					T_face_higher = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(this%p_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), &
 						this%rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))
-					S_inv(1) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face_lower, this%p_f(dim,i,j,k), Y_f(:,dim,i,j,k), cabaret_entropy_p_ref)
-					S_inv(2) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face_higher, this%p_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), &
-						Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), cabaret_entropy_p_ref)
-					S_inv_half = this%thermo%thermo_ptr%mixture_specific_entropy(T%cells(i,j,k), p%cells(i,j,k), Y_inv_half(:), cabaret_entropy_p_ref)
+					if (cabaret_use_temperature_contact_invariant) then
+						! Fix A: reconstruct the material temperature instead of scalar
+						! mixture entropy.  This removes the composition-dependent
+						! JANAF entropy reference jump from the CABARET reflection stencil.
+						S_inv(1) = T_face_lower
+						S_inv(2) = T_face_higher
+						S_inv_half = T%cells(i,j,k)
+					else
+						S_inv(1) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face_lower, this%p_f(dim,i,j,k), Y_f(:,dim,i,j,k), cabaret_entropy_p_ref)
+						S_inv(2) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face_higher, this%p_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), &
+							Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), cabaret_entropy_p_ref)
+						S_inv_half = this%thermo%thermo_ptr%mixture_specific_entropy(T%cells(i,j,k), p%cells(i,j,k), Y_inv_half(:), cabaret_entropy_p_ref)
+					end if
+
+					m_face_lower  = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i,j,k))
+					m_face_higher = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))
+					m_cell        = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_inv_half(:))
+					Psi_inv(1)   = m_face_lower/this%rho_f(dim,i,j,k)
+					Psi_inv(2)   = m_face_higher/this%rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
+					Psi_inv_half = m_cell/rho%cells(i,j,k)
+
+					Ksi_inv(1) = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
+						T_face_lower, Y_f(:,dim,i,j,k))
+					Ksi_inv(2) = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
+						T_face_higher, Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))
+					Ksi_inv_half = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
+						T%cells(i,j,k), Y_inv_half(:))
 					
 					diss_l = 0.0_dp
 					diss_r = 0.0_dp
@@ -2515,9 +2786,14 @@ contains
 
 					S_inv_new(1) = (2.0_dp*S_inv_half - (1.0_dp-diss_l)*S_inv(2))/(1.0_dp+diss_l)
 					S_inv_new(2) = (2.0_dp*S_inv_half - (1.0_dp-diss_r)*S_inv(1))/(1.0_dp+diss_r)
+					Psi_inv_new(1) = (2.0_dp*Psi_inv_half - (1.0_dp-diss_l)*Psi_inv(2))/(1.0_dp+diss_l)
+					Psi_inv_new(2) = (2.0_dp*Psi_inv_half - (1.0_dp-diss_r)*Psi_inv(1))/(1.0_dp+diss_r)
+					Ksi_inv_new(1) = (2.0_dp*Ksi_inv_half - (1.0_dp-diss_l)*Ksi_inv(2))/(1.0_dp+diss_l)
+					Ksi_inv_new(2) = (2.0_dp*Ksi_inv_half - (1.0_dp-diss_r)*Ksi_inv(1))/(1.0_dp+diss_r)
 
 					g_Y(:) = 0.0_dp
 					g_entropy = 0.0_dp
+					g_temperature = 0.0_dp
 					if (cabaret_use_effective_physical_sources .and. cabaret_use_effective_physical_source_shifts) then
 						do spec = 1, species_number
 							Y_state(spec) = Y%pr(spec)%cells(i,j,k)
@@ -2529,14 +2805,31 @@ contains
 						end do
 						call this%physical_source_contact_shifts(rho%cells(i,j,k), p%cells(i,j,k), v_s%cells(i,j,k), &
 							E_f%cells(i,j,k), vel_state, Y_state, rho_src_old(i,j,k), S_mom, &
-							rhoE_src_old(i,j,k), S_rhoY, g_Y, g_entropy)
+							rhoE_src_old(i,j,k), S_rhoY, g_Y, g_entropy, g_temperature)
 					end if
 
-					g_inv = g_entropy
+					if (cabaret_use_temperature_contact_invariant) then
+						g_inv = g_temperature
+						S_inv_lower_bound = 0.0_dp
+					else
+						g_inv = g_entropy
+						S_inv_lower_bound = -huge(1.0_dp)
+					end if
 					alpha_loc = 0.0_dp
 					S_inv_corrected(1) = limit_quasi_invariant(S_inv_new(1), S_inv(1), S_inv_half, S_inv(2), &
-						g_inv*this%time_step, alpha_loc, -huge(1.0_dp), huge(1.0_dp))
+						g_inv*this%time_step, alpha_loc, S_inv_lower_bound, huge(1.0_dp))
 					S_inv_corrected(2) = limit_quasi_invariant(S_inv_new(2), S_inv(1), S_inv_half, S_inv(2), &
+						g_inv*this%time_step, alpha_loc, S_inv_lower_bound, huge(1.0_dp))
+
+					g_inv = 0.0_dp
+					alpha_loc = 0.0_dp
+					Psi_inv_corrected(1) = limit_quasi_invariant(Psi_inv_new(1), Psi_inv(1), Psi_inv_half, Psi_inv(2), &
+						g_inv*this%time_step, alpha_loc, 0.0_dp, huge(1.0_dp))
+					Psi_inv_corrected(2) = limit_quasi_invariant(Psi_inv_new(2), Psi_inv(1), Psi_inv_half, Psi_inv(2), &
+						g_inv*this%time_step, alpha_loc, 0.0_dp, huge(1.0_dp))
+					Ksi_inv_corrected(1) = limit_quasi_invariant(Ksi_inv_new(1), Ksi_inv(1), Ksi_inv_half, Ksi_inv(2), &
+						g_inv*this%time_step, alpha_loc, -huge(1.0_dp), huge(1.0_dp))
+					Ksi_inv_corrected(2) = limit_quasi_invariant(Ksi_inv_new(2), Ksi_inv(1), Ksi_inv_half, Ksi_inv(2), &
 						g_inv*this%time_step, alpha_loc, -huge(1.0_dp), huge(1.0_dp))
 					
 					do spec = 1,species_number
@@ -2548,7 +2841,29 @@ contains
 													  g_inv*this%time_step, alpha_loc, 0.0_dp, 1.0_dp)
 						y_inv_corrected(spec,2) = limit_quasi_invariant(y_inv_new(spec,2), y_inv(spec,1), Y_inv_half(spec), y_inv(spec,2), &
 													  g_inv*this%time_step, alpha_loc, 0.0_dp, 1.0_dp)
-					end do					
+					end do
+
+					if (cabaret_use_material_progress_coupled_molar_volume) then
+						molar_ratio_contact = max(m_face_lower,m_face_higher)/min(m_face_lower,m_face_higher)
+						if ((molar_ratio_contact > cabaret_material_molar_volume_coupling_molar_mass_ratio) .and. &
+							(abs(m_face_higher - m_face_lower) > 10.0_dp*tiny(1.0_dp)*max(abs(m_face_higher),abs(m_face_lower)))) then
+							do bound_number = 1, 2
+								y_sum_corr = 0.0_dp
+								molar_denom_corr = 0.0_dp
+								do spec = 1, species_number
+									y_pos = max(y_inv_corrected(spec,bound_number), 0.0_dp)
+									y_sum_corr = y_sum_corr + y_pos
+									molar_denom_corr = molar_denom_corr + y_pos/this%thermo%thermo_ptr%molar_masses(spec)
+								end do
+								if ((y_sum_corr > 0.0_dp) .and. (molar_denom_corr > 0.0_dp)) then
+									m_corr = y_sum_corr/molar_denom_corr
+									progress = (m_corr - m_face_lower)/(m_face_higher - m_face_lower)
+									progress = min(1.0_dp, max(0.0_dp, progress))
+									Psi_inv_corrected(bound_number) = Psi_inv(1) + progress*(Psi_inv(2) - Psi_inv(1))
+								end if
+							end do
+						end if
+					end if
 					
 #ifdef OMP					
 					call omp_set_lock(lock(i,j,k))
@@ -2564,7 +2879,11 @@ contains
 								v_f_approx_lower		= v_f_new%pr(dim)%cells(dim,i,j,k)
 								if (v_f_approx_lower < 0.0_dp) then
                                 	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1))
-									if (spec == 1) s_material_f_new(dim,i,j,k) = S_inv_corrected(1)
+									if (spec == 1) then
+										s_material_f_new(dim,i,j,k) = S_inv_corrected(1)
+										psi_material_f_new(dim,i,j,k) = Psi_inv_corrected(1)
+										ksi_sensible_material_f_new(dim,i,j,k) = Ksi_inv_corrected(1)
+									end if
 								end if	
 							end if
 						end if
@@ -2576,7 +2895,11 @@ contains
 									v_f_approx_higher		= v_f_new%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
 								if (v_f_approx_higher >= 0.0_dp) then
 									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 	
-									if (spec == 1) s_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = S_inv_corrected(2)
+									if (spec == 1) then
+										s_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = S_inv_corrected(2)
+										psi_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = Psi_inv_corrected(2)
+										ksi_sensible_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = Ksi_inv_corrected(2)
+									end if
    								end if
                             end if
                         end if
@@ -3168,6 +3491,8 @@ contains
 		this%p_f_new%s_ptr%cells   = 0.0_dp
 		this%rho_f_new%s_ptr%cells = 0.0_dp
 		if (allocated(this%s_material_f_new)) this%s_material_f_new = 0.0_dp
+		if (allocated(this%psi_material_f_new)) this%psi_material_f_new = 0.0_dp
+		if (allocated(this%ksi_sensible_material_f_new)) this%ksi_sensible_material_f_new = 0.0_dp
 
 		do dim = 1, dimensions
 			this%v_f_new%v_ptr%pr(dim)%cells = 0.0_dp
@@ -3184,15 +3509,17 @@ contains
 
 		integer :: dim, dim1, i, j, k, dimensions
 		integer, dimension(3,2) :: flow_inner_loop, loop
-		real(dp) :: T_face
+		real(dp) :: T_face, m_face, ksi_face
 
 		if (.not. cabaret_use_entropy_locked_contact_density) return
 
 		dimensions      = this%domain%get_domain_dimensions()
 		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
 
-		associate( p_f => this%p_f, rho_f => this%rho_f, Y_f => this%Y_f, s_f => this%s_material_f_new )
-		!$omp parallel default(shared) private(dim,dim1,i,j,k,loop,T_face)
+		associate( p_f => this%p_f, rho_f => this%rho_f, Y_f => this%Y_f, &
+		           s_f => this%s_material_f_new, psi_f => this%psi_material_f_new, &
+		           ksi_f => this%ksi_sensible_material_f_new )
+		!$omp parallel default(shared) private(dim,dim1,i,j,k,loop,T_face,m_face,ksi_face)
 		do dim = 1, dimensions
 			loop = flow_inner_loop
 			do dim1 = 1, dimensions
@@ -3204,7 +3531,17 @@ contains
 			do j = loop(2,1), loop(2,2)
 			do i = loop(1,1), loop(1,2)
 				T_face = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_f(dim,i,j,k), rho_f(dim,i,j,k), Y_f(:,dim,i,j,k))
-				s_f(dim,i,j,k) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face, p_f(dim,i,j,k), Y_f(:,dim,i,j,k), cabaret_entropy_p_ref)
+				if (cabaret_use_temperature_contact_invariant) then
+					s_f(dim,i,j,k) = T_face
+				else
+					s_f(dim,i,j,k) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face, &
+						p_f(dim,i,j,k), Y_f(:,dim,i,j,k), cabaret_entropy_p_ref)
+				end if
+				m_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i,j,k))
+				psi_f(dim,i,j,k) = m_face/rho_f(dim,i,j,k)
+				ksi_face = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
+					T_face, Y_f(:,dim,i,j,k))
+				ksi_f(dim,i,j,k) = ksi_face
 			end do
 			end do
 			end do
@@ -3221,7 +3558,9 @@ contains
 		integer :: dim, dim1, i, j, k, dimensions, spec, species_number
 		integer, dimension(3,2) :: flow_inner_loop, loop
 		integer :: il, jl, kl
-		integer :: temperature_guard_count, molar_volume_guard_count
+		integer :: temperature_guard_count, molar_volume_guard_count, psi_contact_count, density_guard_count
+		integer :: sensible_pep_candidate_count, sensible_pep_accepted_count
+		integer :: sensible_pep_reject_temperature_count, sensible_pep_reject_density_count
 		real(dp) :: m_left, m_right, molar_ratio, T_guess, T_entropy, T_used, T_guard
 		real(dp) :: T_left, T_right, T_ref, m_face
 		real(dp) :: molar_denom_left, molar_denom_right
@@ -3229,8 +3568,25 @@ contains
 		real(dp) :: psi_clip_tol, psi_trigger_tol, psi_entropy, psi_used
 		real(dp) :: psi_lower_clip, psi_upper_clip, psi_lower_trigger, psi_upper_trigger
 		real(dp) :: T_consequence_limit
+		real(dp) :: psi_candidate, T_candidate, T_candidate_limit
+		real(dp) :: rho_face_guard, rho_left_loc, rho_right_loc, rho_min_loc, rho_max_loc
+		real(dp) :: rho_span_loc, rho_tol_loc, rho_lower_bound, rho_upper_bound
+		real(dp) :: m_min, m_max, m_span, m_margin
+		real(dp) :: ksi_candidate, T_pep, psi_pep, rho_pep, T_base, rho_base
+		real(dp) :: T_pep_limit, T_relax_limit
+		real(dp) :: psi_base, dpsi_pep, psi_adm_low, psi_adm_high, psi_test
+		real(dp) :: T_lower_bound, T_upper_bound, psi_T_low, psi_T_high
+		real(dp) :: psi_rho_low, psi_rho_high, psi_loc_low, psi_loc_high
+		real(dp) :: theta_low_adm, theta_high_adm
+		real(dp) :: p_left_loc, p_right_loc, u_left_loc, u_right_loc
+		real(dp) :: c_left_loc, c_right_loc, p_jump_tol, u_jump_tol
+		real(dp) :: theta_pep
 		logical :: apply_entropy_lock, apply_temperature_guard, apply_molar_volume_guard
-		logical :: strong_guard_contact, temperature_consequence
+		logical :: use_direct_psi_contact_density, direct_psi_candidate_valid
+		logical :: apply_density_guard
+		logical :: strong_guard_contact, temperature_consequence, face_is_genuinely_mixed
+		logical :: use_sensible_pep_contact, pressure_smooth, velocity_smooth
+		logical :: sensible_pep_candidate_valid, reject_by_temperature, reject_by_density
 		real(dp), dimension(:), allocatable :: Y_face
 
 		if (.not. cabaret_use_entropy_locked_contact_density) return
@@ -3240,6 +3596,12 @@ contains
 		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
 		temperature_guard_count   = 0
 		molar_volume_guard_count = 0
+		psi_contact_count = 0
+		density_guard_count = 0
+		sensible_pep_candidate_count = 0
+		sensible_pep_accepted_count = 0
+		sensible_pep_reject_temperature_count = 0
+		sensible_pep_reject_density_count = 0
 
 		associate( rho_f_new => this%rho_f_new%s_ptr, &
 				   p_f_new   => this%p_f_new%s_ptr, &
@@ -3247,7 +3609,12 @@ contains
 				   Y         => this%Y%v_ptr, &
 				   rho       => this%rho%s_ptr, &
 				   T         => this%T%s_ptr, &
+				   p         => this%p%s_ptr, &
+				   v         => this%v%v_ptr, &
+				   v_s       => this%v_s%s_ptr, &
 				   s_f       => this%s_material_f_new, &
+				   psi_f     => this%psi_material_f_new, &
+				   ksi_f     => this%ksi_sensible_material_f_new, &
 				   bc        => this%boundary%bc_ptr )
 
 		!$omp parallel default(shared) private(dim,dim1,i,j,k,loop,il,jl,kl,spec,Y_face, &
@@ -3255,9 +3622,21 @@ contains
 		!$omp& m_face,molar_denom_left,molar_denom_right,psi_left,psi_right,psi_min,psi_max, &
 		!$omp& psi_span,psi_clip_tol,psi_trigger_tol,psi_entropy,psi_used,psi_lower_clip, &
 		!$omp& psi_upper_clip,psi_lower_trigger,psi_upper_trigger,T_consequence_limit, &
+		!$omp& psi_candidate,T_candidate,T_candidate_limit,rho_face_guard,rho_left_loc,rho_right_loc, &
+		!$omp& rho_min_loc,rho_max_loc,rho_span_loc,rho_tol_loc,rho_lower_bound,rho_upper_bound, &
+		!$omp& m_min,m_max,m_span,m_margin,ksi_candidate,T_pep,psi_pep,rho_pep,T_base,rho_base, &
+		!$omp& T_pep_limit,T_relax_limit,psi_base,dpsi_pep,psi_adm_low,psi_adm_high,psi_test, &
+		!$omp& T_lower_bound,T_upper_bound,psi_T_low,psi_T_high,psi_rho_low,psi_rho_high, &
+		!$omp& psi_loc_low,psi_loc_high,theta_low_adm,theta_high_adm, &
+		!$omp& p_left_loc,p_right_loc,u_left_loc,u_right_loc,c_left_loc, &
+		!$omp& c_right_loc,p_jump_tol,u_jump_tol,theta_pep, &
 		!$omp& apply_entropy_lock,apply_temperature_guard,apply_molar_volume_guard, &
-		!$omp& strong_guard_contact,temperature_consequence) &
-		!$omp& reduction(+:temperature_guard_count,molar_volume_guard_count)
+		!$omp& strong_guard_contact,temperature_consequence,use_direct_psi_contact_density, &
+		!$omp& direct_psi_candidate_valid,apply_density_guard,face_is_genuinely_mixed,use_sensible_pep_contact, &
+		!$omp& pressure_smooth,velocity_smooth,sensible_pep_candidate_valid,reject_by_temperature,reject_by_density) &
+		!$omp& reduction(+:temperature_guard_count,molar_volume_guard_count,psi_contact_count,density_guard_count, &
+		!$omp& sensible_pep_candidate_count,sensible_pep_accepted_count, &
+		!$omp& sensible_pep_reject_temperature_count,sensible_pep_reject_density_count)
 		allocate(Y_face(species_number))
 		do dim = 1, dimensions
 			loop = flow_inner_loop
@@ -3277,12 +3656,16 @@ contains
 					molar_denom_left  = 0.0_dp
 					molar_denom_right = 0.0_dp
 					do spec = 1, species_number
-						molar_denom_left  = molar_denom_left  + Y%pr(spec)%cells(il,jl,kl)/this%thermo%thermo_ptr%molar_masses(spec)
-						molar_denom_right = molar_denom_right + Y%pr(spec)%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec)
+						molar_denom_left  = molar_denom_left  + &
+							Y%pr(spec)%cells(il,jl,kl)/this%thermo%thermo_ptr%molar_masses(spec)
+						molar_denom_right = molar_denom_right + &
+							Y%pr(spec)%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec)
 					end do
 					m_left  = 1.0_dp/molar_denom_left
 					m_right = 1.0_dp/molar_denom_right
-					molar_ratio = max(m_left,m_right)/min(m_left,m_right)
+					m_min = min(m_left,m_right)
+					m_max = max(m_left,m_right)
+					molar_ratio = m_max/m_min
 
 					apply_entropy_lock = cabaret_entropy_lock_all_interior_faces .or. &
 						(molar_ratio > cabaret_entropy_lock_molar_mass_ratio)
@@ -3292,16 +3675,29 @@ contains
 							Y_face(spec) = Y_f_new%pr(spec)%cells(dim,i,j,k)
 						end do
 
-						T_guess   = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k), Y_face)
-						T_entropy = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y(s_f(dim,i,j,k), p_f_new%cells(dim,i,j,k), Y_face, T_guess, &
-			cabaret_entropy_temperature_bracket_low, cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
+						T_guess = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
+							p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k), Y_face)
+						if (cabaret_use_temperature_contact_invariant) then
+							T_entropy = s_f(dim,i,j,k)
+							if (T_entropy <= 0.0_dp) then
+								write(*,*) 'CABARET temperature contact invariant: non-positive T at ', dim, i, j, k
+								write(*,*) '  T_face, p_f, rho_f = ', T_entropy, p_f_new%cells(dim,i,j,k), &
+									rho_f_new%cells(dim,i,j,k)
+								error stop 'CABARET temperature contact invariant: non-positive T'
+							end if
+						else
+							T_entropy = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y( &
+								s_f(dim,i,j,k), p_f_new%cells(dim,i,j,k), Y_face, T_guess, &
+								cabaret_entropy_temperature_bracket_low, &
+								cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
+						end if
 
 						T_used = T_entropy
 						apply_temperature_guard = .false.
+						T_left  = T%cells(il,jl,kl)
+						T_right = T%cells(i,j,k)
+						T_ref   = max(T_guess, T_left, T_right)
 						if (cabaret_use_entropy_lock_temperature_guard) then
-							T_left  = T%cells(il,jl,kl)
-							T_right = T%cells(i,j,k)
-							T_ref   = max(T_guess, T_left, T_right)
 							T_guard = T_ref*cabaret_entropy_lock_temperature_guard_ratio + &
 								cabaret_entropy_lock_temperature_guard_abs
 							apply_temperature_guard = (T_entropy > T_guard)
@@ -3312,22 +3708,22 @@ contains
 						end if
 
 						m_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_face)
-
-						! Entropy locking gives psi = M/rho = R_u*T/p.  The remaining
-						! one-cell spike is a non-monotone psi outlier: composition is
-						! already close to the heavy-gas side while density is still too
-						! close to the light-gas/contact-transition side.  Clip psi, not
-						! p_f, Y_f, s_f or velocities.
-						psi_used = r_gase_J*T_used/ &
-							p_f_new%cells(dim,i,j,k)
+						psi_used = r_gase_J*T_used/p_f_new%cells(dim,i,j,k)
 
 						apply_molar_volume_guard = .false.
+						strong_guard_contact = .false.
+						psi_left = 0.0_dp
+						psi_right = 0.0_dp
+						psi_lower_clip = 0.0_dp
+						psi_upper_clip = huge(1.0_dp)
+						psi_lower_trigger = 0.0_dp
+						psi_upper_trigger = huge(1.0_dp)
 						if (cabaret_use_entropy_lock_molar_volume_guard) then
 							strong_guard_contact = cabaret_entropy_lock_all_interior_faces .or. &
 								(molar_ratio > cabaret_entropy_lock_molar_volume_guard_molar_mass_ratio)
 
 							if (strong_guard_contact) then
-								psi_left  = m_left /rho%cells(il,jl,kl)
+								psi_left  = m_left/rho%cells(il,jl,kl)
 								psi_right = m_right/rho%cells(i,j,k)
 								psi_min   = min(psi_left,psi_right)
 								psi_max   = max(max(psi_left,psi_right), psi_min)
@@ -3342,16 +3738,15 @@ contains
 								psi_upper_trigger = max(psi_lower_trigger, psi_max + psi_trigger_tol)
 								psi_entropy = psi_used
 
-								T_left  = T%cells(il,jl,kl)
-								T_right = T%cells(i,j,k)
-								T_ref   = max(T_guess, T_left, T_right)
-								T_consequence_limit = T_ref*(1.0_dp + cabaret_entropy_lock_molar_volume_guard_T_ratio) + &
+								T_consequence_limit = T_ref*(1.0_dp + &
+									cabaret_entropy_lock_molar_volume_guard_T_ratio) + &
 									cabaret_entropy_lock_molar_volume_guard_T_abs
 								temperature_consequence = (T_entropy > T_consequence_limit)
 
 								if (psi_entropy <= 0.0_dp) then
 									write(*,*) 'CABARET strict molar-volume guard: invalid psi at ', dim, i, j, k
-									write(*,*) '  psi_entropy, T_used, p_f = ', psi_entropy, T_used, p_f_new%cells(dim,i,j,k)
+									write(*,*) '  psi_entropy, T_used, p_f = ', &
+										psi_entropy, T_used, p_f_new%cells(dim,i,j,k)
 									error stop 'CABARET strict molar-volume guard: invalid psi'
 								end if
 
@@ -3366,6 +3761,196 @@ contains
 
 								if (apply_molar_volume_guard) then
 									molar_volume_guard_count = molar_volume_guard_count + 1
+								end if
+							end if
+						end if
+
+						! Selective material-psi candidate.  It is not a replacement for the
+						! entropy lock.  It is accepted only inside the mixed part of a strong
+						! material contact; pure-side faces keep the guarded entropy closure.
+						use_direct_psi_contact_density = cabaret_use_material_molar_volume_contact_density .and. &
+							allocated(this%psi_material_f_new) .and. (psi_f(dim,i,j,k) > 0.0_dp)
+						direct_psi_candidate_valid = .false.
+						if (use_direct_psi_contact_density) then
+							psi_candidate = psi_f(dim,i,j,k)
+							T_candidate = p_f_new%cells(dim,i,j,k)*psi_candidate/r_gase_J
+							m_span = m_max - m_min
+							m_margin = cabaret_material_molar_volume_face_mixture_rel_tol*m_span
+							face_is_genuinely_mixed = (molar_ratio > &
+								cabaret_material_molar_volume_coupling_molar_mass_ratio) .and. &
+								(m_span > 10.0_dp*tiny(1.0_dp)*m_max) .and. &
+								(m_face > m_min + m_margin) .and. (m_face < m_max - m_margin)
+
+							T_candidate_limit = max(T_ref, T_used)*(1.0_dp + &
+								cabaret_material_molar_volume_direct_T_ratio) + &
+								cabaret_material_molar_volume_direct_T_abs
+							direct_psi_candidate_valid = face_is_genuinely_mixed .and. &
+								(T_candidate <= T_candidate_limit)
+							if (strong_guard_contact) then
+								direct_psi_candidate_valid = direct_psi_candidate_valid .and. &
+									(psi_candidate >= psi_lower_clip) .and. (psi_candidate <= psi_upper_clip)
+							end if
+
+							if (direct_psi_candidate_valid) then
+								psi_used = psi_candidate
+								psi_contact_count = psi_contact_count + 1
+							end if
+						end if
+
+
+						! Relaxed sensible-energy PEP contact projection.  The baseline
+						! state remains the entropy/direct-psi result currently stored in
+						! psi_used.  The sensible-energy PEP state defines only a target
+						! molar volume psi_pep.  The actual correction is a single convex
+						! coefficient theta chosen so that
+						!
+						!     psi(theta)=psi_base+theta*(psi_pep-psi_base)
+						!
+						! remains inside the local admissible interval imposed by
+						! temperature, density and molar-volume bounds.  This consolidates
+						! the previous engineering accept/reject gates into one CABARET-like
+						! nonlinear contact limiter.
+						use_sensible_pep_contact = cabaret_use_sensible_energy_pep_contact .and. &
+							cabaret_use_sensible_pep_admissible_projection .and. &
+							allocated(this%ksi_sensible_material_f_new)
+						sensible_pep_candidate_valid = .false.
+						if (use_sensible_pep_contact) then
+							m_span = m_max - m_min
+							! Parameter-free material-contact activation: apply the PEP projection
+							! only when the reconstructed face composition lies strictly inside
+							! the local two-cell molar-mass interval.  Acoustic safety is supplied
+							! by the invariant-domain projection below, not by tunable pressure
+							! or velocity jump thresholds.
+							face_is_genuinely_mixed = (m_span > 10.0_dp*tiny(1.0_dp)*m_max) .and. &
+								(m_face > m_min) .and. (m_face < m_max)
+							pressure_smooth = .true.
+							velocity_smooth = .true.
+
+							if (face_is_genuinely_mixed) then
+								sensible_pep_candidate_count = sensible_pep_candidate_count + 1
+								ksi_candidate = ksi_f(dim,i,j,k)
+								T_base = p_f_new%cells(dim,i,j,k)*psi_used/r_gase_J
+								psi_base = psi_used
+								T_pep = this%thermo%thermo_ptr%temperature_from_sensible_energy_parameter_Y( &
+									ksi_candidate, Y_face, T_base)
+								if (T_pep > 0.0_dp) then
+									psi_pep = r_gase_J*T_pep/p_f_new%cells(dim,i,j,k)
+									rho_pep = m_face/psi_pep
+								else
+									psi_pep = -1.0_dp
+									rho_pep = -1.0_dp
+								end if
+
+								! Temperature admissible interval, converted to an interval for psi.
+								T_lower_bound = min(min(T_left,T_right),T_base)*(1.0_dp - &
+									cabaret_sensible_pep_T_lower_ratio) - cabaret_sensible_pep_T_lower_abs
+								T_upper_bound = max(max(T_left,T_right),T_base)*(1.0_dp + &
+									cabaret_sensible_pep_T_ratio) + cabaret_sensible_pep_T_abs
+								if (T_lower_bound < 0.0_dp) T_lower_bound = 0.0_dp
+								psi_T_low  = r_gase_J*T_lower_bound/p_f_new%cells(dim,i,j,k)
+								psi_T_high = r_gase_J*T_upper_bound/p_f_new%cells(dim,i,j,k)
+
+								! Density admissible interval, also converted to an interval for psi.
+								rho_left_loc  = rho%cells(il,jl,kl)
+								rho_right_loc = rho%cells(i,j,k)
+								rho_min_loc   = min(rho_left_loc,rho_right_loc)
+								rho_max_loc   = max(rho_left_loc,rho_right_loc)
+								rho_span_loc  = rho_max_loc - rho_min_loc
+								rho_tol_loc   = cabaret_entropy_lock_face_density_guard_abs_tol + &
+									cabaret_entropy_lock_face_density_guard_rel_tol*rho_span_loc
+								rho_lower_bound = rho_min_loc - rho_tol_loc
+								rho_upper_bound = rho_max_loc + rho_tol_loc
+
+								if (rho_lower_bound > 0.0_dp) then
+									psi_rho_low  = m_face/rho_upper_bound
+									psi_rho_high = m_face/rho_lower_bound
+								else
+									psi_rho_low  = huge(1.0_dp)
+									psi_rho_high = -huge(1.0_dp)
+								end if
+
+								! Local molar-volume interval.  If the entropy-lock molar-volume
+								! guard already constructed a strong-contact interval, reuse it;
+								! otherwise build the interval directly from adjacent cell states.
+								if (strong_guard_contact) then
+									psi_loc_low  = psi_lower_clip
+									psi_loc_high = psi_upper_clip
+								else
+									psi_left = m_left/rho%cells(il,jl,kl)
+									psi_right = m_right/rho%cells(i,j,k)
+									psi_min = min(psi_left,psi_right)
+									psi_max = max(psi_left,psi_right)
+									psi_span = psi_max - psi_min
+									psi_clip_tol = cabaret_sensible_pep_psi_abs_tol + &
+										cabaret_sensible_pep_psi_rel_tol*psi_span
+									psi_loc_low  = psi_min - psi_clip_tol
+									psi_loc_high = psi_max + psi_clip_tol
+								end if
+
+								psi_adm_low  = max(max(psi_T_low,  psi_rho_low),  psi_loc_low)
+								psi_adm_high = min(min(psi_T_high, psi_rho_high), psi_loc_high)
+								reject_by_temperature = (T_pep <= 0.0_dp) .or. &
+									(T_pep < T_lower_bound) .or. (T_pep > T_upper_bound)
+								reject_by_density = (rho_lower_bound <= 0.0_dp) .or. &
+									(rho_pep < rho_lower_bound) .or. (rho_pep > rho_upper_bound)
+								if (reject_by_temperature) sensible_pep_reject_temperature_count = &
+									sensible_pep_reject_temperature_count + 1
+								if (reject_by_density) sensible_pep_reject_density_count = &
+									sensible_pep_reject_density_count + 1
+
+								dpsi_pep = psi_pep - psi_base
+								theta_low_adm = 0.0_dp
+								theta_high_adm = 1.0_dp
+
+								if ((psi_adm_low <= psi_adm_high) .and. (psi_pep > 0.0_dp) .and. &
+									(abs(dpsi_pep) > 10.0_dp*tiny(1.0_dp)*max(abs(psi_base),abs(psi_pep)))) then
+									if (dpsi_pep > 0.0_dp) then
+										theta_low_adm  = max(theta_low_adm,  (psi_adm_low  - psi_base)/dpsi_pep)
+										theta_high_adm = min(theta_high_adm, (psi_adm_high - psi_base)/dpsi_pep)
+									else
+										theta_low_adm  = max(theta_low_adm,  (psi_adm_high - psi_base)/dpsi_pep)
+										theta_high_adm = min(theta_high_adm, (psi_adm_low  - psi_base)/dpsi_pep)
+									end if
+									theta_low_adm  = max(0.0_dp, theta_low_adm)
+									theta_high_adm = min(1.0_dp, theta_high_adm)
+									if ((theta_high_adm >= theta_low_adm) .and. (theta_high_adm > 0.0_dp)) then
+										theta_pep = theta_high_adm
+										psi_test = psi_base + theta_pep*dpsi_pep
+										if ((psi_test >= psi_adm_low) .and. (psi_test <= psi_adm_high)) then
+											psi_used = psi_test
+											sensible_pep_candidate_valid = .true.
+											sensible_pep_accepted_count = sensible_pep_accepted_count + 1
+										end if
+									end if
+								end if
+							end if
+						end if
+
+
+						! Final local face-density guard.  This prevents a face density
+						! generated by entropy/direct-psi closure from leaving the local
+						! two-cell density interval.  It changes only psi_used and therefore
+						! keeps p_f and Y_f untouched.
+						apply_density_guard = cabaret_use_entropy_lock_face_density_guard .and. &
+							(molar_ratio > cabaret_entropy_lock_face_density_guard_molar_mass_ratio)
+						if (apply_density_guard) then
+							rho_left_loc  = rho%cells(il,jl,kl)
+							rho_right_loc = rho%cells(i,j,k)
+							rho_min_loc   = min(rho_left_loc,rho_right_loc)
+							rho_max_loc   = max(rho_left_loc,rho_right_loc)
+							rho_span_loc  = rho_max_loc - rho_min_loc
+							rho_tol_loc   = cabaret_entropy_lock_face_density_guard_abs_tol + &
+								cabaret_entropy_lock_face_density_guard_rel_tol*rho_span_loc
+							rho_lower_bound = rho_min_loc - rho_tol_loc
+							rho_upper_bound = rho_max_loc + rho_tol_loc
+							if (rho_lower_bound > 0.0_dp) then
+								rho_face_guard = m_face/psi_used
+								if (rho_face_guard < rho_lower_bound) then
+									psi_used = m_face/rho_lower_bound
+									density_guard_count = density_guard_count + 1
+								else if (rho_face_guard > rho_upper_bound) then
+									psi_used = m_face/rho_upper_bound
+									density_guard_count = density_guard_count + 1
 								end if
 							end if
 						end if
@@ -3387,6 +3972,17 @@ contains
 		end if
 		if (cabaret_entropy_lock_molar_volume_guard_print_statistics .and. molar_volume_guard_count > 0) then
 			print *, 'CABARET entropy-lock molar-volume guard clipped faces:', molar_volume_guard_count
+		end if
+		if (cabaret_material_molar_volume_contact_print_statistics .and. psi_contact_count > 0) then
+			print *, 'CABARET selective direct material psi faces:', psi_contact_count
+		end if
+		if (cabaret_entropy_lock_face_density_guard_print_statistics .and. density_guard_count > 0) then
+			print *, 'CABARET entropy-lock face density guard clipped faces:', density_guard_count
+		end if
+		if (cabaret_sensible_pep_contact_print_statistics .and. sensible_pep_candidate_count > 0) then
+			print *, 'CABARET sensible-PEP candidates/accepted/rejected(T,rho):', &
+				sensible_pep_candidate_count, sensible_pep_accepted_count, &
+				sensible_pep_reject_temperature_count, sensible_pep_reject_density_count
 		end if
 
 		! rho_f_new has changed after the regular face exchange in finish_face_reconstruction().
