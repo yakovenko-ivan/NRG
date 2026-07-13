@@ -55,6 +55,9 @@ module thermophysical_properties_class
         procedure   :: pressure_derivatives_density_energy_composition_Y
         procedure   :: pressure_source_rate_from_conservative_sources
         procedure   :: specific_internal_energy_from_temperature_Y
+        procedure   :: sensible_internal_energy_molar_from_temperature_X
+        procedure   :: sensible_energy_parameter_from_temperature_Y
+        procedure   :: temperature_from_sensible_energy_parameter_Y
 
         
 		procedure	:: change_field_units_mole_to_dimless
@@ -726,6 +729,63 @@ contains
             e_mass = e_mass + Y_mass(spec)*this%specie_internal_energy_molar(temperature, spec)/this%molar_masses(spec)
         end do
     end function specific_internal_energy_from_temperature_Y
+
+
+
+    real(dp) function sensible_internal_energy_molar_from_temperature_X(this, temperature, X_mole) result(e_sens_molar)
+        class(thermophysical_properties), intent(in) :: this
+        real(dp), intent(in) :: temperature
+        real(dp), dimension(:), intent(in) :: X_mole
+
+        ! Molar sensible internal energy relative to the common thermodynamic
+        ! reference temperature.  This deliberately excludes the composition-
+        ! dependent reference-energy offset used by the conservative solver
+        ! internal-energy convention.
+        e_sens_molar = this%mixture_internal_energy_molar(temperature, X_mole) - &
+                       this%mixture_internal_energy_molar(T_ref, X_mole)
+    end function sensible_internal_energy_molar_from_temperature_X
+
+
+    real(dp) function sensible_energy_parameter_from_temperature_Y(this, temperature, Y_mass) result(ksi_sens)
+        class(thermophysical_properties), intent(in) :: this
+        real(dp), intent(in) :: temperature
+        real(dp), dimension(:), intent(in) :: Y_mass
+
+        real(dp), dimension(size(Y_mass)) :: X_mole
+        real(dp) :: e_sens_molar
+
+        call this%mole_fractions_from_mass_fractions(Y_mass, X_mole)
+        e_sens_molar = this%sensible_internal_energy_molar_from_temperature_X(temperature, X_mole)
+
+        ! Dimensionless thermal material coordinate.  It is intentionally
+        ! normalized by R_u*T_ref, not by R_mix*T, to keep the reconstructed
+        ! variable independent of pressure and to avoid mixing the JANAF
+        ! reference-energy offset into the contact reconstruction.
+        ksi_sens = e_sens_molar/(r_gase_J*T_ref)
+    end function sensible_energy_parameter_from_temperature_Y
+
+
+    real(dp) function temperature_from_sensible_energy_parameter_Y(this, ksi_sens, Y_mass, T_guess) result(temperature)
+        class(thermophysical_properties), intent(in) :: this
+        real(dp), intent(in) :: ksi_sens, T_guess
+        real(dp), dimension(:), intent(in) :: Y_mass
+
+        real(dp), dimension(size(Y_mass)) :: X_mole
+        real(dp) :: e_target_molar
+
+        call this%mole_fractions_from_mass_fractions(Y_mass, X_mole)
+
+        ! calculate_temperature expects the solver molar internal-energy
+        ! convention: e_i = e_molar(T,X) - h_molar(T_ref,X).  The reconstructed
+        ! ksi_sens stores only e_molar(T,X)-e_molar(T_ref,X), therefore the
+        ! composition-dependent reference part is recomputed from the same X_mole
+        ! that was obtained from the reconstructed face mass fractions.
+        e_target_molar = ksi_sens*r_gase_J*T_ref + &
+                         this%mixture_internal_energy_molar(T_ref, X_mole) - &
+                         this%mixture_enthalpy_molar(T_ref, X_mole)
+
+        temperature = this%calculate_temperature(T_guess, e_target_molar, X_mole)
+    end function temperature_from_sensible_energy_parameter_Y
 
 
     subroutine pressure_derivatives_density_energy_Y(this, density, pressure, Y_mass, dp_deps, dp_drho, sound_speed)

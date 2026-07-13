@@ -256,7 +256,7 @@ contains
 		processor_rank = this%domain%get_processor_rank()
 
 !		if((time*this%save_time_coefficient >= this%save_time*this%output_counter).or.(time == 0.0)) then
-        if((abs(time*this%save_time_coefficient - this%save_time*(this%output_counter)) < 0.01* this%save_time).or.(time == 0.0)) then
+        if(((this%save_time*(this%output_counter) - time*this%save_time_coefficient) < 0.01* this%save_time).or.(time == 0.0)) then
 			if (processor_rank == 0) then
 				inquire(file = this%post_processor_output_file, exist = file_exists)
 				if (file_exists) then
