@@ -19,6 +19,7 @@ module thermophysical_properties_class
 	type    :: thermophysical_properties
 		character(len=30)                            ::	thermo_data_file_name, transport_data_file_name, molar_masses_data_file_name
 		real(dp) ,dimension(:)       ,allocatable    :: potential_well_depth, collision_diameter, molar_masses
+        real(dp) ,dimension(:,:)     ,allocatable    :: binary_diffusivity_constant
 		real(dp) ,dimension(:,:,:)   ,allocatable    :: a_coeffs
         real(dp) ,dimension(2,2,8)                   :: omega_c
 	contains
@@ -39,6 +40,13 @@ module thermophysical_properties_class
 		procedure	:: calculate_temperature
         procedure	:: calculate_temperature_Pconst
         procedure	:: calculate_omega
+        procedure   :: specie_dynamic_viscosity
+        procedure   :: mixture_dynamic_viscosity
+        procedure   :: specie_thermal_conductivity
+        procedure   :: mixture_thermal_conductivity
+        procedure   :: binary_diffusion_coefficient
+        procedure   :: mixture_averaged_diffusion_coefficients
+        procedure   :: reduced_thermal_diffusion_coefficients
         procedure   :: clip_temperature
 
         ! CABARET/thermally-perfect ideal-gas mixture helpers.
@@ -146,7 +154,9 @@ contains
 		
 		allocate(this%molar_masses(species_number))
 		allocate(this%potential_well_depth(species_number),this%collision_diameter(species_number))
+        allocate(this%binary_diffusivity_constant(species_number,species_number))
 		allocate(this%a_coeffs(7,2,species_number))
+        this%binary_diffusivity_constant = 0.0_dp
 
 		open(newunit = thermo_data_file_unit,       file = trim(task_setup_folder) // trim(fold_sep) // trim(thermophysical_data_folder) // trim(fold_sep) // this%thermo_data_file_name,       status = 'old',    iostat = error)
 		open(newunit = transport_data_file_unit,    file = trim(task_setup_folder) // trim(fold_sep) // trim(thermophysical_data_folder) // trim(fold_sep) // this%transport_data_file_name,    status = 'old',    iostat = error)
@@ -161,6 +171,8 @@ contains
 		do spec_num = 1, chemistry%species_number
 			call get_transport_properties(this%potential_well_depth(spec_num), this%collision_diameter(spec_num), chemistry%species_names(spec_num), transport_data_file_unit)
 		end do
+
+        call initialize_binary_diffusivity_constants(this)
 
 		close(thermo_data_file_unit)
 		close(transport_data_file_unit)
@@ -347,12 +359,12 @@ contains
     end function mixture_internal_energy_molar
 	
     
-	!recursive pure function calculate_temperature(this,temperature,E_full,mol_mix_conc,cv,concentrations)
+	!recursive pure function calculate_temperature(this,temperature,E_full,mix_mol_mass,cv,concentrations)
  !
 	!	real(dp)             :: calculate_temperature
  !
 	!	class(thermophysical_properties)    ,intent(in) :: this
-	!	real(dp)                         ,intent(in) :: temperature, E_full, mol_mix_conc, cv
+	!	real(dp)                         ,intent(in) :: temperature, E_full, mix_mol_mass, cv
 	!	real(dp) ,dimension(:)           ,intent(in) :: concentrations
 	!	!!$OMP threadprivate (calculate_temperature)
  !
@@ -389,7 +401,7 @@ contains
 	!	if (temperature >= 4200.0_sp) then
  !           calculate_temperature = E_full / cv
  !       else
-	!		calculate_temperature = temp + (E_full - cv * temp) / (dcpdT_T - r_gase_J * mol_mix_conc)
+	!		calculate_temperature = temp + (E_full - cv * temp) / (dcpdT_T - r_gase_J * mix_mol_mass)
 	!	end if
 	!	continue
 	!end function
@@ -563,15 +575,310 @@ contains
 		end if
   
     end function
+
+    ! Dynamic viscosity of a pure specie from the same kinetic-theory
+    ! expression previously used locally by viscosity_solver_class.
+    ! Molar masses are in kg/mol and collision diameters are in nanometres,
+    ! consistent with the transport-property database used by this class.
+    pure real(dp) function specie_dynamic_viscosity(this,T,specie_number) result(mu_specie)
+        class(thermophysical_properties) ,intent(in) :: this
+        real(dp)                         ,intent(in) :: T
+        integer                          ,intent(in) :: specie_number
+
+        real(dp) :: T_red, omega_2_2
+
+        mu_specie = 0.0_dp
+
+        if (specie_number < 1 .or. specie_number > size(this%molar_masses)) return
+        if (T <= 0.0_dp) return
+        if (this%molar_masses(specie_number) <= 0.0_dp) return
+        if (this%potential_well_depth(specie_number) <= 0.0_dp) return
+        if (this%collision_diameter(specie_number) <= 0.0_dp) return
+
+        T_red     = T / this%potential_well_depth(specie_number)
+        omega_2_2 = this%calculate_omega(T_red,2,2)
+
+        if (omega_2_2 <= 0.0_dp) return
+
+        mu_specie = 8.4417e-07_dp * sqrt(this%molar_masses(specie_number)) * sqrt(T) / &
+                     (this%collision_diameter(specie_number)**2 * omega_2_2)
+    end function specie_dynamic_viscosity
+
+    ! Mixture dynamic viscosity used by both the momentum-viscosity and
+    ! reduced Soret models.  This is the arithmetic/harmonic mean form
+    ! already employed by viscosity_solver_class:
+    ! mu = 0.5 * [sum(X_i mu_i) + 1/sum(X_i/mu_i)].
+    real(dp) function mixture_dynamic_viscosity(this,T,Y_mass,m_mix) result(mu_mix)
+        class(thermophysical_properties) ,intent(in) :: this
+        real(dp)                         ,intent(in) :: T
+        real(dp) ,dimension(:)           ,intent(in) :: Y_mass
+        real(dp)                         ,intent(in), optional :: m_mix
+
+        real(dp) :: mixture_molar_mass, mole_fraction, mu_specie
+        real(dp) :: sum_arithmetic, sum_harmonic
+        integer  :: specie_number, species_number
+
+        mu_mix = 0.0_dp
+        species_number = min(size(Y_mass),size(this%molar_masses))
+        if (species_number <= 0 .or. T <= 0.0_dp) return
+
+        if (present(m_mix)) then
+            mixture_molar_mass = m_mix
+        else
+            mixture_molar_mass = this%mixture_molar_mass_from_mass_fractions(Y_mass)
+        end if
+        if (mixture_molar_mass <= 0.0_dp) return
+
+        sum_arithmetic = 0.0_dp
+        sum_harmonic   = 0.0_dp
+
+        do specie_number = 1,species_number
+            if (this%molar_masses(specie_number) <= 0.0_dp) cycle
+
+            mole_fraction = Y_mass(specie_number) * mixture_molar_mass / this%molar_masses(specie_number)
+            if (mole_fraction == 0.0_dp) cycle
+
+            mu_specie = this%specie_dynamic_viscosity(T,specie_number)
+            if (mu_specie <= 0.0_dp) cycle
+
+            sum_arithmetic = sum_arithmetic + mole_fraction * mu_specie
+            sum_harmonic   = sum_harmonic   + mole_fraction / mu_specie
+        end do
+
+        if (sum_harmonic > 1.0e-10_dp) then
+            mu_mix = 0.5_dp * (sum_arithmetic + 1.0_dp/sum_harmonic)
+        end if
+    end function mixture_dynamic_viscosity
     
+    ! Thermal conductivity of a pure specie from the kinetic-theory / modified
+    ! Eucken expression previously implemented locally in
+    ! fourier_heat_transfer_solver_class.  The transport database stores molar
+    ! masses in kg/mol, collision diameters in nanometres, and Lennard-Jones
+    ! well depths in kelvin.
+    pure real(dp) function specie_thermal_conductivity(this,T,specie_number) result(lambda_specie)
+        class(thermophysical_properties) ,intent(in) :: this
+        real(dp)                         ,intent(in) :: T
+        integer                          ,intent(in) :: specie_number
+
+        real(dp) :: T_red, omega_2_2
+        real(dp) :: cp_molar, cv_molar
+        real(dp) :: conductivity_constant
+
+        lambda_specie = 0.0_dp
+
+        if (specie_number < 1 .or. specie_number > size(this%molar_masses)) return
+        if (T <= 0.0_dp) return
+        if (this%molar_masses(specie_number) <= 0.0_dp) return
+        if (this%potential_well_depth(specie_number) <= 0.0_dp) return
+        if (this%collision_diameter(specie_number) <= 0.0_dp) return
+
+        T_red     = T / this%potential_well_depth(specie_number)
+        omega_2_2 = this%calculate_omega(T_red,2,2)
+        if (omega_2_2 <= 0.0_dp) return
+
+        cp_molar = this%specie_cp_molar(T,specie_number)
+        cv_molar = cp_molar - r_gase_J
+
+        conductivity_constant = 2.6319e-05_dp * sqrt(1.0_dp/this%molar_masses(specie_number)) / this%collision_diameter(specie_number)**2
+
+        lambda_specie = conductivity_constant * sqrt(T) / omega_2_2 * (4.0_dp*cv_molar/(15.0_dp*r_gase_J) + 3.0_dp/5.0_dp)
+    end function specie_thermal_conductivity
+
+    ! Mixture thermal conductivity in the same arithmetic/harmonic mean form
+    ! used previously by fourier_heat_transfer_solver_class:
+    ! lambda = 0.5 * [sum(X_i lambda_i) + 1/sum(X_i/lambda_i)].
+    real(dp) function mixture_thermal_conductivity(this,T,Y_mass,m_mix) result(lambda_mix)
+        class(thermophysical_properties) ,intent(in) :: this
+        real(dp)                         ,intent(in) :: T
+        real(dp) ,dimension(:)           ,intent(in) :: Y_mass
+        real(dp)                         ,intent(in), optional :: m_mix
+
+        real(dp) :: mixture_molar_mass, mole_fraction, lambda_specie
+        real(dp) :: sum_arithmetic, sum_harmonic
+        integer  :: specie_number, species_number
+
+        lambda_mix = 0.0_dp
+        species_number = min(size(Y_mass),size(this%molar_masses))
+        if (species_number <= 0 .or. T <= 0.0_dp) return
+
+        if (present(m_mix)) then
+            mixture_molar_mass = m_mix
+        else
+            mixture_molar_mass = this%mixture_molar_mass_from_mass_fractions(Y_mass)
+        end if
+        if (mixture_molar_mass <= 0.0_dp) return
+
+        sum_arithmetic = 0.0_dp
+        sum_harmonic   = 0.0_dp
+
+        do specie_number = 1,species_number
+            if (this%molar_masses(specie_number) <= 0.0_dp) cycle
+
+            mole_fraction = Y_mass(specie_number) * mixture_molar_mass / &
+                            this%molar_masses(specie_number)
+            if (mole_fraction == 0.0_dp) cycle
+
+            lambda_specie = this%specie_thermal_conductivity(T,specie_number)
+            if (lambda_specie <= 0.0_dp) cycle
+
+            sum_arithmetic = sum_arithmetic + mole_fraction * lambda_specie
+            sum_harmonic   = sum_harmonic   + mole_fraction / lambda_specie
+        end do
+
+        if (sum_harmonic > 1.0e-10_dp) then
+            lambda_mix = 0.5_dp * (sum_arithmetic + 1.0_dp/sum_harmonic)
+        end if
+    end function mixture_thermal_conductivity
+
+    ! Binary Chapman--Enskog diffusion coefficient [m^2/s].  The pair
+    ! constant is precomputed when the transport database is loaded; only the
+    ! temperature-, pressure-, and collision-integral dependence is evaluated
+    ! at run time.
+    pure real(dp) function binary_diffusion_coefficient(this,T,p,specie_number1,specie_number2) result(D_binary)
+        class(thermophysical_properties), intent(in) :: this
+        real(dp), intent(in) :: T, p
+        integer, intent(in) :: specie_number1, specie_number2
+
+        real(dp) :: reduced_temperature, omega_1_1
+        integer :: i1, i2
+
+        D_binary = 0.0_dp
+        if (T <= 0.0_dp .or. p <= 0.0_dp) return
+        if (specie_number1 == specie_number2) return
+        if (specie_number1 < 1 .or. specie_number1 > size(this%molar_masses)) return
+        if (specie_number2 < 1 .or. specie_number2 > size(this%molar_masses)) return
+
+        i1 = min(specie_number1,specie_number2)
+        i2 = max(specie_number1,specie_number2)
+        if (this%binary_diffusivity_constant(i1,i2) <= 0.0_dp) return
+        if (this%potential_well_depth(i1) <= 0.0_dp .or. &
+            this%potential_well_depth(i2) <= 0.0_dp) return
+
+        reduced_temperature = T / sqrt(this%potential_well_depth(i1) * this%potential_well_depth(i2))
+        omega_1_1 = this%calculate_omega(reduced_temperature,1,1)
+        if (omega_1_1 <= 0.0_dp) return
+
+        D_binary = this%binary_diffusivity_constant(i1,i2) * T**1.5_dp / (p*omega_1_1)
+    end function binary_diffusion_coefficient
+
+    ! Zeroth-order Hirschfelder--Curtiss / mixture-averaged diffusivities
+    ! used by fickean_diffusion_solver_class.  This routine intentionally
+    ! reproduces the previous solver-local algebra exactly; only ownership of
+    ! the transport-property calculation is changed.
+    subroutine mixture_averaged_diffusion_coefficients(this,T,p,Y_mass,m_mix,D_mix)
+        class(thermophysical_properties), intent(in) :: this
+        real(dp), intent(in) :: T, p, m_mix
+        real(dp), dimension(:), intent(in) :: Y_mass
+        real(dp), dimension(:), intent(out) :: D_mix
+
+        real(dp), dimension(size(Y_mass),size(Y_mass)) :: D_binary
+        real(dp) :: accumulation_value, Dij
+        integer :: species_number, specie_number1, specie_number2
+
+        D_mix = 0.0_dp
+        species_number = min(size(Y_mass),size(D_mix),size(this%molar_masses))
+        if (species_number <= 0 .or. T <= 0.0_dp .or. p <= 0.0_dp .or. m_mix <= 0.0_dp) return
+
+        D_binary = 0.0_dp
+        do specie_number1 = 1,species_number-1
+            do specie_number2 = specie_number1+1,species_number
+                D_binary(specie_number1,specie_number2) = this%binary_diffusion_coefficient(T,p,specie_number1,specie_number2)
+            end do
+        end do
+
+        do specie_number1 = 1,species_number
+            if (this%molar_masses(specie_number1) <= 0.0_dp) cycle
+
+            accumulation_value = 0.0_dp
+            do specie_number2 = 1,species_number
+                if (specie_number2 == specie_number1) cycle
+                if (this%molar_masses(specie_number2) <= 0.0_dp) cycle
+
+                if (specie_number2 > specie_number1) then
+                    Dij = D_binary(specie_number1,specie_number2)
+                else
+                    Dij = D_binary(specie_number2,specie_number1)
+                end if
+                if (Dij <= 0.0_dp) cycle
+
+                accumulation_value = accumulation_value + &
+                    (1.0_dp-Y_mass(specie_number1)) * this%molar_masses(specie_number1) * Y_mass(specie_number2) / (Dij*this%molar_masses(specie_number2))
+                
+                accumulation_value = accumulation_value + Y_mass(specie_number1)*Y_mass(specie_number2)/Dij
+            end do
+
+            if (accumulation_value > 1.0e-10_dp) then
+                D_mix(specie_number1) = (1.0_dp - Y_mass(specie_number1)) * this%molar_masses(specie_number1) / (accumulation_value*m_mix)
+            end if
+        end do
+    end subroutine mixture_averaged_diffusion_coefficients
+
+    ! Reduced Schlup--Blanquart thermal-diffusion coefficients [kg/(m s)].
+    ! target_indices and alpha_soret select the species to which the reduced
+    ! model is applied.  The coefficients returned here are raw coefficients;
+    ! the zero-net-mass-flux correction remains a face operation in the
+    ! diffusion solver.
+    subroutine reduced_thermal_diffusion_coefficients(this,T,Y_mass,m_mix,target_indices,alpha_soret,D_T)
+        class(thermophysical_properties), intent(in) :: this
+        real(dp), intent(in) :: T, m_mix
+        real(dp), dimension(:), intent(in) :: Y_mass
+        integer, dimension(:), intent(in) :: target_indices
+        real(dp), dimension(:), intent(in) :: alpha_soret
+        real(dp), dimension(:), intent(out) :: D_T
+
+        real(dp), parameter :: schlup_temperature_scale = 37.15_dp
+        real(dp) :: mu_mixture, mu_specie, phi_i_m
+        real(dp) :: specie_molar_mass, specie_mass_fraction, specie_mole_fraction
+        real(dp) :: reduced_temperature, omega_1_1, omega_1_2, C_star
+        real(dp) :: molar_mass_specie_g, molar_mass_mixture_g
+        integer :: target, specie_number, number_of_targets
+
+        D_T = 0.0_dp
+        if (T <= 0.0_dp .or. m_mix <= 0.0_dp) return
+
+        mu_mixture = this%mixture_dynamic_viscosity(T,Y_mass,m_mix)
+        if (mu_mixture <= 0.0_dp) return
+
+        number_of_targets = min(size(target_indices),size(alpha_soret))
+        do target = 1,number_of_targets
+            specie_number = target_indices(target)
+            if (specie_number < 1 .or. specie_number > min(size(Y_mass),size(D_T),size(this%molar_masses))) cycle
+
+            specie_molar_mass = this%molar_masses(specie_number)
+            specie_mass_fraction = Y_mass(specie_number)
+            if (specie_molar_mass <= 0.0_dp .or. specie_mass_fraction <= 0.0_dp) cycle
+
+            specie_mole_fraction = specie_mass_fraction*m_mix/specie_molar_mass
+            mu_specie = this%specie_dynamic_viscosity(T,specie_number)
+            if (mu_specie <= 0.0_dp) cycle
+
+            phi_i_m = 1.065_dp/(2.0_dp*sqrt(2.0_dp)) * (1.0_dp + sqrt(mu_specie/mu_mixture) * (m_mix/specie_molar_mass)**0.25_dp)**2
+            if (phi_i_m <= 0.0_dp) cycle
+
+            ! Schlup's reduced-temperature correlation uses g/mol.
+            molar_mass_specie_g = 1000.0_dp*specie_molar_mass
+            molar_mass_mixture_g = 1000.0_dp*m_mix
+            reduced_temperature = T/schlup_temperature_scale * (molar_mass_specie_g*molar_mass_mixture_g)**(-0.29_dp)
+            if (reduced_temperature <= 0.0_dp) cycle
+
+            omega_1_1 = this%calculate_omega(reduced_temperature,1,1)
+            omega_1_2 = this%calculate_omega(reduced_temperature,1,2)
+            if (omega_1_1 <= 0.0_dp) cycle
+
+            ! calculate_omega returns Neufeld-normalized collision integrals;
+            ! no additional factor 1/3 belongs in this ratio.
+            C_star = omega_1_2/omega_1_1
+
+            D_T(specie_number) = -alpha_soret(target) * 15.0_dp/4.0_dp * specie_mole_fraction*mu_specie/phi_i_m * (1.2_dp*C_star-1.0_dp) * (1.0_dp-specie_mass_fraction)
+        end do
+    end subroutine reduced_thermal_diffusion_coefficients
+
     pure real(dp) function clip_temperature(this,T) result(T_clipped)
         class(thermophysical_properties)    ,intent(in) 	:: this
 		real(dp)                            ,intent(in)		:: T
         
         T_clipped = min(T,tables_temperature_ceiling)
     end function
-
-
 
     real(dp) function mixture_molar_mass_from_mass_fractions(this, Y_mass) result(m_mix)
         class(thermophysical_properties), intent(in) :: this
@@ -1032,6 +1339,41 @@ contains
 		rewind(molar_masses_data_file_unit)
 
 	end function get_specie_molar_mass
+
+    subroutine initialize_binary_diffusivity_constants(this)
+        class(thermophysical_properties), intent(inout) :: this
+
+        real(dp) :: reduced_collision_diameter, inv_reduced_molar_mass
+        integer :: specie_number1, specie_number2, species_number
+
+        this%binary_diffusivity_constant = 0.0_dp
+        species_number = size(this%molar_masses)
+
+        do specie_number1 = 1,species_number-1
+            do specie_number2 = specie_number1+1,species_number
+                if (this%molar_masses(specie_number1) <= 0.0_dp .or. &
+                    this%molar_masses(specie_number2) <= 0.0_dp) cycle
+                if (this%collision_diameter(specie_number1) <= 0.0_dp .or. &
+                    this%collision_diameter(specie_number2) <= 0.0_dp) cycle
+
+                reduced_collision_diameter = 0.5_dp * &
+                    (this%collision_diameter(specie_number1) + &
+                     this%collision_diameter(specie_number2))
+                reduced_collision_diameter = reduced_collision_diameter**2
+                inv_reduced_molar_mass = &
+                    (this%molar_masses(specie_number1) + this%molar_masses(specie_number2)) / &
+                    (this%molar_masses(specie_number1)*this%molar_masses(specie_number2))
+
+                ! 3/16*sqrt(2*pi*kB^3*NA)/(pi*1e-18), in the unit system used
+                ! by the CHEMKIN-style transport database.
+                this%binary_diffusivity_constant(specie_number1,specie_number2) = &
+                    0.00001_dp*0.595_dp*sqrt(inv_reduced_molar_mass) / &
+                    reduced_collision_diameter
+                this%binary_diffusivity_constant(specie_number2,specie_number1) = &
+                    this%binary_diffusivity_constant(specie_number1,specie_number2)
+            end do
+        end do
+    end subroutine initialize_binary_diffusivity_constants
 
 	subroutine get_transport_properties(potential_well_depth, collision_diameter, specie_name, transport_data_file_unit)
 		real(dp)         ,intent(inout)  :: potential_well_depth, collision_diameter

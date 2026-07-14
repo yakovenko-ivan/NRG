@@ -34,9 +34,7 @@ module fourier_heat_transfer_solver_class
 		type(thermophysical_properties_pointer)		:: thermo
 		type(chemical_properties_pointer)			:: chem
 
-		real(dp) ,dimension(:)   ,allocatable    :: thermal_c_coeff_constant
 	contains
-		procedure	,private	::	calculate_thermal_c_coeff_constant
 		procedure	,private	::	calculate_thermal_c_coeff
 		procedure	,private	::	apply_boundary_conditions
 		procedure				::	solve_heat_transfer
@@ -82,9 +80,6 @@ contains
 
 		constructor%E_f_prod%s_ptr%cells(:,:,:) = 0.0_dp
 		
-		allocate(constructor%thermal_c_coeff_constant(manager%chemistry%chem_ptr%species_number))
-
-		call constructor%calculate_thermal_c_coeff_constant()
 	end function
 
 	subroutine	solve_heat_transfer(this,time_step)
@@ -202,58 +197,26 @@ contains
 	end subroutine
 
 
-	subroutine calculate_thermal_c_coeff_constant(this)
-		class(heat_transfer_solver) ,intent(inout) :: this
-
-		integer		:: species_number
-		integer		:: specie_number
-
-		species_number = this%chem%chem_ptr%species_number
-
-		associate(  potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth              , &
-					molar_masses            => this%thermo%thermo_ptr%molar_masses                      , &
-					collision_diameter      => this%thermo%thermo_ptr%collision_diameter)
-
-			do specie_number = 1,species_number
-				if (molar_masses(specie_number) /= 0.0_dp) then
-					this%thermal_c_coeff_constant(specie_number)    =  2.6319066471262813e-05_dp * sqrt(1.0_dp / molar_masses(specie_number))/collision_diameter(specie_number)/collision_diameter(specie_number)     ! 3.0_dp/2.0_dp*25.0_dp/32.0_dp/sqrt(pi)/1.0e-18_dp*sqrt(k_B**3 * N_a)
-				end if
-			end do
-
-		end associate
-
-	end subroutine
-
 	subroutine calculate_thermal_c_coeff(this)
 		class(heat_transfer_solver) ,intent(inout) :: this
 
-		real(dp)                     :: mol_frac, stc, T_red, sum1, sum2
-		real(dp)                     :: specie_cp, specie_cv
-		real(dp)                     :: omega_2_2
+        real(dp), dimension(this%chem%chem_ptr%species_number) :: Y_cell
 
 		integer	,dimension(3,2)	:: cons_inner_loop
-
 		integer	:: species_number
-
 		integer :: specie_number
 		integer :: i,j,k
 
 		species_number	= this%chem%chem_ptr%species_number
-
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 
 		associate(  T                       => this%T%s_ptr                            , &
 					kappa					=> this%kappa%s_ptr							, &
 					mix_mol_mass            => this%mix_mol_mass%s_ptr                 , &
 					Y						=> this%Y%v_ptr									, &
-					potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
-					molar_masses            => this%thermo%thermo_ptr%molar_masses			, &
-					collision_diameter      => this%thermo%thermo_ptr%collision_diameter	, & 
 					bc						=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared)  private(i,j,k,sum1,sum2,mol_frac,T_red,omega_2_2,specie_cp,specie_cv,stc,specie_number) !, &
-	!!$omp& shared(this,species_number,cons_inner_loop)
-        
+	!$omp parallel default(shared) private(i,j,k,specie_number,Y_cell)
 	!$omp do collapse(3) schedule(static)
 
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -261,36 +224,12 @@ contains
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 
 			if(bc%bc_markers(i,j,k) == 0) then
+                do specie_number = 1,species_number
+                    Y_cell(specie_number) = Y%pr(specie_number)%cells(i,j,k)
+                end do
 
-				sum1 = 0.0_dp
-				sum2 = 0.0_dp
-
-				do specie_number = 1,species_number
-					if (molar_masses(specie_number) /= 0.0_dp) then
-						mol_frac            =	Y%pr(specie_number)%cells(i,j,k)/molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
-						if (mol_frac /= 0.0_dp) then
-							T_red       =	T%cells(i,j,k) / potential_well_depth(specie_number)
-                            
-                            omega_2_2   =   this%thermo%thermo_ptr%calculate_omega(T_red,2,2)
-												
-							specie_cp = this%thermo%thermo_ptr%specie_cp_molar(T%cells(i,j,k), specie_number)
-							specie_cv = specie_cp - r_gase_J
-
-							stc = this%thermal_c_coeff_constant(specie_number)   * sqrt(T%cells(i,j,k)) / omega_2_2 * (4.0_dp * specie_cv / 15.0_dp / r_gase_J + 3.0_dp / 5.0_dp)
-
-							if (stc > 0.0_dp) then
-								sum1 = sum1 + stc * mol_frac
-								sum2 = sum2 + mol_frac / stc
-							end if
-						end if
-					end if
-				end do
-
-				if (sum2 <= 1.0E-10_dp) then
-					kappa%cells(i,j,k)   = 0.0_dp
-				else
-					kappa%cells(i,j,k)   = 0.5_dp * (sum1 + 1.0_dp / sum2)
-				end if
+                kappa%cells(i,j,k) = this%thermo%thermo_ptr%mixture_thermal_conductivity( &
+                                         T%cells(i,j,k),Y_cell,mix_mol_mass%cells(i,j,k))
 			end if
 		end do
 		end do

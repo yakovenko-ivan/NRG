@@ -41,13 +41,9 @@ module viscosity_solver_class
 		type(thermophysical_properties_pointer)		:: thermo
 		type(chemical_properties_pointer)			:: chem
 		
-		real(dp) ,dimension(:)   ,allocatable    :: viscosity_coeff_constant
-		
 		real(dp) ,dimension(:,:,:)	,allocatable    :: sigma_theta_theta		
 	contains
-		procedure	,private	::	calculate_viscosity_coeff_constant
 		procedure	,private	::	calculate_mixture_averaged_viscosity_coeff
-        procedure	,private	::	calculate_specie_viscosity_coeff
 		procedure	,private	::	calculate_sigma
 		procedure	,private	::	apply_boundary_conditions
 		procedure				::	solve_viscosity
@@ -127,9 +123,6 @@ contains
 				constructor%sigma_theta_theta			= 0.0_dp
 		end select			
 		
-		allocate(constructor%viscosity_coeff_constant(manager%chemistry%chem_ptr%species_number))
-		
-		call constructor%calculate_viscosity_coeff_constant()
 	end function
 
 	subroutine	solve_viscosity(this,time_step)
@@ -421,70 +414,10 @@ contains
 
 	end subroutine
 	
-	subroutine calculate_viscosity_coeff_constant(this)
-		class(viscosity_solver) ,intent(inout) :: this
-
-		real(dp)	:: reduced_collision_diameter
-		real(dp)	:: inv_reduced_molar_mass
-
-		integer		:: species_number
-		integer		:: specie_number1, specie_number2
-
-		species_number = this%chem%chem_ptr%species_number
-
-		associate(  potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth              , &
-					molar_masses            => this%thermo%thermo_ptr%molar_masses                      , &
-					collision_diameter      => this%thermo%thermo_ptr%collision_diameter)
-
-			do specie_number1 = 1,species_number
-				this%viscosity_coeff_constant(specie_number1)    = 8.4417e-07_dp * sqrt(molar_masses(specie_number1))/collision_diameter(specie_number1)/collision_diameter(specie_number1)
-			end do
-
-		end associate
-
-    end subroutine	
-	
-    
-	function calculate_specie_viscosity_coeff(this,specie_number,T) result(nu_specie)
-		class(viscosity_solver) ,intent(inout)  :: this
-        integer                 ,intent(in)     :: specie_number
-        real(dp)                ,intent(in)     :: T
-        
-        real(dp)                     :: nu_specie
-        
-		real(dp)                     :: mol_frac, smc, T_red, sum1, sum2
-		real(dp)                     :: specie_cp, specie_cv
-		real(dp)                     :: omega_2_2
-		
-		integer	:: dimensions
-		integer	:: sign, bound_number
-		integer	:: species_number
-
-		integer	,dimension(3,2)	:: cons_inner_loop			
-		
-		integer :: i,j,k,plus,dim,dim1,dim2
-
-        
-		associate(  potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
-					molar_masses            => this%thermo%thermo_ptr%molar_masses)
-        
-        nu_specie = 0.0_dp
-		if (molar_masses(specie_number) /= 0.0_dp) then				
-			T_red       =	T / potential_well_depth(specie_number)
-            omega_2_2   =   this%thermo%thermo_ptr%calculate_omega(T_red,2,2)
-			nu_specie   =   this%viscosity_coeff_constant(specie_number)   * sqrt(T) / omega_2_2
-        end if
-        
-        end associate
-	end function
-     
-    
 	subroutine calculate_mixture_averaged_viscosity_coeff(this)
 		class(viscosity_solver) ,intent(inout) :: this
 
-		real(dp)                     :: mol_frac, smc, T_red, sum1, sum2
-		real(dp)                     :: specie_cp, specie_cv
-		real(dp)                     :: omega_2_2
+        real(dp), dimension(this%chem%chem_ptr%species_number) :: Y_cell
 		
 		integer	:: dimensions
 		integer	:: sign, bound_number
@@ -493,7 +426,7 @@ contains
 		integer	,dimension(3,2)	:: cons_inner_loop			
 		
 		integer :: specie_number
-		integer :: i,j,k,plus,dim,dim1,dim2
+		integer :: i,j,k,plus,dim
 
 		species_number	= this%chem%chem_ptr%species_number
 		dimensions		= this%domain%get_domain_dimensions()
@@ -504,12 +437,9 @@ contains
 					nu                      => this%nu%s_ptr                           , &
 					mix_mol_mass            => this%mix_mol_mass%s_ptr                 , &
 					Y						=> this%Y%v_ptr									, &
-					potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
-					molar_masses            => this%thermo%thermo_ptr%molar_masses			, &
-					collision_diameter      => this%thermo%thermo_ptr%collision_diameter	, &
 					bc						=> this%boundary%bc_ptr)
 
-	!$omp parallel default(shared)  private(i,j,k,specie_number,sum1,sum2,mol_frac,smc,sign,bound_number) !, &
+	!$omp parallel default(shared) private(i,j,k,specie_number,sign,bound_number,Y_cell) !, &
     !!$omp& firstprivate(this)
 	!!$omp& shared(this,species_number,cons_inner_loop,dimensions) 
 
@@ -521,26 +451,12 @@ contains
 
 			if(bc%bc_markers(i,j,k) == 0) then
 
-				sum1 = 0.0_dp
-				sum2 = 0.0_dp
+                do specie_number = 1,species_number
+                    Y_cell(specie_number) = Y%pr(specie_number)%cells(i,j,k)
+                end do
 
-				do specie_number = 1,species_number
-					if (molar_masses(specie_number) /= 0.0_dp) then				
-						mol_frac =	Y%pr(specie_number)%cells(i,j,k)/molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
-						if (mol_frac /= 0.0_dp) then
-							smc = this%calculate_specie_viscosity_coeff(specie_number,T%cells(i,j,k))
-                            
-							sum1 = sum1 + smc * mol_frac
-							sum2 = sum2 + mol_frac / smc
-						end if
-					end if
-				end do
-
-				if (sum2 <= 1.0E-10_dp) then	
-					nu%cells(i,j,k)      = 0.0_dp
-				else
-					nu%cells(i,j,k)      = 0.5_dp * (sum1 + 1.0_dp / sum2)
-                end if
+                nu%cells(i,j,k) = this%thermo%thermo_ptr%mixture_dynamic_viscosity( &
+                                      T%cells(i,j,k),Y_cell,mix_mol_mass%cells(i,j,k))
 				
 				if(bc%bc_markers(i,j,k) == 0) then
 					do dim = 1,dimensions
