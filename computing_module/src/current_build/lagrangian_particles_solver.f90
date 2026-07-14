@@ -51,7 +51,7 @@ module lagrangian_particles_solver_class
 	end type    
     
 	type	:: lagrangian_particles_solver
-		type(field_scalar_cons_pointer)		:: T, rho, nu, kappa, E_f_prod, rho_prod, p, mol_mix_conc, h_s
+		type(field_scalar_cons_pointer)		:: T, rho, nu, kappa, E_f_prod, rho_prod, p, mix_mol_mass, h_s
 		type(field_vector_cons_pointer)		:: Y, Y_prod, D, v_prod
 		type(field_vector_flow_pointer)		:: v_f
 		type(computational_domain)			:: domain
@@ -136,8 +136,8 @@ contains
 		constructor%p%s_ptr					=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr					=> vect_c_ptr%v_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_c_ptr%s_ptr		
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'sensible_enthalpy')
 		constructor%h_s%s_ptr				=> scal_c_ptr%s_ptr		
 		

@@ -30,7 +30,7 @@ module viscosity_solver_class
 	
 	
 	type	:: viscosity_solver
-		type(field_scalar_cons_pointer)				:: E_f_prod, T, nu, rho, mol_mix_conc
+		type(field_scalar_cons_pointer)				:: E_f_prod, T, nu, rho, mix_mol_mass
 		type(field_vector_cons_pointer)				:: v, v_prod, Y
         type(field_vector_flow_pointer)             :: sigma_dot_v
 		type(field_tensor_flow_pointer)				:: sigma
@@ -75,8 +75,8 @@ contains
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
 		constructor%T%s_ptr				=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr					=> scal_ptr%s_ptr
 		
@@ -502,7 +502,7 @@ contains
 
 		associate(  T                       => this%T%s_ptr                            , &
 					nu                      => this%nu%s_ptr                           , &
-					mol_mix_conc            => this%mol_mix_conc%s_ptr                 , &
+					mix_mol_mass            => this%mix_mol_mass%s_ptr                 , &
 					Y						=> this%Y%v_ptr									, &
 					potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
 					molar_masses            => this%thermo%thermo_ptr%molar_masses			, &

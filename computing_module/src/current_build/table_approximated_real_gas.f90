@@ -31,7 +31,7 @@ module table_approximated_real_gas_class
 
 
 	type 	:: table_approximated_real_gas
-		type(field_scalar_cons_pointer)				:: p, p_stat, p_stat_old, T, e_i, E_f, rho, mol_mix_conc, v_s, gamma, h_s,dp_stat_dt, mixture_cp, h_full
+		type(field_scalar_cons_pointer)				:: p, p_stat, p_stat_old, T, e_i, E_f, rho, mix_mol_mass, v_s, gamma, h_s,dp_stat_dt, mixture_cp, h_full
 		type(field_scalar_flow_pointer)				:: rho_f, p_f, e_i_f, v_s_f, E_f_f, T_f, gamma_f
 		type(field_vector_cons_pointer)				:: v, Y
 		type(field_vector_flow_pointer)				:: v_f, Y_f
@@ -90,7 +90,7 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'full_energy')
 		constructor%E_f%s_ptr					=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr			=> scal_c_ptr%s_ptr
+		constructor%mix_mol_mass%s_ptr			=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure_static_change')
 		constructor%dp_stat_dt%s_ptr			=> scal_c_ptr%s_ptr		
 		
@@ -160,7 +160,7 @@ contains
 
 		real(dp) ,dimension(this%chem%chem_ptr%species_number)    :: concs
 		real(dp)	:: average_molar_mass
-		real(dp)	:: farfield_mol_mix_conc
+		real(dp)	:: farfield_mix_mol_mass
 
 		integer	:: bound_number
 		integer	:: species_number
@@ -186,7 +186,7 @@ contains
 						E_f             => this%E_f%s_ptr			, &
 						h_s				=> this%h_s%s_ptr			, &
 						h_full			=> this%h_full%s_ptr        , &
-						mol_mix_conc    => this%mol_mix_conc%s_ptr	, &
+						mix_mol_mass    => this%mix_mol_mass%s_ptr	, &
 						v_s             => this%v_s%s_ptr			, &
 						Y               => this%Y%v_ptr				, &
 						v               => this%v%v_ptr             , &
@@ -210,16 +210,16 @@ contains
 				end do
 				
 				average_molar_mass =  1.0_dp / average_molar_mass
-				mol_mix_conc%cells(i,j,k)	= average_molar_mass
+				mix_mol_mass%cells(i,j,k)	= average_molar_mass
 				
 				concs = 0.0_dp
 				do specie_number = 1,species_number
 					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dp) then
-						concs(specie_number)		=	Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
+						concs(specie_number)		=	Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mix_mol_mass%cells(i,j,k)
 					end if
 				end do
 				
-				rho%cells(i,j,k)		= p%cells(i,j,k) / (T%cells(i,j,k) * r_gase_J) * mol_mix_conc%cells(i,j,k)
+				rho%cells(i,j,k)		= p%cells(i,j,k) / (T%cells(i,j,k) * r_gase_J) * mix_mol_mass%cells(i,j,k)
 				
 				cp = this%thermo%thermo_ptr%mixture_cp_molar(T%cells(i,j,k), concs)
 				cv = cp - r_gase_J
@@ -234,9 +234,9 @@ contains
                
                 e_i%cells(i,j,k)		= this%thermo%thermo_ptr%mixture_internal_energy_molar(T%cells(i,j,k), concs) - h_s_Tref
 
-                h_s%cells(i,j,k)		= h_s%cells(i,j,k)		/ mol_mix_conc%cells(i,j,k) 
-                h_full%cells(i,j,k)		= h_full%cells(i,j,k)	/ mol_mix_conc%cells(i,j,k)  
-                e_i%cells(i,j,k)		= e_i%cells(i,j,k)		/ mol_mix_conc%cells(i,j,k)    
+                h_s%cells(i,j,k)		= h_s%cells(i,j,k)		/ mix_mol_mass%cells(i,j,k) 
+                h_full%cells(i,j,k)		= h_full%cells(i,j,k)	/ mix_mol_mass%cells(i,j,k)  
+                e_i%cells(i,j,k)		= e_i%cells(i,j,k)		/ mix_mol_mass%cells(i,j,k)    
         
                 E_f%cells(i,j,k)		= e_i%cells(i,j,k) 		
 
@@ -272,7 +272,7 @@ contains
 
 		class(table_approximated_real_gas) ,intent(inout) :: this
 
-		real(dp)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mol_mix_conc, cp, cv, gamma
+		real(dp)	:: velocity, T_old, e_i_old, t_initial, t_final, h_s, e_internal, mix_mol_mass, cp, cv, gamma
 		real(dp)	:: average_molar_mass
 		real(dp)	:: rho_Y
 		
@@ -392,7 +392,7 @@ contains
 					h_s             => this%h_s%s_ptr          , &
 					h_full			=> this%h_full%s_ptr		, &
 					v_s             => this%v_s%s_ptr          , &
-					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
+					mix_mol_mass    => this%mix_mol_mass%s_ptr , &
 					v				=> this%v%v_ptr			   , &
 					Y				=> this%Y%v_ptr				, &
                     bc	    		=> this%boundary%bc_ptr , &
@@ -423,34 +423,34 @@ contains
 				end do
 				
 				average_molar_mass =  1.0_dp / average_molar_mass
-				mol_mix_conc%cells(i,j,k)	= average_molar_mass
+				mix_mol_mass%cells(i,j,k)	= average_molar_mass
 
 				concs = 0.0_dp
 				do specie_number = 1,species_number
 					if (this%thermo%thermo_ptr%molar_masses(specie_number) /= 0.0_dp) then
-						concs(specie_number)	= Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mol_mix_conc%cells(i,j,k)
+						concs(specie_number)	= Y%pr(specie_number)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number) * mix_mol_mass%cells(i,j,k)
 					end if
 				end do				
 				
-				e_i%cells(i,j,k)	= e_i%cells(i,j,k) * mol_mix_conc%cells(i,j,k)
+				e_i%cells(i,j,k)	= e_i%cells(i,j,k) * mix_mol_mass%cells(i,j,k)
                 h_s_Tref			= this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)
                 
 			!# New de = cv*dT equation of state		
 				T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature(T%cells(i,j,k),e_i%cells(i,j,k),concs)
-				p%cells(i,j,k)			= T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mol_mix_conc%cells(i,j,k)
+				p%cells(i,j,k)			= T%cells(i,j,k) * rho%cells(i,j,k) * r_gase_J / mix_mol_mass%cells(i,j,k)
 
     			!# P = const
             !	T%cells(i,j,k)			= this%thermo%thermo_ptr%calculate_temperature_Pconst(T%cells(i,j,k),e_i%cells(i,j,k),concs)
-			!	rho%cells(i,j,k)		= p%cells(i,j,k) * mol_mix_conc%cells(i,j,k) / T%cells(i,j,k) / r_gase_J
+			!	rho%cells(i,j,k)		= p%cells(i,j,k) * mix_mol_mass%cells(i,j,k) / T%cells(i,j,k) / r_gase_J
                 
 				cp						= this%thermo%thermo_ptr%mixture_cp_molar(T%cells(i,j,k), concs)
 				cv						= cp - r_gase_J 
 				gamma%cells(i,j,k)		= cp / cv
 
-				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - h_s_Tref) / mol_mix_conc%cells(i,j,k)
-				h_full%cells(i,j,k)		=  this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) / mol_mix_conc%cells(i,j,k)
+				h_s%cells(i,j,k)		= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - h_s_Tref) / mix_mol_mass%cells(i,j,k)
+				h_full%cells(i,j,k)		=  this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) / mix_mol_mass%cells(i,j,k)
                 
-                mixture_cp%cells(i,j,k) = cp / mol_mix_conc%cells(i,j,k)
+                mixture_cp%cells(i,j,k) = cp / mix_mol_mass%cells(i,j,k)
 	
 				if((gamma%cells(i,j,k) < 0.0).or.(p%cells(i,j,k) < 0.0).or.(rho%cells(i,j,k) < 0.0)) then
 					print *, 'Cons EOS exception: ', dim, i,j,k
@@ -507,7 +507,7 @@ contains
 					E_f				=> this%E_f%s_ptr		   , &
 					e_i             => this%e_i%s_ptr          , &
 					v_s             => this%v_s%s_ptr          , &
-					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
+					mix_mol_mass    => this%mix_mol_mass%s_ptr , &
 					v				=> this%v%v_ptr			   , &
 					Y				=> this%Y%v_ptr			   , &
 					bc				=> this%boundary%bc_ptr)
@@ -531,10 +531,10 @@ contains
 				end do
 				
 				average_molar_mass =  1.0_dp / average_molar_mass
-				mol_mix_conc%cells(i,j,k)	= average_molar_mass
+				mix_mol_mass%cells(i,j,k)	= average_molar_mass
 
 				do specie_number = 1,species_number
-					concs(specie_number)				= Y%pr(specie_number)%cells(i,j,k) * mol_mix_conc%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
+					concs(specie_number)				= Y%pr(specie_number)%cells(i,j,k) * mix_mol_mass%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 				end do				
 				
 				t_initial           = T%cells(i,j,k)
@@ -544,7 +544,7 @@ contains
 
 				gamma%cells(i,j,k)	= cp / cv				
 				
-				T%cells(i,j,k)      = e_i%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dp) / r_gase_J * mol_mix_conc%cells(i,j,k)
+				T%cells(i,j,k)      = e_i%cells(i,j,k) * (gamma%cells(i,j,k) - 1.0_dp) / r_gase_J * mix_mol_mass%cells(i,j,k)
 				v_s%cells(i,j,k)	= sqrt(gamma%cells(i,j,k)*p_stat%cells(i,j,k)/rho%cells(i,j,k))
                 
 			    e_i%cells(i,j,k) = p_stat%cells(i,j,k) / rho%cells(i,j,k) / (gamma%cells(i,j,k) - 1.0_dp)
@@ -598,7 +598,7 @@ contains
 					e_i             => this%e_i%s_ptr          , &
 					h_s				=> this%h_s%s_ptr		   , &
 					v_s             => this%v_s%s_ptr          , &
-					mol_mix_conc    => this%mol_mix_conc%s_ptr , &
+					mix_mol_mass    => this%mix_mol_mass%s_ptr , &
 					v				=> this%v%v_ptr			   , &
 					Y				=> this%Y%v_ptr			   , &
 					gamma           => this%gamma%s_ptr         , &
@@ -624,10 +624,10 @@ contains
 				end do
 				
 				average_molar_mass =  1.0_dp / average_molar_mass
-				mol_mix_conc%cells(i,j,k)	= average_molar_mass
+				mix_mol_mass%cells(i,j,k)	= average_molar_mass
 
 				do specie_number = 1,species_number
-					concs(specie_number)				= Y%pr(specie_number)%cells(i,j,k) * mol_mix_conc%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
+					concs(specie_number)				= Y%pr(specie_number)%cells(i,j,k) * mix_mol_mass%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(specie_number)
 				end do				
 
 				if(predictor) then
@@ -637,14 +637,14 @@ contains
 					p_stat%cells(i,j,k)	= 0.5_dp * (p_stat%cells(i,j,k) + p_stat_old%cells(i,j,k) + dp_stat_dt%cells(i,j,k) * time_step)
 				end if					
 
-				T%cells(i,j,k)      = p_stat%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mol_mix_conc%cells(i,j,k)
+				T%cells(i,j,k)      = p_stat%cells(i,j,k) / rho%cells(i,j,k) / r_gase_J * mix_mol_mass%cells(i,j,k)
 				
 				cp = this%thermo%thermo_ptr%mixture_cp_molar(T%cells(i,j,k), concs)
 				cv = cp - r_gase_J 
 
 				gamma%cells(i,j,k)	= cp / cv
 		
-				h_s%cells(i,j,k)	= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mol_mix_conc%cells(i,j,k)
+				h_s%cells(i,j,k)	= (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i,j,k), concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mix_mol_mass%cells(i,j,k)
 
 				mixture_cp%cells(i,j,k)	= cp
 				
@@ -836,7 +836,7 @@ contains
 		real(dp)                     :: cp, cv
 
 		real(dp) ,dimension(this%chem%chem_ptr%species_number)    :: concs
-		real(dp)	:: average_molar_mass, mol_mix_conc
+		real(dp)	:: average_molar_mass, mix_mol_mass
 
 		integer	:: bound_number
 		integer	:: species_number, specie_index
@@ -845,7 +845,7 @@ contains
 		integer	,dimension(3,2)	:: utter_loop, inner_loop
 		character(len=20)		:: boundary_type_name
 		real(dp)				:: wall_temperature
-		real(dp)				:: farfield_density, farfield_pressure, farfield_temperature, farfield_velocity     !		farfield_gamma, farfield_v_s, farfield_mol_mix_conc, farfield_E_f, farfield_e_i, farfield_v
+		real(dp)				:: farfield_density, farfield_pressure, farfield_temperature, farfield_velocity     !		farfield_gamma, farfield_v_s, farfield_mix_mol_mass, farfield_E_f, farfield_e_i, farfield_v
 		real(dp)				:: farfield_E_f, farfield_e_i, farfield_gamma, farfield_v_s
 		real(dp)			,dimension(:)	,allocatable	:: farfield_concentrations
 		character(len=10)	,dimension(:)	,allocatable	:: farfield_species_names
@@ -935,14 +935,14 @@ contains
 										end do
 				
 										average_molar_mass	=  1.0_dp / average_molar_mass
-										mol_mix_conc		=  average_molar_mass
+										mix_mol_mass		=  average_molar_mass
 				
-										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * mol_mix_conc
+										farfield_density			= farfield_pressure / (farfield_temperature * r_gase_J) * mix_mol_mass
 										call bc%boundary_types(bound_number)%set_farfield_density(farfield_density)
 
 										do specie_number = 1,size(farfield_species_names)
 											specie_index			= this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(specie_number))
-											concs(specie_index)		= concs(specie_index) * mol_mix_conc / this%thermo%thermo_ptr%molar_masses(specie_index)
+											concs(specie_index)		= concs(specie_index) * mix_mol_mass / this%thermo%thermo_ptr%molar_masses(specie_index)
 										end do
 									
 										cp = this%thermo%thermo_ptr%mixture_cp_molar(farfield_temperature, concs)
@@ -950,8 +950,8 @@ contains
 
 										farfield_gamma	= cp / cv	
 								
-										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs)/ mol_mix_conc
-										farfield_e_i	= (this%thermo%thermo_ptr%mixture_internal_energy_molar(farfield_temperature, concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mol_mix_conc
+										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	this%thermo%thermo_ptr%calculate_mixture_enthalpy(farfield_temperature, concs)/ mix_mol_mass
+										farfield_e_i	= (this%thermo%thermo_ptr%mixture_internal_energy_molar(farfield_temperature, concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mix_mol_mass
 										
                                         !farfield_velocity	=  sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
                                         
@@ -968,8 +968,8 @@ contains
 										E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	farfield_E_f 
 										call bc%boundary_types(bound_number)%set_farfield_energy(farfield_E_f)
                                         
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%mixture_enthalpy_molar(farfield_temperature, concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mol_mix_conc
-										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mol_mix_conc
+										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	(this%thermo%thermo_ptr%mixture_enthalpy_molar(farfield_temperature, concs) - this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref, concs)) / mix_mol_mass
+										!h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		=	cp*farfield_temperature/mix_mol_mass
 										
 								end select
 							end if

@@ -91,7 +91,7 @@ module fds_low_mach_solver_class
 		type(computational_mesh_pointer)			:: mesh
 		type(boundary_conditions_pointer)			:: boundary
 
-		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mol_mix_conc
+		type(field_scalar_cons_pointer)	:: rho		, rho_int		, rho_old		, T				, T_int			, p				, p_int			, v_s			, mix_mol_mass
 		type(field_scalar_cons_pointer)	:: E_f		, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_diff	, E_f_prod_rad  , E_f_int		, h_s			, gamma
 		type(field_scalar_cons_pointer)	:: p_stat	, p_stat_old	, dp_stat_dt	, p_dyn			, div_v			, div_v_int		, ddiv_v_dt		, H				, H_old			, R
 		type(field_scalar_cons_pointer)	:: nu		, kappa
@@ -230,8 +230,8 @@ contains
 		constructor%v%v_ptr						=> vect_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr						=> vect_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr	
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_ptr%s_ptr	
 
 		call manager%create_scalar_field(p_dyn		,'pressure_dynamic'						,'p_dyn')
 		constructor%p_dyn%s_ptr						=> p_dyn	
@@ -964,7 +964,7 @@ contains
 		real(dp)			,intent(in)		:: time_step
 		logical				,intent(in)		:: predictor
 	
-		real(dp)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, dp_dt, D_sum, P_sum, U_sum, div_sum, average_molar_mass, mol_mix_conc
+		real(dp)	:: flux_left, flux_right, specie_enthalpy, mixture_cp, dp_dt, D_sum, P_sum, U_sum, div_sum
 		
 		real(dp)					:: cell_volume
 		real(dp)	,dimension(3)	:: cell_size, cell_surface_area
@@ -974,7 +974,7 @@ contains
 		integer		,save			:: iter = 1
 
 		real(dp), dimension (3,3)	:: lame_coeffs
-		character(len=20)				:: coordinate_system	
+		character(len=20)			:: coordinate_system	
 		
 		integer	:: dimensions, species_number, cells_number
 		integer	,dimension(3,2)	:: cons_inner_loop
@@ -1019,6 +1019,7 @@ contains
 					Y				    => this%Y%v_ptr				, &
 					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &	
 					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &	
+                    mix_mol_mass        => this%mix_mol_mass%s_ptr  , &
 					E_f_prod_chem 	    => this%E_f_prod_chem%s_ptr	, &
                     E_f_prod_rad	    => this%E_f_prod_rad%s_ptr	, &
 					E_f_prod_heat	    => this%E_f_prod_heat%s_ptr	, &
@@ -1029,7 +1030,7 @@ contains
 					mesh			    => this%mesh%mesh_ptr		, &
 					bc				    => this%boundary%bc_ptr)
 
-			!$omp parallel default(shared)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs, average_molar_mass, mol_mix_conc) !, &
+			!$omp parallel default(shared)  private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,cell_volume,cell_surface_area,lame_coeffs) !, &
 			!!$omp& firstprivate(this)
             !!$omp& shared(D_sum,P_sum,U_sum,energy_source,cons_inner_loop,species_number,dimensions,cell_size,coordinate_system)					
  
@@ -1070,16 +1071,16 @@ contains
 
                     !end if
 
-					average_molar_mass = 0.0_dp
-					do spec = 1,species_number
-						average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k) / thermo%molar_masses(spec)
-					end do
+					!average_molar_mass = 0.0_dp
+					!do spec = 1,species_number
+					!	average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k) / thermo%molar_masses(spec)
+					!end do
+				 !
+					!mix_mol_mass		= 1.0_dp / average_molar_mass
 				
-					mol_mix_conc		= 1.0_dp / average_molar_mass
-
 					concs = 0.0_dp
 					do spec = 1,species_number
-						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mol_mix_conc / thermo%molar_masses(spec)
+						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mix_mol_mass%cells(i,j,k) / thermo%molar_masses(spec)
 					end do		
 
 					if (this%additional_particles_phases_number /= 0) then
@@ -1123,7 +1124,7 @@ contains
 				
 					mixture_cp				= thermo%mixture_cp_molar(T%cells(i,j,k), concs)
 					
-					div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)
+					div_v_int%cells(i,j,k)	= div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k))
 					
 					do spec = 1, species_number
 					
@@ -1153,22 +1154,22 @@ contains
 								end if
 							end if					
 
-							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * &
+							div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mix_mol_mass%cells(i,j,k) / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) *  mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k))) * &
 																			  (	-  (	v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	* lame_coeffs(dim,3) * (flux_right	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)	&
 																					 -	v_f%pr(dim)%cells(dim,i,j,k)									* lame_coeffs(dim,1) * (flux_left	-  rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)) / cell_size(1)) / lame_coeffs(dim,2))
 							continue													 
 						end do							
 						
 						
-						if (this%diffusion_flag) 	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * &
+						if (this%diffusion_flag) 	div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mix_mol_mass%cells(i,j,k) / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k))) * &
 																		  (	Y_prod_diff%pr(spec)%cells(i,j,k))
 
-						if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mol_mix_conc / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * &
+						if (this%reactive_flag)		div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + (	mix_mol_mass%cells(i,j,k) / thermo%molar_masses(spec) / rho%cells(i,j,k) - specie_enthalpy / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k))) * &
 																		  (	Y_prod_chem%pr(spec)%cells(i,j,k))
 					end do
 					
 					D_sum = D_sum + div_v_int%cells(i,j,k) * cell_volume
-					P_sum = P_sum + (1.0_dp / p_stat%cells(i,j,k) - 1.0_dp / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc)) * cell_volume 
+					P_sum = P_sum + (1.0_dp / p_stat%cells(i,j,k) - 1.0_dp / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k))) * cell_volume 
 				end if
 			end do
 			end do
@@ -1213,16 +1214,16 @@ contains
 			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)			
 				if(bc%bc_markers(i,j,k) == 0) then	
 					
-					average_molar_mass = 0.0_dp
-					do spec = 1,species_number
-						average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k) / thermo%molar_masses(spec)
-                    end do
-
-					mol_mix_conc	= 1.0_dp / average_molar_mass				
+					!average_molar_mass = 0.0_dp
+					!do spec = 1,species_number
+					!	average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k) / thermo%molar_masses(spec)
+     !               end do
+     !
+					!mix_mol_mass	= 1.0_dp / average_molar_mass				
 				
                     concs = 0.0_dp
 					do spec = 1,species_number
-						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mol_mix_conc / thermo%molar_masses(spec)
+						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mix_mol_mass%cells(i,j,k) / thermo%molar_masses(spec)
 					end do	    
       
 					mixture_cp		= thermo%mixture_cp_molar(T%cells(i,j,k), concs)
@@ -1230,7 +1231,7 @@ contains
 					dp_stat_dt%cells(i,j,k) = (D_sum - U_sum)/ P_sum
 
 					if (this%all_Neumann_flag) then	
-						div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dp / p_stat%cells(i,j,k) - 1.0_dp / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mol_mix_conc))* dp_stat_dt%cells(i,j,k)
+						div_v_int%cells(i,j,k)  = div_v_int%cells(i,j,k) - (1.0_dp / p_stat%cells(i,j,k) - 1.0_dp / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k)))* dp_stat_dt%cells(i,j,k)
 					end if
 
 				end if

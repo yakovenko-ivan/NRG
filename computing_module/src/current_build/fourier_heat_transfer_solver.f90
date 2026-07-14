@@ -25,7 +25,7 @@ module fourier_heat_transfer_solver_class
 	type(field_scalar_cons)	,target	:: E_f_prod_heat, kappa
 
 	type	:: heat_transfer_solver
-		type(field_scalar_cons_pointer)				:: E_f_prod, T, kappa, mol_mix_conc, rho
+		type(field_scalar_cons_pointer)				:: E_f_prod, T, kappa, mix_mol_mass, rho
 		type(field_vector_cons_pointer)				:: Y
 		type(computational_domain)					:: domain
 		type(mpi_communications)					:: mpi_support
@@ -58,8 +58,8 @@ contains
 
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
 		constructor%T%s_ptr					=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr				=> scal_ptr%s_ptr
 
@@ -244,7 +244,7 @@ contains
 
 		associate(  T                       => this%T%s_ptr                            , &
 					kappa					=> this%kappa%s_ptr							, &
-					mol_mix_conc            => this%mol_mix_conc%s_ptr                 , &
+					mix_mol_mass            => this%mix_mol_mass%s_ptr                 , &
 					Y						=> this%Y%v_ptr									, &
 					potential_well_depth    => this%thermo%thermo_ptr%potential_well_depth	, &
 					molar_masses            => this%thermo%thermo_ptr%molar_masses			, &

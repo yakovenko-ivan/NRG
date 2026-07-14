@@ -25,7 +25,7 @@ module thermal_radiation_solver_class
 	type(field_scalar_cons)	,target	:: E_f_prod_radiation
 
 	type	:: thermal_radiation_solver
-		type(field_scalar_cons_pointer)				:: E_f_prod, T, p, mol_mix_conc
+		type(field_scalar_cons_pointer)				:: E_f_prod, T, p, mix_mol_mass
 		type(field_vector_cons_pointer)				:: Y
 		type(computational_domain)					:: domain
 		type(boundary_conditions_pointer)			:: boundary
@@ -57,8 +57,8 @@ contains
 
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
 		constructor%T%s_ptr					=> scal_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'pressure')
 		constructor%p%s_ptr				=> scal_ptr%s_ptr
 
@@ -118,7 +118,7 @@ contains
 		associate(  E_f_prod	    => this%E_f_prod%s_ptr	    , &
 					p			    => this%p%s_ptr		        , &
 					T			    => this%T%s_ptr			    , &
-                    mol_mix_conc    => this%mol_mix_conc%s_ptr  , &
+                    mix_mol_mass    => this%mix_mol_mass%s_ptr  , &
 					Y				=> this%Y%v_ptr			    , &
 					bc			    => this%boundary%bc_ptr     , &
                     chem            => this%chem%chem_ptr       , &
@@ -138,7 +138,7 @@ contains
 			if(bc%bc_markers(i,j,k) == 0) then
                  
                 do specie = 1,species_number			
-                    mol_frac    = Y%pr(specie)%cells(i,j,k)/molar_masses(specie) * mol_mix_conc%cells(i,j,k)
+                    mol_frac    = Y%pr(specie)%cells(i,j,k)/molar_masses(specie) * mix_mol_mass%cells(i,j,k)
                     ap          = this%calculate_absorption_coeff(specie,T%cells(i,j,k))        
                     sum         = sum + mol_frac * p%cells(i,j,k) * ap / 101325.0_dp
                 end do

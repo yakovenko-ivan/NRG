@@ -73,7 +73,7 @@ module cpm_solver_class
 		type(computational_mesh_pointer)			:: mesh
 		type(boundary_conditions_pointer)			:: boundary
 
-		type(field_scalar_cons_pointer)	:: rho	, T				, p				, v_s			,mol_mix_conc
+		type(field_scalar_cons_pointer)	:: rho	, T				, p				, v_s			, mix_mol_mass
 		type(field_scalar_cons_pointer)	:: E_f	, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff, E_f_int
 		type(field_vector_cons_pointer)	:: v	, v_prod_gd		, v_prod_sources, v_prod_visc	, v_prod_source	, v_int
 		type(field_vector_cons_pointer)	:: Y	, Y_prod_diff	, Y_prod_chem	, Y_int
@@ -161,8 +161,8 @@ contains
 		constructor%v%v_ptr						=> vect_c_ptr%v_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr						=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr	
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_c_ptr%s_ptr	
 		
 		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'velocity_flow')
 		constructor%v_f%v_ptr				=> vect_f_ptr%v_ptr		
@@ -602,7 +602,7 @@ contains
 		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
 		
 		associate(  T				=> this%T%s_ptr				, &
-					mol_mix_conc	=> this%mol_mix_conc%s_ptr	, &
+					mix_mol_mass	=> this%mix_mol_mass%s_ptr	, &
 					p				=> this%p%s_ptr				, &
 					rho				=> this%rho%s_ptr			, &
 					v				=> this%v%v_ptr				, &
@@ -632,7 +632,7 @@ contains
 										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= p%cells(i,j,k)
 										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= rho%cells(i,j,k)
 										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= T%cells(i,j,k)
-										mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= mol_mix_conc%cells(i,j,k)
+										mix_mol_mass%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= mix_mol_mass%cells(i,j,k)
 								
 										do spec = 1, species_number
 											Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(spec)%cells(i,j,k)
@@ -669,7 +669,7 @@ contains
 										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= p%cells(i,j,k)
 										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= rho%cells(i,j,k)
 										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= T%cells(i,j,k)
-										mol_mix_conc%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= mol_mix_conc%cells(i,j,k)									
+										mix_mol_mass%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= mix_mol_mass%cells(i,j,k)									
 									
 										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
 										do spec = 1, species_number

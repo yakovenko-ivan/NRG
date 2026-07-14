@@ -325,7 +325,7 @@ module cabaret_solver_class
 		type(computational_mesh_pointer)		:: mesh
 		type(boundary_conditions_pointer)		:: boundary
 
-		type(field_scalar_cons_pointer)	:: rho	, T	, p	, v_s, gamma, E_f	, e_i ,mol_mix_conc
+		type(field_scalar_cons_pointer)	:: rho	, T	, p	, v_s, gamma, E_f	, e_i ,mix_mol_mass
 		type(field_scalar_flow_pointer)	:: gamma_f_new, rho_f_new, p_f_new, e_i_f_new, v_s_f_new, E_f_f_new, T_f_new
 		
 		type(field_scalar_cons_pointer)	:: E_f_prod_chem, E_f_prod_heat, E_f_prod_diff, E_f_prod_visc
@@ -583,8 +583,8 @@ contains
 		constructor%E_f%s_ptr				=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'internal_energy')
 		constructor%e_i%s_ptr				=> scal_c_ptr%s_ptr		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_c_ptr%s_ptr		
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_c_ptr%s_ptr		
 		
 		call manager%create_scalar_field(rho_f_new	,'density_flow'				,'rho_f_new')
 		constructor%rho_f_new%s_ptr 	=> rho_f_new		
@@ -4429,7 +4429,7 @@ contains
         
 
 		associate(  T				=> this%T%s_ptr					, &
-					mol_mix_conc	=> this%mol_mix_conc%s_ptr		, &
+					mix_mol_mass	=> this%mix_mol_mass%s_ptr		, &
 					p				=> this%p%s_ptr					, &
 					rho				=> this%rho%s_ptr				, &
 					v				=> this%v%v_ptr					, &
@@ -4464,7 +4464,7 @@ contains
 										p%cells(ghost_i,ghost_j,ghost_k)					= p%cells(i,j,k)
 										rho%cells(ghost_i,ghost_j,ghost_k)				= rho%cells(i,j,k)
 										T%cells(ghost_i,ghost_j,ghost_k)					= T%cells(i,j,k)
-										mol_mix_conc%cells(ghost_i,ghost_j,ghost_k)	= mol_mix_conc%cells(i,j,k)
+										mix_mol_mass%cells(ghost_i,ghost_j,ghost_k)	= mix_mol_mass%cells(i,j,k)
 										v_s%cells(ghost_i,ghost_j,ghost_k)				= v_s%cells(i,j,k)
 							
 										do dim1 = 1, dimensions
@@ -4494,7 +4494,7 @@ contains
 										p%cells(ghost_i,ghost_j,ghost_k)					= p%cells(i,j,k)
 										rho%cells(ghost_i,ghost_j,ghost_k)				= rho%cells(i,j,k)
 										T%cells(ghost_i,ghost_j,ghost_k)					= T%cells(i,j,k)
-										mol_mix_conc%cells(ghost_i,ghost_j,ghost_k)	= mol_mix_conc%cells(i,j,k)
+										mix_mol_mass%cells(ghost_i,ghost_j,ghost_k)	= mix_mol_mass%cells(i,j,k)
 										v_s%cells(ghost_i,ghost_j,ghost_k)				= v_s%cells(i,j,k)
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
@@ -4522,9 +4522,9 @@ contains
 											(farfield_density > 0.0_dp).and. &
 											(farfield_temperature > 0.0_dp)) then
 											mol_mix_from_farfield = farfield_density*farfield_temperature*r_gase_J/farfield_pressure
-											mol_mix_conc%cells(ghost_i,ghost_j,ghost_k) = mol_mix_from_farfield
+											mix_mol_mass%cells(ghost_i,ghost_j,ghost_k) = mol_mix_from_farfield
 										else
-											mol_mix_conc%cells(ghost_i,ghost_j,ghost_k) = mol_mix_conc%cells(i,j,k)
+											mix_mol_mass%cells(ghost_i,ghost_j,ghost_k) = mix_mol_mass%cells(i,j,k)
 										end if
 
 										if (v_s%cells(ghost_i,ghost_j,ghost_k) <= 0.0_dp) then
@@ -4563,7 +4563,7 @@ contains
 											p%cells(ghost_i,ghost_j,ghost_k)					= p%cells(i,j,k)
 											rho%cells(ghost_i,ghost_j,ghost_k)				= rho%cells(i,j,k)
 											T%cells(ghost_i,ghost_j,ghost_k)					= T%cells(i,j,k)
-											mol_mix_conc%cells(ghost_i,ghost_j,ghost_k)	= mol_mix_conc%cells(i,j,k)
+											mix_mol_mass%cells(ghost_i,ghost_j,ghost_k)	= mix_mol_mass%cells(i,j,k)
 											v_s%cells(ghost_i,ghost_j,ghost_k)				= v_s%cells(i,j,k)
 											do dim1 = 1, dimensions
 												v%pr(dim1)%cells(ghost_i,ghost_j,ghost_k) = v%pr(dim1)%cells(i,j,k)
@@ -4596,9 +4596,9 @@ contains
 												(farfield_density > 0.0_dp).and. &
 												(farfield_temperature > 0.0_dp)) then
 												mol_mix_from_farfield = farfield_density*farfield_temperature*r_gase_J/farfield_pressure
-												mol_mix_conc%cells(ghost_i,ghost_j,ghost_k) = mol_mix_from_farfield
+												mix_mol_mass%cells(ghost_i,ghost_j,ghost_k) = mol_mix_from_farfield
 											else
-												mol_mix_conc%cells(ghost_i,ghost_j,ghost_k) = mol_mix_conc%cells(i,j,k)
+												mix_mol_mass%cells(ghost_i,ghost_j,ghost_k) = mix_mol_mass%cells(i,j,k)
 											end if
 											if (v_s%cells(ghost_i,ghost_j,ghost_k) <= 0.0_dp) then
 												v_s%cells(ghost_i,ghost_j,ghost_k) = v_s%cells(i,j,k)

@@ -67,8 +67,8 @@ contains
 		constructor%T%s_ptr					=> scal_ptr%s_ptr	
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
 		constructor%rho%s_ptr				=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_concentration')
-		constructor%mol_mix_conc%s_ptr		=> scal_ptr%s_ptr
+		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_mass')
+		constructor%mix_mol_mass%s_ptr		=> scal_ptr%s_ptr
 		
 		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
 		constructor%Y%v_ptr				=> vect_ptr%v_ptr
@@ -150,7 +150,7 @@ contains
 				    D				=> this%D%v_ptr			, &
 				    mol_mix_conc    => this%mol_mix_conc%s_ptr)
         
-		    call this%mpi_support%exchange_conservative_scalar_field(mol_mix_conc)
+		    call this%mpi_support%exchange_conservative_scalar_field(mix_mol_mass)
 		    call this%mpi_support%exchange_conservative_scalar_field(rho)
 		    call this%mpi_support%exchange_conservative_scalar_field(T)
 		    call this%mpi_support%exchange_conservative_vector_field(D)
