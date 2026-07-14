@@ -89,7 +89,7 @@ contains
 		constructor%e_i%s_ptr					=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'full_energy')
 		constructor%E_f%s_ptr					=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_concentration')
+		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_mass')
 		constructor%mix_mol_mass%s_ptr			=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure_static_change')
 		constructor%dp_stat_dt%s_ptr			=> scal_c_ptr%s_ptr		
