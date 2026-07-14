@@ -1018,7 +1018,7 @@ contains
 					v_f				    => this%v_f%v_ptr			, &
 					Y				    => this%Y%v_ptr				, &
 					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &	
-					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &	
+					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &
                     mix_mol_mass        => this%mix_mol_mass%s_ptr  , &
 					E_f_prod_chem 	    => this%E_f_prod_chem%s_ptr	, &
                     E_f_prod_rad	    => this%E_f_prod_rad%s_ptr	, &
@@ -1077,7 +1077,7 @@ contains
 					!end do
 				 !
 					!mix_mol_mass		= 1.0_dp / average_molar_mass
-				
+
 					concs = 0.0_dp
 					do spec = 1,species_number
 						concs(spec)				= Y%pr(spec)%cells(i,j,k) *  mix_mol_mass%cells(i,j,k) / thermo%molar_masses(spec)
