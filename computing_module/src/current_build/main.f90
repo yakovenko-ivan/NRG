@@ -48,7 +48,7 @@ program computing_module
 	type(solver_options)						:: problem_solver_options
 	
 	type(boundary_conditions)	,target			:: problem_boundaries
-	type(field_scalar_cons)		,target			:: p, T, rho, e_i, E_f, mol_mix_conc
+	type(field_scalar_cons)		,target			:: p, T, rho, e_i, E_f, mix_mol_mass
 	type(field_vector_cons)		,target			:: v, Y
 
 	type(data_io)								:: problem_data_io
@@ -183,7 +183,7 @@ program computing_module
 	call problem_manager%create_scalar_field(rho			,'density'						,'rho')
 	call problem_manager%create_scalar_field(e_i			,'internal_energy'				,'e_i')
 	call problem_manager%create_scalar_field(E_f			,'full_energy'					,'E_f')
-	call problem_manager%create_scalar_field(mol_mix_conc	,'mixture_molar_concentration'	,'mix_mol_conc')
+	call problem_manager%create_scalar_field(mix_mol_mass	,'mixture_molar_mass'	        ,'mix_mol_mass')
 	call problem_manager%create_vector_field(v				,'velocity'						,'v',	'spatial')
 	call problem_manager%create_vector_field(Y				,'specie_mass_fraction'	        ,'Y',	'chemical')
 
