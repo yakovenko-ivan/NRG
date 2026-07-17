@@ -1798,12 +1798,12 @@ contains
 								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
 														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_old%cells(i,j,k))		&
 														/	(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_old%cells(i,j,k))	&
-														*	(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	!/ cell_size(1)
+														*	(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1)! F_b = -p_hat * grad(1/rho), [m/s^2]
 							else
 								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
 														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_int%cells(i,j,k))		&
 														/	(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_int%cells(i,j,k))	&
-														*	(1.0_dp/rho_int%cells(i,j,k)	- 1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	!/ cell_size(1)
+														*	(1.0_dp/rho_int%cells(i,j,k)	- 1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1)! F_b = -p_hat * grad(1/rho), [m/s^2]
 							end if
 
 						end if
