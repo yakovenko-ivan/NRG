@@ -106,7 +106,6 @@ module fds_low_mach_solver_class
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_particles, v_prod_particles		
         
 		real(dp)	,dimension(:,:,:,:)	,allocatable	:: vorticity, grad_F_a, grad_F_b
-		real(dp)	,dimension(:,:,:)	,allocatable	:: p_old
 		
 		integer												:: number_of_meshes
 		integer			,dimension(:,:,:)	,allocatable	:: subgrid_cons_inner_loop, subgrid_cons_utter_loop
@@ -378,10 +377,6 @@ contains
 											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))		
 
-		allocate(constructor%p_old(			cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))													
-
 		allocate(constructor%grad_F_a(		3						, &
 											cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 											cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
@@ -393,7 +388,6 @@ contains
 											cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 
 		constructor%vorticity= 0.0_dp
-		constructor%p_old	 = 0.0_dp
 		constructor%grad_F_a = 0.0_dp									
 		constructor%grad_F_b = 0.0_dp
 
@@ -1258,7 +1252,14 @@ contains
 		real(dp)	:: H_center, H_left, H_right, F_a_left, F_a_right, F_b_left, F_b_right, sub_F_summ, r_summ1, r_summ2
 		real(dp)	:: H_residual, H_max, H_max_old, H_average, residual, a_norm_init, a_norm, a_norm_prev, a_normfinal, H_summ, sum_ddiv_v_dt, grad_F_a_summ, grad_F_b_summ
 		real(dp)	:: farfield_density, farfield_pressure, farfield_velocity
-			real(dp)	:: rho_face
+		real(dp)	:: rho_face
+		real(dp)	:: F_b_candidate
+		real(dp)	:: F_b_change_max_local, F_b_change_max
+		real(dp)	:: F_b_norm_max_local, F_b_norm_max
+		real(dp)	:: F_a_norm_max_local, F_a_norm_max
+		real(dp)	:: F_b_convergence_scale, F_b_relative_change
+		real(dp), parameter :: F_b_relative_tolerance = 1.0e-3_dp
+		real(dp), parameter :: F_b_absolute_tolerance = 1.0e-10_dp
 		
 		real(dp), dimension (3,3)	:: lame_coeffs
 		character(len=20)				:: coordinate_system
@@ -1742,12 +1743,6 @@ contains
 			
 			do while ((.not.pressure_converged).and.(pressure_iteration < 200)) 
 
-                associate (	p_dyn				=> this%p_dyn%s_ptr , &
-                            p_old				=> this%p_old)
-                    
-                    p_old	= p_dyn%cells
-                    
-                end associate				
 
 				H_max_old	= 10.0
 				a_norm_init = 0.0_dp
@@ -1798,12 +1793,12 @@ contains
 								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
 														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_old%cells(i,j,k))		&
 														/	(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_old%cells(i,j,k))	&
-														*	(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1)! F_b = -p_hat * grad(1/rho), [m/s^2]
+														*	(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1) ! F_b = -p_hat * grad(1/rho), [m/s^2]
 							else
 								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
 														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_int%cells(i,j,k))		&
 														/	(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_int%cells(i,j,k))	&
-														*	(1.0_dp/rho_int%cells(i,j,k)	- 1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1)! F_b = -p_hat * grad(1/rho), [m/s^2]
+														*	(1.0_dp/rho_int%cells(i,j,k)	- 1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1) ! F_b = -p_hat * grad(1/rho), [m/s^2]
 							end if
 
 						end if
@@ -2548,53 +2543,89 @@ contains
                 end associate
                 
 				call this%calculate_dynamic_pressure(time_step,predictor)
-				pressure_converged = .true.				
-				
-                associate (     p_old           => this%p_old               , &
-                                p_dyn			=> this%p_dyn%s_ptr			, &
-                                rho_old			=> this%rho_old%s_ptr		, &
-                                rho_int			=> this%rho_int%s_ptr		, &
-                                bc				=> this%boundary%bc_ptr		)
 
-				!$omp parallel default(shared)  private(i,j,k,dim,H_residual,r_i,r_j,r_k,plus,sign,bound_number,boundary_type_name,farfield_pressure) !, &
-				!!$omp& firstprivate(this)
-                !!$omp& shared(H_summ,predictor,pressure_converged,cons_inner_loop,cons_utter_loop,dimensions,cell_size,time_step,time)
+				! Direct fixed-point convergence test for the baroclinic pressure term.
+				! F_b currently contains F_b[p^m], which was used in the Poisson solve.
+				! Recompute F_b[p^(m+1)] from the updated dynamic pressure, measure
+				! its maximum change, and retain the updated field for the next outer
+				! iteration (or for the final velocity update after convergence).
+				F_b_change_max_local = 0.0_dp
+				F_b_norm_max_local   = 0.0_dp
+				F_a_norm_max_local   = 0.0_dp
 
-                !$omp do collapse(3) schedule(static)	reduction(.and.:pressure_converged)	
-				do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-				do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-					if(bc%bc_markers(i,j,k) == 0) then
-						do dim = 1,dimensions
-							if (predictor) then
-								if (pressure_converged) then
-								if (abs(((p_dyn%cells(i,j,k) - this%p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>20.0_dp/cell_size(1)/cell_size(1)) then
-									pressure_converged = .false.
-									print *, 'Pressure error', abs(((p_dyn%cells(i,j,k) - p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))
-								end if
-								end if
-							else
-								if (pressure_converged) then
-								if (abs(((p_dyn%cells(i,j,k) - p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dp/rho_int%cells(i,j,k)	- 1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))>20.0_dp/cell_size(1)/cell_size(1)) then
-									pressure_converged = .false.
-									print *, 'Pressure error',  abs(((p_dyn%cells(i,j,k) - p_old(i,j,k)) - (p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - p_old(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))))/cell_size(1) &
-										*(1.0_dp/rho_int%cells(i,j,k)	- 1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))/ cell_size(1))
-								end if
-								end if						
-							end if
-						end do
-	
-					end if
-				end do
-				end do
-				end do		
-				!$omp end do
-				!$omp end parallel
+                associate ( p_dyn            => this%p_dyn%s_ptr          , &
+                            rho_old          => this%rho_old%s_ptr        , &
+                            rho_int          => this%rho_int%s_ptr        , &
+                            F_a              => this%F_a%s_ptr            , &
+                            F_b              => this%F_b%s_ptr            , &
+                            bc               => this%boundary%bc_ptr      )
+
+                !$omp parallel default(shared) private(i,j,k,dim,loop,F_b_candidate) &
+                !$omp& reduction(max:F_b_change_max_local,F_b_norm_max_local,F_a_norm_max_local)
+
+                do dim = 1, dimensions
+                    loop(3,1) = cons_inner_loop(3,1)
+                    loop(3,2) = cons_utter_loop(3,2)*I_m(dim,3) + cons_inner_loop(3,2)*(1 - I_m(dim,3))
+
+                    loop(2,1) = cons_inner_loop(2,1)
+                    loop(2,2) = cons_utter_loop(2,2)*I_m(dim,2) + cons_inner_loop(2,2)*(1 - I_m(dim,2))
+
+                    loop(1,1) = cons_inner_loop(1,1)
+                    loop(1,2) = cons_utter_loop(1,2)*I_m(dim,1) + cons_inner_loop(1,2)*(1 - I_m(dim,1))
+
+                    !$omp do collapse(3) schedule(static)
+                    do k = loop(3,1),loop(3,2)
+                    do j = loop(2,1),loop(2,2)
+                    do i = loop(1,1),loop(1,2)
+                        if ((bc%bc_markers(i,j,k) == 0).or. &
+                            (bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
+
+                            if (predictor) then
+                                F_b_candidate = - (p_dyn%cells(i,j,k) * &
+                                    rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + &
+                                    p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * &
+                                    rho_old%cells(i,j,k)) / &
+                                    (rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + &
+                                     rho_old%cells(i,j,k)) * &
+                                    (1.0_dp/rho_old%cells(i,j,k) - &
+                                     1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / &
+                                    cell_size(1)
+                            else
+                                F_b_candidate = - (p_dyn%cells(i,j,k) * &
+                                    rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + &
+                                    p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) * &
+                                    rho_int%cells(i,j,k)) / &
+                                    (rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + &
+                                     rho_int%cells(i,j,k)) * &
+                                    (1.0_dp/rho_int%cells(i,j,k) - &
+                                     1.0_dp/rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / &
+                                    cell_size(1)
+                            end if
+
+                            F_b_change_max_local = max(F_b_change_max_local, &
+                                                       abs(F_b_candidate - F_b%cells(dim,i,j,k)))
+                            F_b_norm_max_local   = max(F_b_norm_max_local, abs(F_b_candidate))
+                            F_a_norm_max_local   = max(F_a_norm_max_local, abs(F_a%cells(dim,i,j,k)))
+                            F_b%cells(dim,i,j,k) = F_b_candidate
+                        end if
+                    end do
+                    end do
+                    end do
+                    !$omp end do
+                end do
+
+                !$omp end parallel
 
                 end associate
+
+				F_b_change_max = F_b_change_max_local
+				F_b_norm_max   = F_b_norm_max_local
+				F_a_norm_max   = F_a_norm_max_local
+
+				F_b_convergence_scale = max(maxval(abs(this%g)), F_b_norm_max, F_a_norm_max, tiny(1.0_dp))
+				F_b_relative_change   = F_b_change_max / F_b_convergence_scale
+				pressure_converged = F_b_change_max <= F_b_absolute_tolerance + &
+				                     F_b_relative_tolerance * F_b_convergence_scale
 
 				pressure_iteration = pressure_iteration + 1
 
@@ -2603,6 +2634,11 @@ contains
 				
 			print *, 'Pressure iteration:', pressure_iteration
 			print *, 'Overall pressure iteration:', overall_poisson_iteration
+			print *, 'F_b convergence (relative, absolute, scale):', &
+			         F_b_relative_change, F_b_change_max, F_b_convergence_scale
+			if (.not.pressure_converged) then
+				print *, 'WARNING: F_b pressure iteration did not converge within 200 iterations.'
+			end if
             print *, ' '
 			
 			continue
