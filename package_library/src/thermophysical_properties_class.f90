@@ -1350,11 +1350,12 @@ contains
         species_number = size(this%molar_masses)
 
         do specie_number1 = 1,species_number-1
+            if ((this%molar_masses(specie_number1) <= 0.0_dp)) cycle 
+            if ((this%collision_diameter(specie_number1) <= 0.0_dp)) cycle
             do specie_number2 = specie_number1+1,species_number
-                if (this%molar_masses(specie_number1) <= 0.0_dp .or. &
-                    this%molar_masses(specie_number2) <= 0.0_dp) cycle
-                if (this%collision_diameter(specie_number1) <= 0.0_dp .or. &
-                    this%collision_diameter(specie_number2) <= 0.0_dp) cycle
+
+                if ((this%molar_masses(specie_number2) <= 0.0_dp)) cycle
+                if ((this%collision_diameter(specie_number2) <= 0.0_dp)) cycle
 
                 reduced_collision_diameter = 0.5_dp * &
                     (this%collision_diameter(specie_number1) + &
