@@ -34,3 +34,4 @@ build/
 *.u2d
 *.vfproj
 *.sln
+*.vscode
