@@ -21,6 +21,7 @@ program computing_module
 
 	use cpm_solver_class	
 	use cabaret_solver_class
+    use cabaret_low_mach_solver_class
 	use fds_low_mach_solver_class
 	
     use benchmarking
@@ -42,6 +43,7 @@ program computing_module
 	type(chemical_properties)			,target	:: problem_chemistry
 	type(thermophysical_properties)		,target	:: problem_thermophysics
 	type(cabaret_solver)						:: problem_cabaret_solver
+	type(cabaret_low_mach_solver)               :: problem_cabaret_low_mach_solver
 	type(cpm_solver)							:: problem_cpm_solver
 	type(fds_solver)							:: problem_fds_solver
 
@@ -196,6 +198,9 @@ program computing_module
 		case('CABARET')
 			problem_cabaret_solver = cabaret_solver_c(	problem_manager,  &
 														problem_data_io			= problem_data_io)
+		case('CABARET_low_mach')
+			problem_cabaret_low_mach_solver = cabaret_low_mach_solver_c(	problem_manager,  &
+														problem_data_io			= problem_data_io)
 		case('fds_low_mach')											
 			problem_fds_solver = fds_solver_c(	problem_manager,  &
 												problem_data_io			= problem_data_io)																		
@@ -243,6 +248,10 @@ program computing_module
 				call problem_cabaret_solver%solve_problem()
 				calculation_time	= problem_cabaret_solver%get_time()
 				time_step			= problem_cabaret_solver%get_time_step()
+			case('CABARET_low_mach')											
+				call problem_cabaret_low_mach_solver%solve_problem()		
+				calculation_time	= problem_cabaret_low_mach_solver%get_time()		
+				time_step			= problem_cabaret_low_mach_solver%get_time_step()
 			case('fds_low_mach')											
 				call problem_fds_solver%solve_problem(iter,stop_flag)		
 				calculation_time	= problem_fds_solver%get_time()		
@@ -270,9 +279,9 @@ program computing_module
 !			call problem_cpm_solver%set_CFL_coefficient(0.75_dp)
 !		end if
 	
-!		if (calculation_time > 1.01e-03_dp) then
+!		if (calculation_time > 2000.5e-06_dp) then
 !			call problem_data_save%set_save_time(200.0_dp)
-!            stop
+!            exit
 !        end if    
             
         call problem_data_io%output_all_data(calculation_time			,stop_flag)	
