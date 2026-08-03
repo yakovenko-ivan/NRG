@@ -61,7 +61,7 @@ module cabaret_low_mach_solver_class
 	real(dp), parameter :: cabaret_initial_contact_velocity_eps = 10.0_dp*tiny(1.0_dp)
 
 	type(field_scalar_cons), target :: p_dyn_field, div_v_field, pressure_correction_field
-	type(field_scalar_flow), target :: rho_f_new, p_f_new
+	type(field_scalar_flow), target :: rho_f_new, p_f_new, e_i_f_new
 	type(field_scalar_flow), target :: v_s_f_new, E_f_f_new, T_f_new
 	type(field_vector_flow), target :: Y_f_new, v_f_new
 
@@ -110,7 +110,7 @@ module cabaret_low_mach_solver_class
 		type(field_vector_cons_pointer) :: D, v, Y
 		type(field_scalar_cons_pointer) :: p_dyn, div_v, pressure_correction
 
-		type(field_scalar_flow_pointer) :: rho_f_new, p_f_new
+		type(field_scalar_flow_pointer) :: rho_f_new, p_f_new, e_i_f_new
 		type(field_scalar_flow_pointer) :: v_s_f_new, E_f_f_new, T_f_new
 		type(field_vector_flow_pointer) :: v_f_new, Y_f_new
 
@@ -310,6 +310,8 @@ contains
 		constructor%rho_f_new%s_ptr 	=> rho_f_new
 		call manager%create_scalar_field(p_f_new	,'pressure_flow'			,'p_f_new')
 		constructor%p_f_new%s_ptr 		=> p_f_new
+		call manager%create_scalar_field(e_i_f_new	,'internal_energy_flow'		,'e_i_f_new')
+		constructor%e_i_f_new%s_ptr 	=> e_i_f_new
 		call manager%create_scalar_field(E_f_f_new	,'full_energy_flow'			,'E_f_f_new')
 		constructor%E_f_f_new%s_ptr 	=> E_f_f_new
 		call manager%create_scalar_field(v_s_f_new	,'velocity_of_sound_flow'	,'v_s_f_new')
