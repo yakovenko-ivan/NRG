@@ -1423,8 +1423,8 @@ contains
 							    do particles_phase_counter = 1, this%additional_particles_phases_number
 								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k)  + &
 								        (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * &
-								        (0.5_dp*(this%this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
-								        this%this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3) &
+								        (0.5_dp*(this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
+								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3) &
 								        ))))
 								    ! [m/s^2]                                         !# Lagrangian particles solver
 							    end do
@@ -1444,8 +1444,8 @@ contains
 							    do particles_phase_counter = 1, this%additional_particles_phases_number
 								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k)  + &
 								        (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * &
-								        (0.5_dp*(this%this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
-								        this%this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3) &
+								        (0.5_dp*(this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
+								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3) &
 								        ))))
 								    ! [m/s^2]                                         !# Lagrangian particles solver
 							    end do
@@ -2631,12 +2631,20 @@ contains
         allocate(conductance_y(size(correction,1),size(correction,2)+1,size(correction,3)))
         allocate(conductance_z(size(correction,1),size(correction,2),size(correction,3)+1))
 
-        allocate(elliptic_boundary%type_x, mold=conductance_x)
-        allocate(elliptic_boundary%value_x, mold=conductance_x)
-        allocate(elliptic_boundary%type_y, mold=conductance_y)
-        allocate(elliptic_boundary%value_y, mold=conductance_y)
-        allocate(elliptic_boundary%type_z, mold=conductance_z)
-        allocate(elliptic_boundary%value_z, mold=conductance_z)
+        allocate(elliptic_boundary%type_x( &
+            size(conductance_x,1), size(conductance_x,2), size(conductance_x,3)))
+        allocate(elliptic_boundary%value_x( &
+            size(conductance_x,1), size(conductance_x,2), size(conductance_x,3)))
+
+        allocate(elliptic_boundary%type_y( &
+            size(conductance_y,1), size(conductance_y,2), size(conductance_y,3)))
+        allocate(elliptic_boundary%value_y( &
+            size(conductance_y,1), size(conductance_y,2), size(conductance_y,3)))
+
+        allocate(elliptic_boundary%type_z( &
+            size(conductance_z,1), size(conductance_z,2), size(conductance_z,3)))
+        allocate(elliptic_boundary%value_z( &
+            size(conductance_z,1), size(conductance_z,2), size(conductance_z,3)))
 
         correction = 0.0_dp
         rhs = 0.0_dp

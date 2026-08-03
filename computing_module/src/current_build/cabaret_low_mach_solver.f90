@@ -2479,7 +2479,7 @@ end subroutine reconstruct_contact_family_face_state
 
 		if (this%additional_particles_phases_number /= 0) then
 			do particles_phase_counter = 1, this%additional_particles_phases_number
-    			call this%particles_solver(particles_phase_counter)%apply_cell_boundary_conditions(this%time)
+    			call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_main(this%time)
 			end do
 		end if
 	end subroutine finalize_gas_dynamics_step
