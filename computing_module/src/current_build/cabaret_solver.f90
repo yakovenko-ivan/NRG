@@ -65,6 +65,7 @@ module cabaret_solver_class
 	use viscosity_solver_class
 	use fickean_diffusion_solver_class
 	use fourier_heat_transfer_solver_class
+	use thermal_radiation_solver_class
 	use chemical_kinetics_solver_class
 
 	use lagrangian_particles_solver_class
@@ -153,6 +154,7 @@ module cabaret_solver_class
 	logical, parameter :: cabaret_include_chemistry_in_gas_step = .true.
 	logical, parameter :: cabaret_include_diffusion_in_gas_step = .true.
 	logical, parameter :: cabaret_include_heat_transfer_in_gas_step = .true.
+	logical, parameter :: cabaret_include_radiation_in_gas_step = .true.
 	logical, parameter :: cabaret_include_viscosity_in_gas_step = .true.
 	logical, parameter :: cabaret_include_particles_in_gas_step = .false.
 
@@ -300,18 +302,22 @@ module cabaret_solver_class
     type(timer)     :: cabaret_chemistry_timer
     type(timer)     :: cabaret_diffusion_timer
     type(timer)     :: cabaret_heattransfer_timer
+    type(timer)     :: cabaret_radiation_timer
     type(timer)     :: cabaret_viscosity_timer
 
 	type cabaret_solver
-		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, sources_flag, hydrodynamics_flag, CFL_condition_flag
+		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, radiation_flag, reactive_flag, &
+			sources_flag, hydrodynamics_flag, CFL_condition_flag
 		real(dp)		            :: courant_fraction
 		real(dp)		            :: time, time_step, initial_time_step
+		real(dp)                    :: rho_0
 		real(dp)    , dimension(3)  :: g
 		integer			:: additional_particles_phases_number
         
 		type(chemical_kinetics_solver)		:: chem_kin_solver
 		type(diffusion_solver)				:: diff_solver
 		type(heat_transfer_solver)			:: heat_trans_solver
+		type(thermal_radiation_solver)	:: radiation_solver
 		type(viscosity_solver)				:: viscosity_solver	
 		type(table_approximated_real_gas)	:: state_eq
 
@@ -328,7 +334,7 @@ module cabaret_solver_class
 		type(field_scalar_cons_pointer)	:: rho	, T	, p	, v_s, gamma, E_f	, e_i ,mix_mol_mass
 		type(field_scalar_flow_pointer)	:: gamma_f_new, rho_f_new, p_f_new, e_i_f_new, v_s_f_new, E_f_f_new, T_f_new
 		
-		type(field_scalar_cons_pointer)	:: E_f_prod_chem, E_f_prod_heat, E_f_prod_diff, E_f_prod_visc
+		type(field_scalar_cons_pointer)	:: E_f_prod_chem, E_f_prod_heat, E_f_prod_rad, E_f_prod_diff, E_f_prod_visc
 
 		type(field_vector_cons_pointer)	:: v, Y	, v_prod_visc
 		type(field_vector_flow_pointer)	:: v_f_new, Y_f_new
@@ -538,13 +544,14 @@ contains
 		real(dp)	,dimension(:)	,allocatable :: Y_left_riemann, Y_right_riemann, Y_face_riemann
 		logical				:: use_left_contact_state, use_riemann_initial_face
 		integer	,dimension(3,2)	:: cons_allocation_bounds, flow_allocation_bounds
-		integer	,dimension(3,2)	:: flow_inner_loop, loop
+		integer	,dimension(3,2)	:: cons_inner_loop, flow_inner_loop, loop
 		
 		integer					:: dimensions, species_number
 		integer					:: i, j, k, dim, dim1, spec
 		real(dp)	,dimension(3)	:: cell_size
 
 		cons_allocation_bounds		= manager%domain%get_local_utter_cells_bounds()
+		cons_inner_loop			= manager%domain%get_local_inner_cells_bounds()
 		flow_allocation_bounds		= manager%domain%get_local_utter_faces_bounds()
 		dimensions					= manager%domain%get_domain_dimensions()
 
@@ -556,6 +563,7 @@ contains
 		constructor%diffusion_flag		= manager%solver_options%get_molecular_diffusion_flag()
 		constructor%viscosity_flag		= manager%solver_options%get_viscosity_flag()
 		constructor%heat_trans_flag		= manager%solver_options%get_heat_transfer_flag()
+		constructor%radiation_flag		= manager%solver_options%get_thermal_radiation_flag()
 		constructor%reactive_flag		= manager%solver_options%get_chemical_reaction_flag()
 		constructor%hydrodynamics_flag	= manager%solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= manager%solver_options%get_CFL_condition_coefficient()
@@ -631,6 +639,12 @@ contains
 			constructor%E_f_prod_heat%s_ptr			=> scal_c_ptr%s_ptr
 		end if
 
+		if (constructor%radiation_flag) then
+			constructor%radiation_solver = thermal_radiation_solver_c(manager)
+			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr, &
+				'energy_production_radiation')
+			constructor%E_f_prod_rad%s_ptr => scal_c_ptr%s_ptr
+		end if
 		if(constructor%viscosity_flag) then
 			constructor%viscosity_solver			= viscosity_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_viscosity')
@@ -1164,6 +1178,14 @@ contains
 
 		call constructor%apply_boundary_conditions_main()
 		
+		! Same ambient-reference density convention as the FDS low-Mach solver.
+		! It removes the hydrostatic reference force and retains density-driven
+		! buoyancy in the compressible momentum and total-energy equations.
+		constructor%rho_0 = constructor%rho%s_ptr%cells(cons_inner_loop(1,2), &
+			cons_inner_loop(2,2),cons_inner_loop(3,2))
+		if (constructor%rho_0 <= tiny(1.0_dp)) &
+			error stop 'CABARET: non-positive buoyancy reference density'
+		
         constructor%p_f     = constructor%p_f_new%s_ptr%cells
         constructor%rho_f   = constructor%rho_f_new%s_ptr%cells
 		constructor%E_f_f	= constructor%E_f_f_new%s_ptr%cells
@@ -1176,6 +1198,7 @@ contains
         call manager%create_timer(cabaret_chemistry_timer       ,'CABARET chemistry solver time'    , 'chem_t')
         call manager%create_timer(cabaret_diffusion_timer       ,'CABARET diffusion solver time'    , 'diff_t')
         call manager%create_timer(cabaret_heattransfer_timer    ,'CABARET heattransfer solver time' , 'ht_t')
+        call manager%create_timer(cabaret_radiation_timer       ,'CABARET radiation solver time'    , 'rad_t')
         call manager%create_timer(cabaret_viscosity_timer       ,'CABARET viscosity solver time'    , 'visc_t')
 	end function
 
@@ -1317,6 +1340,11 @@ contains
 			call cabaret_heattransfer_timer%toc(new_iter=.true.)
 		end if
 
+		if (this%radiation_flag .and. cabaret_include_radiation_in_gas_step) then
+			call cabaret_radiation_timer%tic()
+			call this%radiation_solver%solve_radiation(this%time_step)
+			call cabaret_radiation_timer%toc(new_iter=.true.)
+		end if
 		if (this%diffusion_flag .and. cabaret_include_diffusion_in_gas_step) then
 			call cabaret_diffusion_timer%tic()
 			call this%diff_solver%solve_diffusion(this%time_step)
@@ -1361,6 +1389,9 @@ contains
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + E_f_prod_heat%cells(i,j,k)
 				end if
 
+				if (this%radiation_flag .and. cabaret_include_radiation_in_gas_step) then
+					rhoE_src(i,j,k) = rhoE_src(i,j,k) + this%E_f_prod_rad%s_ptr%cells(i,j,k)
+				end if
 				if (this%diffusion_flag .and. cabaret_include_diffusion_in_gas_step) then
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + E_f_prod_diff%cells(i,j,k)
 					do spec = 1, species_number
@@ -1374,6 +1405,16 @@ contains
 						mom_src(dim,i,j,k) = mom_src(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k)
 					end do
 				end if
+
+				! Reduced-gravity buoyancy in the FDS velocity convention.  The
+				! ambient hydrostatic contribution is represented by the reference
+				! pressure; the remaining acceleration is (rho_0-rho)g/rho.
+				do dim = 1, dimensions
+					mom_src(dim,i,j,k) = mom_src(dim,i,j,k)+ &
+						(this%rho_0-this%rho_old(i,j,k))*this%g(dim)
+					rhoE_src(i,j,k) = rhoE_src(i,j,k)+ &
+						(this%rho_0-this%rho_old(i,j,k))*this%v_old(dim,i,j,k)*this%g(dim)
+				end do
 			end if
 		end do
 		end do
@@ -3166,6 +3207,12 @@ contains
 		if (this%heat_trans_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_heat_transfer_in_gas_step))) &
 			call this%heat_trans_solver%solve_heat_transfer(this%time_step)
         call cabaret_heattransfer_timer%toc(new_iter=.true.)
+        call cabaret_radiation_timer%tic()
+		if (this%radiation_flag .and. &
+			(.not. (cabaret_use_effective_physical_sources .and. cabaret_include_radiation_in_gas_step))) &
+			call this%radiation_solver%solve_radiation(this%time_step)
+        call cabaret_radiation_timer%toc(new_iter=.true.)
+        
         
         call cabaret_diffusion_timer%tic()
 		if (this%diffusion_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_diffusion_in_gas_step))) &
@@ -3209,8 +3256,9 @@ contains
 		integer :: i, j, k, dim, spec, particles_phase_counter
 		integer, dimension(3,2) :: cons_inner_loop
 		real(dp), dimension(3) :: cell_size
-		real(dp) :: spec_summ
-
+		real(dp) :: spec_summ, buoyancy_factor, buoyancy_acceleration
+		real(dp) :: velocity_dot_a, acceleration_squared
+		
 		dimensions      = this%domain%get_domain_dimensions()
 		species_number  = this%chem%chem_ptr%species_number
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
@@ -3254,8 +3302,9 @@ contains
 					bc				=> this%boundary%bc_ptr         , &
 					mesh			=> this%mesh%mesh_ptr)
 		
-		!$omp parallel default(shared)  private(i,j,k,dim,spec,spec_summ)
-
+		!$omp parallel default(shared) private(i,j,k,dim,spec,spec_summ,buoyancy_factor, &
+        !$omp& buoyancy_acceleration,velocity_dot_a,acceleration_squared)
+        
 		!$omp do collapse(3) schedule(guided)		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -3274,6 +3323,12 @@ contains
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_heat%cells(i,j,k) * this%time_step
                 end if
                 
+				if (this%radiation_flag .and. &
+					(.not. (cabaret_use_effective_physical_sources .and. cabaret_include_radiation_in_gas_step))) then
+					E_f_prod(i,j,k) = E_f_prod(i,j,k) + &
+						this%E_f_prod_rad%s_ptr%cells(i,j,k) * this%time_step
+				end if
+                
  				if (this%diffusion_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_diffusion_in_gas_step)))	then
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_diff%cells(i,j,k) * this%time_step
 					do spec = 1, species_number
@@ -3285,7 +3340,6 @@ contains
 					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_visc%cells(i,j,k) * this%time_step
 					do dim = 1, dimensions
 						v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) * this%time_step
-				!		v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + this%g(dim) * (rho%cells(1,1,1) - rho%cells(i,j,k)) * this%time_step
 					end do
                 end if		
                 
@@ -3311,6 +3365,24 @@ contains
 				end if
 				! ***********************************************************				
 				
+				! Legacy split-source fallback.  The FDS-compatible reduced acceleration is
+				! constant during this kick; update momentum and kinetic energy exactly.
+				if (.not. cabaret_use_effective_physical_sources) then
+					buoyancy_factor = (this%rho_0-rho%cells(i,j,k))/rho%cells(i,j,k)
+					velocity_dot_a = 0.0_dp
+					acceleration_squared = 0.0_dp
+					do dim = 1, dimensions
+						buoyancy_acceleration = buoyancy_factor*this%g(dim)
+						velocity_dot_a = velocity_dot_a+ &
+							v%pr(dim)%cells(i,j,k)*buoyancy_acceleration
+						acceleration_squared = acceleration_squared+buoyancy_acceleration**2
+						v_prod(dim,i,j,k) = v_prod(dim,i,j,k)+ &
+							rho%cells(i,j,k)*buoyancy_acceleration*this%time_step
+					end do
+					E_f_prod(i,j,k) = E_f_prod(i,j,k)+rho%cells(i,j,k)* &
+						(velocity_dot_a*this%time_step+0.5_dp*acceleration_squared*this%time_step**2)
+				end if
+
 				E_f%cells(i,j,k) = E_f%cells(i,j,k) + E_f_prod(i,j,k)/rho%cells(i,j,k)
 				
 				spec_summ = 0.0_dp

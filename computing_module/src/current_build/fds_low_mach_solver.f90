@@ -1909,11 +1909,22 @@ contains
 									boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 									select case(boundary_type_name)
 										case('wall')
-											R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
-																			- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
-																					+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * 1.0_dp * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-										
-											!R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
+                                        if (predictor) then
+                                            R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1)/time_step) &
+                                                *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                        else
+                                            R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-0.5_dp*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))*cell_size(1)/(0.5_dp*time_step)) &
+                                                *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                        end if
                                         case('inlet')
 										!	farfield_velocity = farfield_velocity_array(factor * j)
 											farfield_velocity = farfield_velocity_array(1)
@@ -1934,12 +1945,12 @@ contains
 																						+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))) * 1.0_dp * cell_size(1)/(0.5_dp*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 											end if
 										case('outlet')
-											R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) 
-											if ( sign*v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) >= 0.0_dp) then
-												do dim2 = 1, dimensions
-													R%cells(i,j,k) = R%cells(i,j,k) + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
-												end do
-											end if
+                                        R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k)                                 &
+                                            - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+                                        do dim2 = 1, dimensions
+                                            R%cells(i,j,k) = R%cells(i,j,k)                                                   &
+                                                + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
+                                        end do
 									end select
 								end if
 							end do
@@ -2048,11 +2059,22 @@ contains
 											boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 											select case(boundary_type_name)
 												case('wall')
-													R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
-																					- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
-																							+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * 1.0_dp * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-													!R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-												
+                                                    if (predictor) then
+                                                        R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                            - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                            - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                            + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                            - sign*(0.0_dp-v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1)/time_step) &
+                                                            *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                                    else
+                                                        R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                            - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                            - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                            + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                            - sign*(0.0_dp-0.5_dp*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                            + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))*cell_size(1)/(0.5_dp*time_step)) &
+                                                            *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                                    end if
                                                 case('inlet')
 												!	farfield_velocity = farfield_velocity_array(factor * j)
 													farfield_velocity = farfield_velocity_array(1)
@@ -2073,12 +2095,12 @@ contains
 																								+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))) * 1.0_dp * cell_size(1)/(0.5_dp*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 													end if
 												case('outlet')
-													R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) 
-													if ( sign*v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) >= 0.0_dp) then
-														do dim2 = 1, dimensions
-															R%cells(i,j,k) = R%cells(i,j,k) + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
-														end do
-													end if										
+                                        R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k)                                 &
+                                            - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+                                        do dim2 = 1, dimensions
+                                            R%cells(i,j,k) = R%cells(i,j,k)                                                   &
+                                                + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
+                                        end do
 											end select		
 										end if
 									end do
@@ -2240,13 +2262,23 @@ contains
 										boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 										select case(boundary_type_name)
 											case('wall')
-												R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		            &
-																				- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&
-																						+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * 1.0_dp * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-												
-                                                !R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-											
-                                            case('inlet')
+                                        if (predictor) then
+                                            R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1)/time_step) &
+                                                *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                        else
+                                            R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-0.5_dp*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))*cell_size(1)/(0.5_dp*time_step)) &
+                                                *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                        end if
+                                    case('inlet')
 											!	farfield_velocity = farfield_velocity_array(factor * j)
 												farfield_velocity = farfield_velocity_array(1)
                                                 
@@ -2266,12 +2298,12 @@ contains
 																							+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))) * 1.0_dp * cell_size(1)/(0.5_dp*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 												end if
 											case('outlet')
-												R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) 
-												if ( sign*v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) >= 0.0_dp) then
-													do dim2 = 1, dimensions
-														R%cells(i,j,k) = R%cells(i,j,k) + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
-													end do
-												end if
+                                        R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k)                                 &
+                                            - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
+                                        do dim2 = 1, dimensions
+                                            R%cells(i,j,k) = R%cells(i,j,k)                                                   &
+                                                + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
+                                        end do
 										end select		
 									end if
 								end do
@@ -2340,12 +2372,23 @@ contains
 											boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 											select case(boundary_type_name)
 												case('wall')
-													R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		&
-																					- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))											&
-																							+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * 1.0_dp * cell_size(1)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-													!R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)	
-												
-                                                case('inlet')
+                                        if (predictor) then
+                                            R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1)/time_step) &
+                                                *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                        else
+                                            R%cells(i,j,k) = R%cells(i,j,k) + (H_old%cells(i,j,k)                             &
+                                                - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))          &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-0.5_dp*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))*cell_size(1)/(0.5_dp*time_step)) &
+                                                *lame_coeffs(dim,2+sign)/lame_coeffs(dim,2)
+                                        end if
+                                    case('inlet')
 												!	farfield_velocity = farfield_velocity_array(factor * j)
 													farfield_velocity = farfield_velocity_array(1)
                                                     
@@ -2365,12 +2408,12 @@ contains
 																								+	v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))) * 1.0_dp * cell_size(1)/(0.5_dp*time_step)) * lame_coeffs(dim,2+sign) / lame_coeffs(dim,2)
 													end if
 												case('outlet')
-													R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k) - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) 
-													if ( sign*v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) >= 0.0_dp) then
+                                        R%cells(i,j,k) = R%cells(i,j,k) - H_old%cells(i,j,k)                                 &
+                                            - H_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 														do dim2 = 1, dimensions
-															R%cells(i,j,k) = R%cells(i,j,k) + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
-														end do
-													end if
+                                            R%cells(i,j,k) = R%cells(i,j,k)                                                   &
+                                                + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
+                                                														end do
 											end select		
 										end if
 									end do
@@ -2456,61 +2499,28 @@ contains
 									boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
 									select case(boundary_type_name)
 										case('wall')
-											H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  H%cells(i,j,k) &
-																											- sign*(	F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))		&			
-																													+	F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))) * 1.0_dp * cell_size(1)		
-										case('outlet')
-											if (sign == 1) then		!# Правая граница
-												if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dp) then		!# Выток, берутся значения слева
-												
-													!if (predictor) then	
-													!	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/rho_old%cells(i,j,k)
-													!else
-													!	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/rho_int%cells(i,j,k)
-													!end if
-													!
-													H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	- H%cells(i,j,k) 
-													do dim2 = 1, dimensions
-														H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v%pr(dim2)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))**2
-													end do
-												else																					!# Вток, берутся значения справа
-													farfield_density		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_density()
-													farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
-													farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
-							
-													H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))/farfield_density + 0.5_dp*(farfield_velocity **2)
-													H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	- H%cells(i,j,k) 
-													!do dim2 = 1, dimensions
-													!	H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	= H%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) + v%pr(dim2)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))**2
-													!end do
-													
-												end if
-											else					!# Левая граница
-												if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dp) then										!# Выток, берутся значения справа
-										 
-													!if (predictor) then	
-													!	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/rho_old%cells(i,j,k)
-													!else
-													!	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/rho_int%cells(i,j,k)
-													!end if
-													!												
-													H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	- H%cells(i,j,k) 
-													do dim2 = 1, dimensions
-														H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) = H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim2)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2
-													end do
-												else																					!# Вток, берутся значения справа
-													farfield_density		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_density()
-													farfield_velocity		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_velocity()
-													farfield_pressure		= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
-												
-													H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/farfield_density + 0.5_dp*(farfield_velocity **2) 
-													H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	- H%cells(i,j,k) 
-													!do dim2 = 1, dimensions
-													!	H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) = H%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + v%pr(dim2)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))**2
-													!end do
-													
-												end if
-											end if
+                                        ! Dirichlet normal velocity u_n=0. The former condition only cancelled
+                                        ! acceleration and therefore preserved any spurious wall-face velocity.
+                                        if (predictor) then
+                                            H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = H%cells(i,j,k)       &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1)/time_step
+                                        else
+                                            H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = H%cells(i,j,k)       &
+                                                - sign*(F_a%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + F_b%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)))*cell_size(1) &
+                                                - sign*(0.0_dp-0.5_dp*(v_f%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3)) &
+                                                + v_f_old%pr(dim)%cells(dim,i+max(sign,0)*I_m(dim,1),j+max(sign,0)*I_m(dim,2),k+max(sign,0)*I_m(dim,3))))*cell_size(1)/(0.5_dp*time_step)
+                                        end if
+                                        case('outlet')
+                                        ! Fixed perturbational pressure p'_b=0. Since H=p'/rho+|u|^2/2,
+                                        ! use H_g=2H_b-H_i=-H_i+|u_b|^2 for both outflow and backflow.
+                                            H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -H%cells(i,j,k)
+											do dim2 = 1, dimensions
+                                                H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))  = H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))                 &
+                                                                                                                + v%pr(dim2)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))**2
+                                            end do
 												
                                         case('inlet')
 	 
@@ -2723,33 +2733,8 @@ contains
 											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 										end if
                                     case('outlet')
-										!if (sign == 1) then		!# Правая граница
-										!	if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) >= 0.0_dp) then		!# Выток, берутся значения слева
-										!		p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i,j,k)
-										!	else																					!# Вток, берутся значения справа
-										!		p_dyn%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	=	p_dyn%cells(i,j,k)
-										!	end if
-										!else					!# Левая граница
-										!	if (v_f%pr(dim)%cells(dim,i,j,k) <= 0.0_dp) then										!# Выток, берутся значения справа
-										!		p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i,j,k)
-										!	else																					!# Вток, берутся значения справа
-										!		p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	=	p_dyn%cells(i,j,k)
-										!	end if
-										!end if
-											
-										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-
-										vel_abs = 0.0_dp
-										do dim2 = 1,dimensions
-											vel_abs = vel_abs + v%pr(dim2)%cells(i,j,k)**2
-										end do
-										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= &
-											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) - 0.5_dp*vel_abs   
-										if (predictor) then	
-											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-										else
-											p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))*rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-										end if                                        
+                                        ! p'_b = 0 at the boundary face: p'_g = 2 p'_b - p'_i.
+                                        p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = -p_dyn%cells(i,j,k)
                                         
 									case('inlet')
 										p_dyn%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= H%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
@@ -4736,15 +4721,19 @@ contains
 		
 		real(dp)	,dimension(3)	:: cell_size		
 		
-		real(dp)					:: wall_temperature, farfield_temperature, farfield_pressure, farfield_velocity
-		
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
+        real(dp)                    :: wall_temperature, farfield_temperature, farfield_pressure, farfield_velocity
+        real(dp)                    :: farfield_density, average_molar_mass, normal_face_velocity
+        real(dp), dimension(:), allocatable :: farfield_concentrations
+        character(len=10), dimension(:), allocatable :: farfield_species_names
+        logical                     :: outflow_flag
 
-		integer	:: bound_number,sign
-		integer :: i,j,k,plus,dim,dim1,spec
-		
-		character(len=20)		:: boundary_type_name
+        integer :: dimensions, species_number
+        integer, dimension(3,2) :: cons_inner_loop
+
+        integer :: bound_number, sign
+        integer :: i,j,k,plus,dim,dim1,spec,specie_index
+
+        character(len=20) :: boundary_type_name
 		
 		dimensions		= this%domain%get_domain_dimensions()
 		species_number	= this%chem%chem_ptr%species_number
@@ -4802,7 +4791,17 @@ contains
 											end do
 										end if
 								
-										h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			            = h_s%cells(i,j,k) * T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) / T%cells(i,j,k)
+                                        average_molar_mass = 0.0_dp
+                                        do spec = 1, species_number
+                                            average_molar_mass = average_molar_mass + Y%pr(spec)%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec)
+                                        end do
+                                        average_molar_mass = 1.0_dp/average_molar_mass
+                                        
+                                        do spec = 1, species_number
+                                            concs(spec) = Y%pr(spec)%cells(i,j,k)*average_molar_mass/this%thermo%thermo_ptr%molar_masses(spec)
+                                        end do
+                                        h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =  (this%thermo%thermo_ptr%mixture_enthalpy_molar(T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)),concs)             &
+                                                                                                            -this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref,concs))/average_molar_mass
 
 										do dim1 = 1, dimensions
 											if(dim1 == dim) then
@@ -4812,34 +4811,83 @@ contains
 											end if
 										end do
 										
-									case('outlet')
-										farfield_temperature											= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_temperature()
-										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= T%cells(i,j,k) !farfield_temperature
-										farfield_pressure												= this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
-										
-										if (predictor) then
-											rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho_int%cells(i,j,k) !rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-											rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= rho_old%cells(i,j,k) !rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-											do spec = 1, species_number
-												Y_int%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= Y_int%pr(spec)%cells(i,j,k) !Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-												Y_old%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= Y_old%pr(spec)%cells(i,j,k) !Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-											end do
+                                    case('outlet')
+                                        normal_face_velocity = v_f%pr(dim)%cells(dim, i+max(sign,0)*I_m(dim,1), j+max(sign,0)*I_m(dim,2), k+max(sign,0)*I_m(dim,3))
+                                        outflow_flag = (sign*normal_face_velocity >= 0.0_dp)
 
-										else
-											rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = rho%cells(i,j,k)
-											do spec = 1, species_number
-												Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= Y%pr(spec)%cells(i,j,k)
-											end do
-										end if
-										
-										do dim1 = 1, dimensions
-											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
-											else
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			=  v%pr(dim1)%cells(i,j,k)
-											end if
-										end do
-										
+                                        if (outflow_flag) then
+                                            ! Convective outflow: extrapolate thermodynamic and transport states.
+                                            T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = T%cells(i,j,k)
+                                            h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = h_s%cells(i,j,k)
+
+                                            rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = rho%cells(i,j,k)
+                                            rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = rho_int%cells(i,j,k)
+                                            rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = rho_old%cells(i,j,k)
+
+                                            do spec = 1, species_number
+                                                Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = Y%pr(spec)%cells(i,j,k)
+                                                Y_int%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = Y_int%pr(spec)%cells(i,j,k)
+                                                Y_old%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = Y_old%pr(spec)%cells(i,j,k)
+                                            end do
+
+                                            do dim1 = 1, dimensions
+                                                v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
+                                            end do
+                                        else
+                                            ! Backflow through a pressure outlet: restore the prescribed ambient state.
+                                            farfield_temperature = bc%boundary_types(bound_number)%get_farfield_temperature()
+                                            farfield_density     = bc%boundary_types(bound_number)%get_farfield_density()
+                                            farfield_velocity    = bc%boundary_types(bound_number)%get_farfield_velocity()
+
+                                            if (allocated(farfield_species_names)) deallocate(farfield_species_names)
+                                            if (allocated(farfield_concentrations)) deallocate(farfield_concentrations)
+                                            call bc%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
+                                            call bc%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
+
+                                            concs = 0.0_dp
+                                            do spec = 1, size(farfield_species_names)
+                                                specie_index = this%chem%chem_ptr%get_chemical_specie_index(farfield_species_names(spec))
+                                                if ((specie_index >= 1).and.(specie_index <= species_number)) then
+                                                    concs(specie_index) = farfield_concentrations(spec)
+                                                end if
+                                            end do
+                                            call this%thermo%thermo_ptr%change_cell_units_mole_to_dimless(concs)
+
+                                            if (farfield_density <= tiny(1.0_dp)) farfield_density = rho%cells(i,j,k)
+
+                                            T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_temperature
+                                            rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_density
+                                            rho_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_density
+                                            rho_old%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_density
+
+                                            do spec = 1, species_number
+                                                Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = concs(spec)
+                                                Y_int%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = concs(spec)
+                                                Y_old%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = concs(spec)
+                                            end do
+
+                                            average_molar_mass = 0.0_dp
+                                            do spec = 1, species_number
+                                                average_molar_mass = average_molar_mass + concs(spec)/this%thermo%thermo_ptr%molar_masses(spec)
+                                            end do
+                                            average_molar_mass = 1.0_dp/max(average_molar_mass,tiny(1.0_dp))
+
+                                            ! Convert mass fractions to mole fractions for JANAF mixture enthalpy.
+                                            do spec = 1, species_number
+                                                concs(spec) = concs(spec)*average_molar_mass/this%thermo%thermo_ptr%molar_masses(spec)
+                                            end do
+                                            h_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) =                    &
+                                                (this%thermo%thermo_ptr%mixture_enthalpy_molar(farfield_temperature,concs)       &
+                                                -this%thermo%thermo_ptr%mixture_enthalpy_molar(T_ref,concs))/average_molar_mass
+
+                                            do dim1 = 1, dimensions
+                                                if (dim1 == dim) then
+                                                    v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = farfield_velocity
+                                                else
+                                                    v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
+                                                end if
+                                            end do
+                                        end if
 									case('inlet')
 										if(sign == 1) then
 											if(v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then

@@ -110,6 +110,7 @@ program package_interface
     real(dp)                    :: phi                  ! Equivalence ratio
     real(dp)                    :: spec_summ            ! Temporary sum for normalization
     real(dp)                    :: v_in                 ! Initial guess for inflow velocity
+    real(dp)                    :: ambient_pressure
     
     
     !==========================================
@@ -167,12 +168,12 @@ program package_interface
     ! task6: Spatial resolution (2=dx=1.0e-04 m)
     !================================================================
     
-    do task1 = 3, 3          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
+    do task1 = 2, 2          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
-    do task3 = 1, 3          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
+    do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 10, 60, 10    ! Hydrogen percent in mixture with air
-    do task6 = 2, 2          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
+    do task5 = 17, 17, 1     ! Hydrogen percent in mixture with air
+    do task6 = 5, 5          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
         
@@ -467,9 +468,11 @@ program package_interface
         ! INITIAL CONDITIONS SETUP
         !================================================================
         
+        ambient_pressure = 5.0_dp * 101325.0_dp  ! Ambient pressure [Pa]
+        
         ! Set uniform ambient conditions
-        T%cells(:,:,:)   = 300.0_dp              ! Ambient temperature [K]
-        p%cells(:,:,:)   = 1.0_dp * 101325.0_dp  ! Atmospheric pressure [Pa]
+        T%cells(:,:,:)   = 300.0_dp          ! Ambient temperature [K]
+        p%cells(:,:,:)   = ambient_pressure  
         
         ! Set initial species mole fractions (unburned mixture)
         Y%pr(1)%cells(:,:,:) = 1.0_dp        ! H2
@@ -611,6 +614,8 @@ program package_interface
                     end if
                 end do
             
+                
+                
             !------------------------------------------------
             ! CASE: NEAR-WALL FLAME (Wall at left boundary)
             !------------------------------------------------
@@ -657,7 +662,7 @@ program package_interface
                 ! Right boundary: outlet to ambient
                 call problem_boundaries%create_boundary_type( &
                     type_name               = 'outlet',              &
-                    farfield_pressure       = 1.0_dp * 101325.0_dp,  &  ! Ambient pressure
+                    farfield_pressure       = ambient_pressure,  &  ! Ambient pressure
                     farfield_temperature    = 300.0_dp,              &  ! Ambient temperature
                     farfield_velocity       = 0.0_dp,                &  ! No mean flow
                     farfield_species_names  = [character(len=5) :: 'H2','O2','N2'], &
@@ -671,7 +676,7 @@ program package_interface
                 ! Left boundary: fresh reactants inlet
                 call problem_boundaries%create_boundary_type( &
                     type_name               = 'inlet',               &
-                    farfield_pressure       = 1.0_dp * 101325.0_dp,  &
+                    farfield_pressure       = ambient_pressure,  &
                     farfield_temperature    = 300.0_dp,              &  ! Cold reactants
                     farfield_velocity       = v_in,                  &  ! Initial guess
                     farfield_species_names  = [character(len=5) :: 'H2','O2','N2'], &
@@ -681,7 +686,7 @@ program package_interface
                 ! Right boundary: hot products outlet
                 call problem_boundaries%create_boundary_type( &
                     type_name               = 'outlet',              &
-                    farfield_pressure       = 1.0_dp * 101325.0_dp,  &
+                    farfield_pressure       = ambient_pressure,  &
                     farfield_temperature    = 1400.0_dp,             &  ! Hot products
                     farfield_velocity       = 0.0_dp,                &
                     farfield_species_names  = [character(len=5) :: 'H2O','N2'], &
@@ -695,7 +700,7 @@ program package_interface
                 ! Left boundary: conditions from flamelet inlet
                 call problem_boundaries%create_boundary_type( &
                     type_name               = 'inlet',               &
-                    farfield_pressure       = 1.0_dp * 101325.0_dp,  &
+                    farfield_pressure       = ambient_pressure,  &
                     farfield_temperature    = T_t(0),                &  ! From flamelet
                     farfield_velocity       = vx_t(0),               &  ! From flamelet
                     farfield_species_names  = [character(len=5) :: 'H2','O2','N2'], &
@@ -705,13 +710,15 @@ program package_interface
                 ! Right boundary: conditions from flamelet outlet
                 call problem_boundaries%create_boundary_type( &
                     type_name               = 'outlet',              &
-                    farfield_pressure       = 1.0_dp * 101325.0_dp,  &
+                    farfield_pressure       = ambient_pressure,  &
                     farfield_temperature    = T_t(table_size-1),     &  ! From flamelet
                     farfield_velocity       = vx_t(table_size-1),    &  ! From flamelet
                     farfield_species_names  = [character(len=5) :: 'H2O','N2'], &
                     farfield_concentrations = (/1.0_dp, nu * 3.762_dp/), &
                     priority                = 2)
         
+                deallocate(Y_t, T_t, vx_t, temp)
+                
         end select
         
         ! Apply boundary markers to domain boundaries
