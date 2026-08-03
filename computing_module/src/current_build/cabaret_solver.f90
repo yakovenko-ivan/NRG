@@ -1,51 +1,19 @@
-! =============================================================================
-! cabaret_solver_final_riemann_pt_contact_v5.f90
-!
-! CABARET multicomponent solver - Version 5 (call-order fix)
-!
-! KEY CHANGE from v4 (cabaret_solver_final_riemann_pressure_temperature_contact-4.f90):
-!
-!   ROOT CAUSE OF DENSITY SPIKE AT SUPERSONIC H2->AIR CONTACT (TEST 2):
-!   In v4 the call order in solve_problem was:
-!       (1) enforce_material_contact_density_from_entropy  <- uses p_f^acoustic
-!       (2) apply_material_contact_riemann_pt_closure      <- overwrites p_f with p*
-!
-!   The entropy lock in step (1) computed rho_f = p_f * M(Y_f) / (R_u * T_f).
-!   At a supersonic H2->Air contact all 3 characteristics are from H2, so
-!   p_f^acoustic is based on H2 acoustic impedance G_H2 = rho*c_H2. Since
-!   c_H2/c_air ~ 3.7, the acoustic pressure p_f ~ G_H2 * [J+_H2 - J-_H2]/2
-!   can be ~14x the correct air-side pressure. The resulting rho_f was thus
-!   ~14x too high, producing the observed density spike.
-!
-!   The temperature profile was good (Fix A stores T_f as a contact quasi-invariant)
-!   because step (2) replaced p_f, rho_f, u_f with the Riemann-consistent values.
-!   But by that point the density spike had already been written into rho_f and
-!   propagated by the MPI exchange inside enforce_material_contact_density_from_entropy.
-!
-!   FIX (v5):  Swap lines (1) and (2):
-!       (1) apply_material_contact_riemann_pt_closure      <- p* available
-!       (2) enforce_material_contact_density_from_entropy  <- uses p* (correct)
-!
-!   With this order p_f = p* before the entropy lock runs, so:
-!       rho_f = p* * M(Y_f) / (R_u * T_f)
-!   which is the thermodynamically exact ideal-gas EOS evaluated at
-!   the consistent (p*, Y_f, T_f) triple.
-!
-! SECONDARY CHANGES:
-!   - cabaret_entropy_lock_face_density_guard_rel_tol: 0.0 -> 0.10
-!     (safety backstop only; must not clip physical shock density jumps)
-!   - cabaret_entropy_lock_face_density_guard_abs_tol: 0.0 -> 1.0 kg/m3
-!     (prevents spurious activation for near-vacuum states)
-!
-! GUARDS THAT REMAIN DISABLED (were compensating for the wrong order):
-!   - cabaret_use_entropy_lock_temperature_guard   = .false.   (redundant)
-!   - cabaret_use_entropy_lock_molar_volume_guard  = .false.   (redundant)
-!
-! TESTS:
-!   Test 1 (Air->Air, no composition jump):    unchanged, still accurate
-!   Test 2 (H2->Air, light->heavy):            density spike eliminated
-!   Test 3 (Air->H2, heavy->light):            unchanged, still accurate
-! =============================================================================
+!> @file cabaret_solver_refactored_documented.f90
+!! @brief Production CABARET solver for compressible multicomponent reactive flow.
+!!
+!! The implementation combines a conservative finite-volume balance step with
+!! characteristic reconstruction of face variables.  Cell-centred conservative
+!! variables and face-centred flow variables are advanced on a compact stencil.
+!!
+!! The production material-interface treatment reconstructs mass fractions and
+!! temperature with the contact family, obtains pressure and normal velocity from
+!! a thermally-perfect Riemann problem, and then closes face density through the
+!! mixture equation of state.  Physical source rates are coupled consistently to
+!! the predictor, corrector and source-shifted characteristic bounds.
+!!
+!! This file is a refactoring of the validated v5 solver.  Disabled research
+!! branches, one-off diagnostics and unused storage have been removed without
+!! changing the active numerical algorithm.
 
 module cabaret_solver_class
 
@@ -85,209 +53,39 @@ module cabaret_solver_class
 	private
 	public	:: cabaret_solver, cabaret_solver_c
 
-	! Toggle to .true. when debugging conservation/thermodynamic consistency.
-	logical, parameter :: cabaret_debug_checks = .false.
+	! -------------------------------------------------------------------------
+	! Production numerical constants
+	! -------------------------------------------------------------------------
+	! A face is treated as a material interface when adjacent mixture molar
+	! masses differ by more than this ratio.
+	real(dp), parameter :: material_contact_molar_mass_ratio = 1.01_dp
 
-	! Optional legacy Riemann pressure projection.  This branch remains disabled;
-	! the active material-contact pressure-equilibrium treatment below uses p*,u*
-	! from the thermally-perfect Riemann solver without replacing Y_f and s_f.
-	logical, parameter :: cabaret_use_riemann_pressure_projection = .false.
-	logical, parameter :: cabaret_riemann_pressure_projection_blend = .true.
-	logical, parameter :: cabaret_riemann_pressure_projection_print_statistics = .false.
-	real(dp), parameter :: cabaret_riemann_pressure_projection_T_ratio = 1.20_dp
-	real(dp), parameter :: cabaret_riemann_pressure_projection_T_abs = 100.0_dp
-	real(dp), parameter :: cabaret_riemann_pressure_projection_min_improvement = 0.05_dp
-	integer, parameter :: cabaret_riemann_pressure_projection_bisection_iterations = 24
+	! Exact-contact shortcut tolerances.  When p, u and T are uniform across a
+	! composition jump, the exact star values are their arithmetic means.
+	real(dp), parameter :: contact_equilibrium_p_rel_tol = 1.0e-8_dp
+	real(dp), parameter :: contact_equilibrium_u_rel_tol = 1.0e-8_dp
+	real(dp), parameter :: contact_equilibrium_T_rel_tol = 1.0e-8_dp
 
-	! Material-contact Riemann pressure/velocity projection.  The Riemann solver
-	! is used only to obtain the pressure-equilibrated acoustic star values p*
-	! and u*.  CABARET contact-family extrapolation is retained for Y_f and the
-	! material temperature T_f, after which the face density is recovered directly
-	! from rho_f=p*M(Y_f)/(R_u*T_f).  This avoids replacing the whole material layer by a
-	! donor-side Godunov contact state.
-	logical, parameter :: cabaret_use_material_contact_riemann_pt_closure = .true.
-	logical, parameter :: cabaret_use_thermally_perfect_riemann = .true.
-	logical, parameter :: cabaret_material_contact_riemann_print_statistics = .true.
-	! For exact or nearly exact moving material contacts, avoid a nonlinear
-	! acoustic Riemann solve.  The exact star state is p*=p and u*=u; only
-	! the material/contact variables must be transported.
-	logical, parameter :: cabaret_use_material_contact_equilibrium_shortcut = .true.
-	! The legacy sonic-point interpolation is not pressure-equilibrium-preserving
-	! at multigas material contacts where the sound speed jumps strongly.
-	logical, parameter :: cabaret_skip_legacy_sound_point_on_material_contacts = .true.
-	real(dp), parameter :: cabaret_contact_equilibrium_p_rel_tol = 1.0e-8_dp
-	real(dp), parameter :: cabaret_contact_equilibrium_u_rel_tol = 1.0e-8_dp
-	real(dp), parameter :: cabaret_contact_equilibrium_T_rel_tol = 1.0e-8_dp
-	real(dp), parameter :: cabaret_riemann_molar_mass_ratio = 1.01_dp
+	! Initial face states use a thermally-perfect Riemann solve only where the
+	! adjacent states are discontinuous according to these scale-free tests.
+	real(dp), parameter :: initial_riemann_molar_mass_ratio = 1.01_dp
+	real(dp), parameter :: initial_riemann_pressure_ratio = 1.05_dp
+	real(dp), parameter :: initial_riemann_velocity_ratio = 0.05_dp
+	real(dp), parameter :: initial_contact_velocity_eps = 10.0_dp*tiny(1.0_dp)
 
-	! Initial CABARET flux variables must be consistent with the cell
-	! conservative state.  At discontinuities, especially multicomponent
-	! material contacts, use a local 1-D Riemann problem instead of
-	! arithmetic averaging.  Smooth faces keep the arithmetic average unless
-	! cabaret_riemann_initial_all_interior_faces is enabled for diagnostics.
-	logical, parameter :: cabaret_use_riemann_initial_faces = .true.
-	logical, parameter :: cabaret_riemann_initial_all_interior_faces = .false.
-	real(dp), parameter :: cabaret_initial_riemann_molar_mass_ratio = 1.01_dp
-	real(dp), parameter :: cabaret_initial_riemann_pressure_ratio = 1.05_dp
-	real(dp), parameter :: cabaret_initial_riemann_velocity_ratio = 0.05_dp
-	real(dp), parameter :: cabaret_initial_contact_velocity_eps = 10.0_dp*tiny(1.0_dp)
+	! Material-contact reconstruction and admissible-state projection.
+	real(dp), parameter :: contact_reconstruction_molar_mass_ratio = 1.000001_dp
+	real(dp), parameter :: direct_psi_contact_molar_mass_ratio = 1.05_dp
+	real(dp), parameter :: direct_psi_face_mixture_rel_tol = 2.0e-2_dp
+	real(dp), parameter :: direct_psi_temperature_rel_tol = 3.0e-2_dp
+	real(dp), parameter :: direct_psi_temperature_abs_tol = 50.0_dp
 
-	! Optional research mode: use an entropy/isentrope proxy K=p/rho**gamma
-	! instead of the default linear contact quasi-invariant p-c**2*rho.
-	! The default remains the original linear balance-characteristic form.
-	logical, parameter :: cabaret_use_entropy_contact_invariant = .false.
-
-	! Source shifts in the characteristic maximum-principle intervals.  Geometry is
-	! a true in-step balance source of the local finite-volume gas-dynamic update.
-	! The optional effective-source mode evaluates selected physical source solvers
-	! once per CABARET time step and interprets their production fields as full-step
-	! averaged conservative source rates.  The same rates are used in the predictor,
-	! corrector and characteristic limiter shifts; included sources are not applied
-	! again in the operator-split source stage.
-	logical, parameter :: cabaret_use_geometry_source_shifts = .true.
-	logical, parameter :: cabaret_use_effective_physical_sources = .true.
-
-	! Keep conservative effective-source coupling separated from characteristic
-	! source shifts. This makes it possible to test the predictor/corrector
-	! sequence with all physical g_l shifts disabled.
-	logical, parameter :: cabaret_use_effective_physical_source_shifts = .true.
-	logical, parameter :: cabaret_include_chemistry_in_gas_step = .true.
-	logical, parameter :: cabaret_include_diffusion_in_gas_step = .true.
-	logical, parameter :: cabaret_include_heat_transfer_in_gas_step = .true.
-	logical, parameter :: cabaret_include_radiation_in_gas_step = .true.
-	logical, parameter :: cabaret_include_viscosity_in_gas_step = .true.
-	logical, parameter :: cabaret_include_particles_in_gas_step = .false.
-
-	! Experimental multicomponent-contact fix. Species and the material
-	! thermodynamic contact variable are reconstructed as one package; the
-	! face density is then recovered from p_f, Y_f and that reconstructed
-	! variable instead of from the linear density invariant alone.
-	logical, parameter :: cabaret_use_entropy_locked_contact_density = .true.
-	! Fix A: store and reconstruct face temperature as the material/contact
-	! thermodynamic variable instead of scalar mixture entropy.  The old
-	! array name s_material_f_new is kept to avoid invasive interface changes;
-	! when this switch is true it contains T_f, not s_f.
-	logical, parameter :: cabaret_use_temperature_contact_invariant = .true.
-	logical, parameter :: cabaret_entropy_lock_all_interior_faces = .false.
-	real(dp), parameter :: cabaret_entropy_lock_molar_mass_ratio = 1.000001_dp
-	real(dp), parameter :: cabaret_entropy_p_ref = 101325.0_dp
-
-	! New production contact closure.  Instead of deriving face density from
-	! reconstructed entropy alone, reconstruct the material molar volume
-	!
-	!     psi = M(Y)/rho = R_u*T/p
-	!
-	! as a contact-family variable.  For strong H2/air contacts, optionally
-	! synchronize psi with the reconstructed mixture-molar-mass progress.
-	! This prevents rho=M/psi from combining a light-gas composition with
-	! a heavy-gas molar volume, or vice versa.
-	! Selective direct-psi contact closure.  The entropy-lock/molar-volume-guard
-	! branch remains the default density closure.  The reconstructed material
-	! molar volume is accepted only for genuinely mixed material faces and only
-	! if it passes the same local psi/temperature safety checks.
-	logical, parameter :: cabaret_use_material_molar_volume_contact_density = .true.
-	logical, parameter :: cabaret_use_material_progress_coupled_molar_volume = .true.
-	real(dp), parameter :: cabaret_material_molar_volume_coupling_molar_mass_ratio = 1.05_dp
-	real(dp), parameter :: cabaret_material_molar_volume_face_mixture_rel_tol = 2.0e-02_dp
-	real(dp), parameter :: cabaret_material_molar_volume_direct_T_ratio = 3.0e-02_dp
-	real(dp), parameter :: cabaret_material_molar_volume_direct_T_abs = 50.0_dp
-
-	! Additional face-density maximum-principle guard.  This is deliberately
-	! different from the rejected density-rescue branch: it does not switch
-	! to the independently reconstructed material psi.  It only projects the
-	! final entropy/direct-psi density closure back to the local two-cell
-	! density interval by changing psi_used = M_face/rho_face.
-	logical, parameter :: cabaret_use_entropy_lock_face_density_guard = .true.
-	logical, parameter :: cabaret_entropy_lock_face_density_guard_print_statistics = .true.
-	real(dp), parameter :: cabaret_entropy_lock_face_density_guard_molar_mass_ratio = 1.01_dp
-	! FIX [DENSITY-GUARD v5]: rel_tol raised from 0.0 to 0.10.
-	! After the call-order fix, p_f = p* (correct). The density guard
-	! is now a safety backstop only - it must not clip physical shock jumps.
-	! A 10% window is safe for H2/air contacts and detonation pressures.
-	real(dp), parameter :: cabaret_entropy_lock_face_density_guard_rel_tol = 0.10_dp
-	! FIX [DENSITY-GUARD v5]: abs_tol 1.0 kg/m3 backstop prevents guard
-	! from activating for nearly zero-density near-vacuum cells.
-	real(dp), parameter :: cabaret_entropy_lock_face_density_guard_abs_tol = 1.0_dp
-	logical, parameter :: cabaret_material_molar_volume_contact_print_statistics = .true.
-
-	! Minimal pressure-equilibrium-preserving material-contact correction.
-	! The production version below uses no tunable relaxation coefficient.
-	! The sensible-PEP state is projected onto a local invariant-domain interval
-	! built from temperature, density and molar-volume bounds.  A final density
-	! invariant-domain projection is kept because it is the conservative
-	! mass-flux counterpart of the same admissible-state idea, not an extra
-	! empirical repair.
-
-	! Experimental pressure-equilibrium-preserving material-contact correction.
-	! The reconstructed variable is the molar sensible internal energy parameter
-	!
-	!     ksi_T = [e_m(T,X)-e_m(T_ref,X)]/(R_u*T_ref),
-	!
-	! so the composition-dependent reference part of the solver energy is always
-	! recomputed from the same reconstructed face composition Y_f.  The correction
-	! is deliberately relaxed and bounded; it never replaces the entropy-lock/
-	! molar-volume/density-guard baseline on its own.
-	logical, parameter :: cabaret_use_sensible_energy_pep_contact = .true.
-	logical, parameter :: cabaret_sensible_pep_contact_print_statistics = .true.
-	real(dp), parameter :: cabaret_sensible_pep_molar_mass_ratio = 1.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_pressure_rel_tol = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_velocity_sound_rel_tol = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_face_mixture_rel_tol = 0.0_dp
-	! The sensible-PEP correction is applied through one admissible-state
-	! projection coefficient theta rather than through a hard accept/reject
-	! replacement.  theta is chosen as the largest admissible value in [0,1]
-	! for which psi(theta)=psi_base+theta*(psi_pep-psi_base) satisfies
-	! local temperature, density and molar-volume bounds.  There is no
-	! tunable relaxation coefficient in this version: if the full PEP state is
-	! admissible, it is used; otherwise the correction is projected exactly to
-	! the nearest admissible point along the line from the baseline state.
-	logical, parameter :: cabaret_use_sensible_pep_admissible_projection = .true.
-	real(dp), parameter :: cabaret_sensible_pep_T_ratio = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_T_abs = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_T_lower_ratio = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_T_lower_abs = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_psi_rel_tol = 0.0_dp
-	real(dp), parameter :: cabaret_sensible_pep_psi_abs_tol = 0.0_dp
-
-	! Very local safety limiter for entropy-locked density closure.  The
-	! temperature guard was the first successful diagnostic/fallback, but the
-	! production candidate below limits the thermodynamic variable that actually
-	! causes the one-cell spike at a material tail:
-	!
-	!     psi = M(Y)/rho = R_u*T/p .
-	!
-	! At a nearly isobaric contact, a temperature spike is a spike in psi.  The
-	! molar-volume guard clips only the density closure implied by entropy lock;
-	! p_f, Y_f, s_f and velocities are left unchanged.
-	logical, parameter :: cabaret_use_entropy_lock_temperature_guard = .false.
-	logical, parameter :: cabaret_entropy_lock_temperature_guard_print_statistics = .false.
-	real(dp), parameter :: cabaret_entropy_lock_temperature_guard_ratio = 1.10_dp
-	real(dp), parameter :: cabaret_entropy_lock_temperature_guard_abs = 25.0_dp
-
-	logical, parameter :: cabaret_use_entropy_lock_molar_volume_guard = .false.
-	logical, parameter :: cabaret_entropy_lock_molar_volume_guard_print_statistics = .false.
-
-	! Selective activation for the molar-volume guard.  Entropy lock remains active
-	! for very weak material jumps, but the guard is applied only to stronger
-	! material contacts and only when the entropy-closed state would create a
-	! visible high-temperature consequence.  The trigger tolerance is deliberately
-	! looser than the final clip tolerance: harmless second-order extrapolations are
-	! tolerated, while true one-cell outliers are projected back close to the local
-	! two-cell molar-volume interval.
-	logical, parameter :: cabaret_entropy_lock_molar_volume_guard_upper_only = .true.
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_molar_mass_ratio = 1.05_dp
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_trigger_rel_tol = 0.05_dp
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_trigger_abs_tol = 0.0_dp
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_clip_rel_tol = 0.01_dp
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_clip_abs_tol = 0.0_dp
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_T_ratio = -1.0_dp
-	real(dp), parameter :: cabaret_entropy_lock_molar_volume_guard_T_abs = 0.0_dp
-
-	! Strict thermodynamic inversion bracket used only by entropy->temperature
-	! inversion.  It is no longer used as a silent temperature repair/clipping
-	! floor or ceiling elsewhere.
-	real(dp), parameter :: cabaret_entropy_temperature_bracket_low = 1.0_dp
-	real(dp), parameter :: cabaret_entropy_temperature_bracket_high = tables_temperature_ceiling
+	! Final density invariant-domain bounds.  The absolute tolerance prevents
+	! accidental activation for nearly vacuum states, while the relative part
+	! leaves physical shock compression unaltered.
+	real(dp), parameter :: face_density_guard_molar_mass_ratio = 1.01_dp
+	real(dp), parameter :: face_density_guard_rel_tol = 0.10_dp
+	real(dp), parameter :: face_density_guard_abs_tol = 1.0_dp
 
 	type(field_scalar_flow)	,target	::	rho_f_new, p_f_new, e_i_f_new, v_s_f_new, E_f_f_new, T_f_new
 	type(field_vector_flow)	,target	::	Y_f_new, v_f_new
@@ -306,10 +104,10 @@ module cabaret_solver_class
     type(timer)     :: cabaret_viscosity_timer
 
 	type cabaret_solver
-		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, radiation_flag, reactive_flag, &
-			sources_flag, hydrodynamics_flag, CFL_condition_flag
-		real(dp)		            :: courant_fraction
-		real(dp)		            :: time, time_step, initial_time_step
+		logical :: diffusion_flag, viscosity_flag, heat_trans_flag, radiation_flag
+		logical :: reactive_flag, CFL_condition_flag
+		real(dp) :: courant_fraction
+		real(dp) :: time, time_step
 		real(dp)                    :: rho_0
 		real(dp)    , dimension(3)  :: g
 		integer			:: additional_particles_phases_number
@@ -323,7 +121,7 @@ module cabaret_solver_class
 
 		type(lagrangian_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
 		!type(continuous_particles_solver)   , dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
-
+		
         type(computational_domain)				:: domain
 		type(mpi_communications)				:: mpi_support
 		type(chemical_properties_pointer)		:: chem
@@ -331,8 +129,8 @@ module cabaret_solver_class
 		type(computational_mesh_pointer)		:: mesh
 		type(boundary_conditions_pointer)		:: boundary
 
-		type(field_scalar_cons_pointer)	:: rho	, T	, p	, v_s, gamma, E_f	, e_i ,mix_mol_mass
-		type(field_scalar_flow_pointer)	:: gamma_f_new, rho_f_new, p_f_new, e_i_f_new, v_s_f_new, E_f_f_new, T_f_new
+		type(field_scalar_cons_pointer)	:: rho, T, p, v_s, gamma, E_f, mix_mol_mass
+		type(field_scalar_flow_pointer)	:: rho_f_new, p_f_new, e_i_f_new, v_s_f_new, E_f_f_new
 		
 		type(field_scalar_cons_pointer)	:: E_f_prod_chem, E_f_prod_heat, E_f_prod_rad, E_f_prod_diff, E_f_prod_visc
 
@@ -343,52 +141,41 @@ module cabaret_solver_class
 
 		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: rho_prod_particles, E_f_prod_particles
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: Y_prod_particles
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: v_prod_particles				!# Lagrangian particles solver        
+		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: v_prod_particles		        !# Lagrangian particles solver    
         
-		! Conservative variables
-		real(dp) ,dimension(:,:,:)	,allocatable    :: rho_old, p_old, E_f_old, e_i_old, E_f_prod, rho_prod, v_s_old, gamma_old
-		real(dp)	,dimension(:,:,:,:)	,allocatable	:: v_old, Y_old, v_prod, Y_prod
+		! Beginning-of-step conservative and thermodynamic state.
+		real(dp), dimension(:,:,:), allocatable :: rho_old, p_old, E_f_old, v_s_old
+		real(dp), dimension(:,:,:,:), allocatable :: v_old, Y_old
 
-		! Effective conservative source rates used by the optional source-aware
-		! CABARET predictor/corrector.  They are evaluated once per full time step
-		! before the predictor.  If a source solver internally integrates over dt,
-		! the corresponding production field is interpreted as an averaged rate:
-		! rho_src=d(rho)/dt, mom_src=d(rho*u)/dt, rhoE_src=d(rho*E)/dt,
-		! rhoY_src=d(rho*Y_k)/dt.
-		real(dp) ,dimension(:,:,:)	,allocatable    :: rho_src_old, rhoE_src_old
-		real(dp)	,dimension(:,:,:,:)	,allocatable	:: mom_src_old, rhoY_src_old
+		! Effective conservative source rates evaluated once per full time step.
+		real(dp), dimension(:,:,:), allocatable :: rho_src_old, rhoE_src_old
+		real(dp), dimension(:,:,:,:), allocatable :: mom_src_old, rhoY_src_old
 
-		! Old-time flux-divergence residuals A^n saved during the predictor.
-		! In effective-source mode the final conservative update is formed as
-		! U^{n+1}=U^n+0.5*dt*(A^n+A^{n+1})+dt*S_eff, rather than by
-		! anchoring the corrector on a cached, source-modified half-step state.
-		real(dp) ,dimension(:,:,:)	,allocatable    :: rho_rhs_old, rhoE_rhs_old
-		real(dp)	,dimension(:,:,:,:)	,allocatable	:: mom_rhs_old, rhoY_rhs_old
+		! Old-time flux-divergence residuals used by the trapezoidal corrector.
+		real(dp), dimension(:,:,:), allocatable :: rho_rhs_old, rhoE_rhs_old
+		real(dp), dimension(:,:,:,:), allocatable :: mom_rhs_old, rhoY_rhs_old
 
 		! Flow variables
 		real(dp) ,dimension(:,:,:,:,:)	,allocatable    :: v_f, Y_f
-		real(dp) ,dimension(:,:,:,:)		,allocatable    :: rho_f, p_f, e_i_f, E_f_f, v_s_f
+		real(dp) ,dimension(:,:,:,:)		,allocatable    :: rho_f, p_f, E_f_f, v_s_f
 		! Quasi invariants
 		real(dp) ,dimension(:,:,:,:,:)		,allocatable    :: r_inv_corr, q_inv_corr
         real(dp) ,dimension(:,:,:,:,:,:)		,allocatable    :: v_inv_corr
 
-		! Reconstructed material/contact thermodynamic variables at faces.
-		! s_material_f_new is kept as the legacy storage name.  With Fix A
-		! enabled it stores material temperature T_f; otherwise it stores entropy.
-		! psi_material_f_new=M(Y)/rho is the production density-closure
+		! Contact-family thermodynamic coordinates at faces.
+		! material_molar_volume_f=M(Y)/rho is the production density-closure
 		! variable for strong multicomponent contacts.
-		! ksi_sensible_material_f_new is a dimensionless molar sensible
-		! internal-energy coordinate used only by the optional relaxed PEP
+		! material_sensible_energy_f is a dimensionless molar sensible
+		! internal-energy coordinate used by the admissible pressure-equilibrium-preserving
 		! material-contact correction.
-		real(dp) ,dimension(:,:,:,:)		,allocatable    :: s_material_f_new, psi_material_f_new
-		real(dp) ,dimension(:,:,:,:)		,allocatable    :: ksi_sensible_material_f_new
+		real(dp) ,dimension(:,:,:,:)		,allocatable    :: material_temperature_f, material_molar_volume_f
+		real(dp) ,dimension(:,:,:,:)		,allocatable    :: material_sensible_energy_f
         
         
 	contains
 		procedure	,private	:: apply_boundary_conditions_main
 		procedure	,private	:: apply_boundary_conditions_flow
 		procedure				:: solve_problem
-		procedure				:: solve_test_problem
 		procedure				:: calculate_time_step
 		procedure				:: get_time_step
 		procedure				:: get_time
@@ -409,20 +196,15 @@ module cabaret_solver_class
 		procedure	,private	:: reconstruct_acoustic_face_state
 		procedure	,private	:: reconstruct_contact_family_face_state
 		procedure	,private	:: finish_face_reconstruction
-		procedure	,private	:: initialize_material_entropy_faces
-		procedure	,private	:: apply_riemann_pressure_projection
-		procedure	,private	:: enforce_material_contact_density_from_entropy
-		procedure	,private	:: apply_material_contact_riemann_pressure_temperature_closure
+		procedure	,private	:: initialize_material_contact_faces
+		procedure	,private	:: close_material_contact_density
+		procedure	,private	:: apply_material_contact_riemann_closure
 		procedure	,private	:: update_flow_thermodynamics
 		procedure	,private	:: correct_conservative_full_step
 		procedure	,private	:: finalize_gas_dynamics_step
 		procedure	,private	:: solve_split_physics
 		procedure	,private	:: apply_split_sources
 		procedure	,private	:: cache_flow_state_for_next_step
-		procedure	,private	:: cell_length
-		procedure	,private	:: state_is_finite
-		procedure	,private	:: check_conservative_state
-		procedure	,private	:: check_face_state
 	end type
 
 	interface	cabaret_solver_c
@@ -430,45 +212,17 @@ module cabaret_solver_class
 	end interface
 
 contains
-
-	pure real(dp) function effective_gamma_from_state(p_state, rho_state, c_state) result(gamma_eff)
-		real(dp), intent(in) :: p_state, rho_state, c_state
-
-		! Strict mode: do not repair pressure/density/gamma. Invalid inputs are
-		! allowed to produce IEEE exceptions or propagate NaNs instead of being
-		! silently projected to an admissible state.
-		gamma_eff = c_state*c_state*rho_state/p_state
-	end function effective_gamma_from_state
-
-
+	!> Linearized contact-family quasi-invariant used by CABARET.
 	pure real(dp) function contact_quasi_invariant(p_state, rho_state, c_state) result(inv)
 		real(dp), intent(in) :: p_state, rho_state, c_state
-		real(dp) :: gamma_eff
-
-		if (cabaret_use_entropy_contact_invariant) then
-			gamma_eff = effective_gamma_from_state(p_state, rho_state, c_state)
-			! Strict mode: no p/rho/gamma floors.
-			inv = p_state/rho_state**gamma_eff
-		else
-			! Default linearized balance-characteristic contact quasi-invariant.
-			inv = p_state - c_state*c_state*rho_state
-		end if
+		inv = p_state - c_state*c_state*rho_state
 	end function contact_quasi_invariant
 
-
+	!> Recover density from pressure and the linearized contact invariant.
 	pure real(dp) function density_from_contact_quasi_invariant(p_state, inv, rho_ref, c_ref) result(rho_state)
 		real(dp), intent(in) :: p_state, inv, rho_ref, c_ref
-		real(dp) :: gamma_eff
-
-		if (cabaret_use_entropy_contact_invariant) then
-			gamma_eff = effective_gamma_from_state(p_state, rho_ref, c_ref)
-			rho_state = (p_state/inv)**(1.0_dp/gamma_eff)
-		else
-			rho_state = (p_state - inv)/(c_ref*c_ref)
-		end if
+		rho_state = (p_state - inv)/(c_ref*c_ref)
 	end function density_from_contact_quasi_invariant
-
-
 	pure real(dp) function finite_volume_geometry_coefficient(nu, radius, dx) result(coeff)
 		integer, intent(in) :: nu
 		real(dp), intent(in) :: radius, dx
@@ -481,14 +235,15 @@ contains
 		r_plus  = radius + 0.5_dp*dx
 
 		! Same finite-volume geometric factor as in the conservative
-		! predictor/corrector update.  In strict/FPE mode, zero denominators are
-		! not hidden by a floor: they should stop the run at the offending state.
+		! predictor/corrector update. Invalid radial metrics are intentionally not
+		! hidden by a numerical floor.
 		coeff = 2.0_dp*real(nu - 1, dp)/(r_plus**(nu - 1) + r_minus**(nu - 1)) * &
 			(r_plus**(nu - 1) - r_minus**(nu - 1))/(r_plus - r_minus)
 	end function finite_volume_geometry_coefficient
 
 
-	pure real(dp) function limit_quasi_invariant(value, left_value, half_value, right_value, source_shift, alpha, lower_clip, upper_clip) result(limited)
+	pure real(dp) function limit_quasi_invariant(value, left_value, half_value, right_value, source_shift, alpha, &
+		& lower_clip, upper_clip) result(limited)
 		real(dp), intent(in) :: value, left_value, half_value, right_value
 		real(dp), intent(in) :: source_shift, alpha, lower_clip, upper_clip
 		real(dp) :: min_inv, max_inv, width
@@ -513,6 +268,7 @@ contains
 	end function limit_quasi_invariant
 
 
+	!> Construct the solver, bind NRG fields, allocate work arrays and initialize face states.
 
 
 	type(cabaret_solver)	function constructor(manager,problem_data_io)
@@ -538,7 +294,7 @@ contains
 		type(riemann_solver) :: initial_riemann
 		real(dp)				:: molar_denom_left, molar_denom_right
 		real(dp)				:: molar_mass_left, molar_mass_right, molar_mass_ratio
-		real(dp)				:: rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, v_l, v_r
+		real(dp)				:: rho_l, rho_r, p_l, p_r, v_l, v_r
 		real(dp)				:: c_l, c_r, p_ratio, velocity_scale
 		real(dp)				:: p_floor, rho_floor, u_face_init, u_contact_init
 		real(dp)	,dimension(:)	,allocatable :: Y_left_riemann, Y_right_riemann, Y_face_riemann
@@ -565,14 +321,13 @@ contains
 		constructor%heat_trans_flag		= manager%solver_options%get_heat_transfer_flag()
 		constructor%radiation_flag		= manager%solver_options%get_thermal_radiation_flag()
 		constructor%reactive_flag		= manager%solver_options%get_chemical_reaction_flag()
-		constructor%hydrodynamics_flag	= manager%solver_options%get_hydrodynamics_flag()
 		constructor%courant_fraction	= manager%solver_options%get_CFL_condition_coefficient()
 		constructor%CFL_condition_flag	= manager%solver_options%get_CFL_condition_flag()
-		constructor%sources_flag		= .false.
         
         constructor%g                       = manager%solver_options%get_grav_acc()
 
-        constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()        
+        constructor%additional_particles_phases_number &
+        	& = manager%solver_options%get_additional_particles_phases_number()
         
 		constructor%domain				= manager%domain
 		constructor%mpi_support			= manager%mpi_communications
@@ -590,7 +345,6 @@ contains
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'full_energy')
 		constructor%E_f%s_ptr				=> scal_c_ptr%s_ptr
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'internal_energy')
-		constructor%e_i%s_ptr				=> scal_c_ptr%s_ptr		
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_mass')
 		constructor%mix_mol_mass%s_ptr		=> scal_c_ptr%s_ptr		
 		
@@ -605,7 +359,6 @@ contains
 		call manager%create_scalar_field(v_s_f_new	,'velocity_of_sound_flow'	,'v_s_f_new')
 		constructor%v_s_f_new%s_ptr 	=> v_s_f_new
 		call manager%create_scalar_field(T_f_new	,'temperature_flow'			,'T_f_new')
-		constructor%T_f_new%s_ptr 		=> T_f_new
 		
 		call manager%create_vector_field(Y_f_new,'specie_mass_fraction_flow'	,'Y_f_new',	'chemical')
 		constructor%Y_f_new%v_ptr => Y_f_new		
@@ -683,7 +436,6 @@ contains
 		end if
 	
 		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'adiabatic_index_flow')
-		constructor%gamma_f_new%s_ptr	=> scal_f_ptr%s_ptr				
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'adiabatic_index')
 		constructor%gamma%s_ptr			=> scal_c_ptr%s_ptr		
 		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_of_sound')
@@ -750,45 +502,25 @@ contains
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 								
-		allocate(constructor%e_i_old(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 									
-		allocate(constructor%E_f_prod(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 									
-		allocate(constructor%rho_prod(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 									
 		allocate(constructor%v_s_old(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 									
-		allocate(constructor%gamma_old(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 		
 		allocate(constructor%v_old(		dimensions						, &
 										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 
-		allocate(constructor%v_prod(	dimensions						, &
-										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 									
 		allocate(constructor%Y_old(		species_number					, &
 										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
 										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 								
-		allocate(constructor%Y_prod(	species_number					, &
-										cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
-										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
-										cons_allocation_bounds(3,1):cons_allocation_bounds(3,2)))
 
 		allocate(constructor%rho_src_old(	cons_allocation_bounds(1,1):cons_allocation_bounds(1,2), &
 										cons_allocation_bounds(2,1):cons_allocation_bounds(2,2), &
@@ -841,11 +573,6 @@ contains
 										flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 										flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))	
 										
-		allocate(constructor%e_i_f(		dimensions						, &
-										flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
-										flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
-										flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
-										
 		allocate(constructor%v_s_f(		dimensions						, &
 										flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
 										flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
@@ -863,17 +590,17 @@ contains
 										flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 										flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))		
 
-		allocate(constructor%s_material_f_new(	dimensions						, &
+		allocate(constructor%material_temperature_f(	dimensions						, &
 									flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
 									flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 									flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
 
-		allocate(constructor%psi_material_f_new(dimensions						, &
+		allocate(constructor%material_molar_volume_f(dimensions						, &
 									flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
 									flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 									flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
 
-		allocate(constructor%ksi_sensible_material_f_new(dimensions			, &
+		allocate(constructor%material_sensible_energy_f(dimensions			, &
 									flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
 									flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 									flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))
@@ -921,9 +648,9 @@ contains
 			constructor%rho_f(:,:,:,:)	= 0.0_dp
 			constructor%Y_f(:,:,:,:,:)	= 0.0_dp
 			constructor%v_f(:,:,:,:,:)	= 0.0_dp
-			constructor%s_material_f_new(:,:,:,:) = 0.0_dp
-			constructor%psi_material_f_new(:,:,:,:) = 0.0_dp
-			constructor%ksi_sensible_material_f_new(:,:,:,:) = 0.0_dp
+			constructor%material_temperature_f(:,:,:,:) = 0.0_dp
+			constructor%material_molar_volume_f(:,:,:,:) = 0.0_dp
+			constructor%material_sensible_energy_f(:,:,:,:) = 0.0_dp
 			constructor%rho_src_old(:,:,:) = 0.0_dp
 			constructor%rhoE_src_old(:,:,:) = 0.0_dp
 			constructor%mom_src_old(:,:,:,:) = 0.0_dp
@@ -946,22 +673,28 @@ contains
 				do i = loop(1,1),loop(1,2) 
 
 
-							constructor%p_f(dim,i,j,k)		=	0.5_dp * (constructor%p%s_ptr%cells(i,j,k)	+ constructor%p%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	
-							constructor%rho_f(dim,i,j,k)	=	0.5_dp * (constructor%rho%s_ptr%cells(i,j,k)	+ constructor%rho%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	
-							constructor%E_f_f(dim,i,j,k)	=	0.5_dp * (constructor%E_f%s_ptr%cells(i,j,k)	+ constructor%E_f%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
-							constructor%v_s_f(dim,i,j,k)	=	0.5_dp * (constructor%v_s%s_ptr%cells(i,j,k)	+ constructor%v_s%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							constructor%p_f(dim,i,j,k)		=	0.5_dp * (constructor%p%s_ptr%cells(i,j, &
+								& k)	+ constructor%p%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							constructor%rho_f(dim,i,j,k)	=	0.5_dp * (constructor%rho%s_ptr%cells(i,j, &
+								& k)	+ constructor%rho%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							constructor%E_f_f(dim,i,j,k)	=	0.5_dp * (constructor%E_f%s_ptr%cells(i,j, &
+								& k)	+ constructor%E_f%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							constructor%v_s_f(dim,i,j,k)	=	0.5_dp * (constructor%v_s%s_ptr%cells(i,j, &
+								& k)	+ constructor%v_s%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 							spec_summ = 0.0_dp
 							do spec = 1, species_number
-								constructor%Y_f(spec,dim,i,j,k) = 0.5_dp * (constructor%Y%v_ptr%pr(spec)%cells(i,j,k) + constructor%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+								constructor%Y_f(spec,dim,i,j,k) = 0.5_dp * (constructor%Y%v_ptr%pr(spec)%cells(i,j, &
+									& k) + constructor%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 								spec_summ = spec_summ + max(constructor%Y_f(spec,dim,i,j,k), 0.0_dp)
-							end do
+						end do
 
 							do spec = 1,species_number
 								constructor%Y_f(spec,dim,i,j,k) = max(constructor%Y_f(spec,dim,i,j,k), 0.0_dp) / spec_summ
 							end do
 
 							do dim1 = 1, dimensions
-								constructor%v_f(dim1,dim,i,j,k) = 0.5_dp * (constructor%v%v_ptr%pr(dim1)%cells(i,j,k) + constructor%v%v_ptr%pr(dim1)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) )
+								constructor%v_f(dim1,dim,i,j,k) = 0.5_dp * (constructor%v%v_ptr%pr(dim1)%cells(i,j, &
+									& k) + constructor%v%v_ptr%pr(dim1)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) )
 							end do
 
 							! If the initial face lies on a discontinuity, do not
@@ -996,8 +729,6 @@ contains
 								rho_r   = constructor%rho%s_ptr%cells(i,j,k)
 								p_l     = constructor%p%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 								p_r     = constructor%p%s_ptr%cells(i,j,k)
-								gamma_l = constructor%gamma%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-								gamma_r = constructor%gamma%s_ptr%cells(i,j,k)
 								v_l     = constructor%v%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 								v_r     = constructor%v%v_ptr%pr(dim)%cells(i,j,k)
 								c_l     = constructor%v_s%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
@@ -1005,11 +736,10 @@ contains
 
 								p_ratio = max(p_l,p_r) / min(p_l,p_r)
 								velocity_scale = 0.5_dp*(abs(c_l) + abs(c_r))
-								use_riemann_initial_face = cabaret_use_riemann_initial_faces .and. &
-									(cabaret_riemann_initial_all_interior_faces .or. &
-									 molar_mass_ratio > cabaret_initial_riemann_molar_mass_ratio .or. &
-									 p_ratio > cabaret_initial_riemann_pressure_ratio .or. &
-									 abs(v_l - v_r) > cabaret_initial_riemann_velocity_ratio*velocity_scale)
+								use_riemann_initial_face = (&
+									 molar_mass_ratio > initial_riemann_molar_mass_ratio .or. &
+									 p_ratio > initial_riemann_pressure_ratio .or. &
+									 abs(v_l - v_r) > initial_riemann_velocity_ratio*velocity_scale)
 
 								if (use_riemann_initial_face) then
 									p_floor = 1.0e-12_dp*max(1.0_dp, abs(p_l), abs(p_r))
@@ -1018,20 +748,15 @@ contains
 										Y_left_riemann(spec) = constructor%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 										Y_right_riemann(spec) = constructor%Y%v_ptr%pr(spec)%cells(i,j,k)
 									end do
-
-									if (cabaret_use_thermally_perfect_riemann) then
 										call initial_riemann%set_thermally_perfect_parameters(constructor%thermo%thermo_ptr, &
 											rho_l, rho_r, p_l, p_r, v_l, v_r, Y_left_riemann, Y_right_riemann, p_floor, rho_floor)
-									else
-										call initial_riemann%set_parameters(rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, v_l, v_r, p_floor, rho_floor)
-									end if
 									call initial_riemann%solve()
 
 									if (initial_riemann%get_success()) then
 										u_face_init = initial_riemann%get_velocity()
 										u_contact_init = initial_riemann%get_contact_velocity()
 										use_left_contact_state = (u_contact_init >= 0.0_dp)
-										if (cabaret_use_thermally_perfect_riemann) call initial_riemann%get_mass_fractions(Y_face_riemann)
+										call initial_riemann%get_mass_fractions(Y_face_riemann)
 
 										constructor%p_f(dim,i,j,k)   = initial_riemann%get_pressure()
 										constructor%rho_f(dim,i,j,k) = initial_riemann%get_density()
@@ -1041,7 +766,7 @@ contains
 										! averaged composition.  At an initially motionless diaphragm,
 										! the pressure jump gives the first contact direction.
 										u_face_init = 0.5_dp*(v_l + v_r)
-										if (abs(u_face_init) > cabaret_initial_contact_velocity_eps) then
+										if (abs(u_face_init) > initial_contact_velocity_eps) then
 											use_left_contact_state = (u_face_init >= 0.0_dp)
 										else
 											use_left_contact_state = (p_l >= p_r)
@@ -1061,22 +786,24 @@ contains
 										constructor%E_f_f(dim,i,j,k) = constructor%E_f%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 										constructor%v_s_f(dim,i,j,k) = constructor%v_s%s_ptr%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 										do spec = 1, species_number
-											if (initial_riemann%get_success() .and. cabaret_use_thermally_perfect_riemann) then
+											if (initial_riemann%get_success()) then
 												constructor%Y_f(spec,dim,i,j,k) = Y_face_riemann(spec)
 											else
-												constructor%Y_f(spec,dim,i,j,k) = constructor%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+												constructor%Y_f(spec,dim,i,j,k) = constructor%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim, &
+													& 3))
 											end if
 										end do
 										do dim1 = 1, dimensions
 										if (dim1 /= dim) then
-											constructor%v_f(dim1,dim,i,j,k) = constructor%v%v_ptr%pr(dim1)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+											constructor%v_f(dim1,dim,i,j,k) = constructor%v%v_ptr%pr(dim1)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim, &
+												& 3))
 										end if
 										end do
 									else
 										constructor%E_f_f(dim,i,j,k) = constructor%E_f%s_ptr%cells(i,j,k)
 										constructor%v_s_f(dim,i,j,k) = constructor%v_s%s_ptr%cells(i,j,k)
 										do spec = 1, species_number
-											if (initial_riemann%get_success() .and. cabaret_use_thermally_perfect_riemann) then
+											if (initial_riemann%get_success()) then
 												constructor%Y_f(spec,dim,i,j,k) = Y_face_riemann(spec)
 											else
 												constructor%Y_f(spec,dim,i,j,k) = constructor%Y%v_ptr%pr(spec)%cells(i,j,k)
@@ -1172,7 +899,6 @@ contains
 
 		constructor%time		        =   calculation_time
 		constructor%time_step	        =   manager%solver_options%get_initial_time_step()
-		constructor%initial_time_step   =   manager%solver_options%get_initial_time_step()
 		
 		call constructor%state_eq%apply_state_equation_flow_variables_for_IC()
 
@@ -1201,38 +927,14 @@ contains
         call manager%create_timer(cabaret_radiation_timer       ,'CABARET radiation solver time'    , 'rad_t')
         call manager%create_timer(cabaret_viscosity_timer       ,'CABARET viscosity solver time'    , 'visc_t')
 	end function
-
-	subroutine solve_test_problem(this)
-		class(cabaret_solver)	,intent(inout)	:: this
-
-		associate(	rho			=> this%rho%s_ptr, &
-					rho_f_new	=> this%rho_f_new%s_ptr, &
-					v_f_new		=> this%v_f_new%v_ptr, &
-					p			=> this%p%s_ptr	) 
-
-			rho%cells = this%domain%get_processor_rank()
-			rho_f_new%cells = this%domain%get_processor_rank()
-			v_f_new%pr(1)%cells	= this%domain%get_processor_rank()
-			v_f_new%pr(2)%cells	= this%domain%get_processor_rank()*10
-
-			call this%mpi_support%exchange_conservative_scalar_field(rho)
-
-			call this%mpi_support%exchange_flow_scalar_field(rho_f_new)
-
-			call this%mpi_support%exchange_flow_vector_field(v_f_new)
-
-		end associate
-
-	end subroutine
-
-
+	!> Advance the coupled CABARET solution by one full time step.
 	subroutine solve_problem(this)
 		class(cabaret_solver)	,intent(inout)	:: this
 
 		call cabaret_timer%tic()
 
 		! CABARET gas-dynamics stage: predictor -> face reconstruction -> corrector.
-		! In effective-source mode selected physical source solvers are evaluated
+		! Physical source solvers are evaluated
 		! once here.  Their full-step production fields are used as averaged
 		! conservative source rates in both CABARET half-steps and in the
 		! characteristic limiter shifts.
@@ -1244,31 +946,23 @@ contains
 		call cabaret_gas_dynamics_timer%toc()
 
 		call this%update_cell_thermodynamics()
-		call this%check_conservative_state('after predictor')
-
 		call cabaret_gas_dynamics_timer%tic()
 		call this%reconstruct_acoustic_face_state()
 		call this%reconstruct_contact_family_face_state()
 		call this%finish_face_reconstruction()
-		call this%apply_riemann_pressure_projection()
-		! FIX [CALL-ORDER v5]: Riemann PT closure MUST precede the entropy lock.
-		! The lock computes rho_f = p_f * M(Y_f) / (R_u * T_f).
-		! With wrong order p_f was the acoustic value using H2 impedance,
-		! producing ~14x density error at supersonic H2->Air contacts.
-		! Correct order: Riemann gives p* first, then entropy lock uses p*.
-		call this%apply_material_contact_riemann_pressure_temperature_closure()
-		call this%enforce_material_contact_density_from_entropy()
+		! Pressure and normal velocity must be equilibrated before density is
+		! recomputed from the contact-family composition and temperature.
+		call this%apply_material_contact_riemann_closure()
+		call this%close_material_contact_density()
 		call cabaret_gas_dynamics_timer%toc()
 
 		call this%update_flow_thermodynamics()
-		call this%check_face_state('after face EOS')
-
 		call cabaret_gas_dynamics_timer%tic()
 		call this%correct_conservative_full_step()
 		call this%finalize_gas_dynamics_step()
 		call cabaret_gas_dynamics_timer%toc()
 
-		! Operator-split physics: heat transfer, diffusion, viscosity, chemistry, particles.
+		! Particle dynamics remains operator split; continuum sources are already coupled.
 		call this%solve_split_physics()
 
 		call cabaret_gas_dynamics_timer%tic()
@@ -1276,8 +970,6 @@ contains
 		call cabaret_gas_dynamics_timer%toc()
 
 		call this%update_cell_thermodynamics()
-		call this%check_conservative_state('after split sources')
-
 		call cabaret_gas_dynamics_timer%tic()
 		call this%cache_flow_state_for_next_step()
 		if (this%CFL_condition_flag) then
@@ -1290,10 +982,11 @@ contains
 	end subroutine solve_problem
 
 
-
 	!=======================================================================
 	! CABARET gas-dynamics stages
 	!=======================================================================
+
+	!> Apply cell boundary conditions, exchange halos and cache the time-n state.
 
 	subroutine prepare_gas_dynamics_step(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -1302,6 +995,8 @@ contains
 		call this%exchange_conservative_state()
 		call this%cache_conservative_state()
 	end subroutine prepare_gas_dynamics_step
+
+	!> Evaluate source solvers once and assemble conservative source rates.
 
 	subroutine evaluate_effective_physical_source_rates(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -1329,35 +1024,34 @@ contains
 		rhoE_src = 0.0_dp
 		rhoY_src = 0.0_dp
 
-		if (.not. cabaret_use_effective_physical_sources) return
 
 		! Evaluate selected physical source solvers once per full CABARET time step.
 		! Existing production fields are interpreted as effective conservative source
 		! rates, or as averaged rates if the solver internally integrates over dt.
-		if (this%heat_trans_flag .and. cabaret_include_heat_transfer_in_gas_step) then
+		if (this%heat_trans_flag) then
 			call cabaret_heattransfer_timer%tic()
 			call this%heat_trans_solver%solve_heat_transfer(this%time_step)
 			call cabaret_heattransfer_timer%toc(new_iter=.true.)
 		end if
 
-		if (this%radiation_flag .and. cabaret_include_radiation_in_gas_step) then
+		if (this%radiation_flag) then
 			call cabaret_radiation_timer%tic()
 			call this%radiation_solver%solve_radiation(this%time_step)
 			call cabaret_radiation_timer%toc(new_iter=.true.)
 		end if
-		if (this%diffusion_flag .and. cabaret_include_diffusion_in_gas_step) then
+		if (this%diffusion_flag) then
 			call cabaret_diffusion_timer%tic()
 			call this%diff_solver%solve_diffusion(this%time_step)
 			call cabaret_diffusion_timer%toc(new_iter=.true.)
 		end if
 
-		if (this%viscosity_flag .and. cabaret_include_viscosity_in_gas_step) then
+		if (this%viscosity_flag) then
 			call cabaret_viscosity_timer%tic()
 			call this%viscosity_solver%solve_viscosity(this%time_step)
 			call cabaret_viscosity_timer%toc(new_iter=.true.)
 		end if
 
-		if (this%reactive_flag .and. cabaret_include_chemistry_in_gas_step) then
+		if (this%reactive_flag) then
 			call cabaret_chemistry_timer%tic()
 			call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
 			call cabaret_chemistry_timer%toc(new_iter=.true.)
@@ -1378,28 +1072,28 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if (bc%bc_markers(i,j,k) == 0) then
-				if (this%reactive_flag .and. cabaret_include_chemistry_in_gas_step) then
+				if (this%reactive_flag) then
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + E_f_prod_chem%cells(i,j,k)
 					do spec = 1, species_number
 						rhoY_src(spec,i,j,k) = rhoY_src(spec,i,j,k) + Y_prod_chem%pr(spec)%cells(i,j,k)
 					end do
 				end if
 
-				if (this%heat_trans_flag .and. cabaret_include_heat_transfer_in_gas_step) then
+				if (this%heat_trans_flag) then
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + E_f_prod_heat%cells(i,j,k)
 				end if
 
-				if (this%radiation_flag .and. cabaret_include_radiation_in_gas_step) then
+				if (this%radiation_flag) then
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + this%E_f_prod_rad%s_ptr%cells(i,j,k)
 				end if
-				if (this%diffusion_flag .and. cabaret_include_diffusion_in_gas_step) then
+				if (this%diffusion_flag) then
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + E_f_prod_diff%cells(i,j,k)
 					do spec = 1, species_number
 						rhoY_src(spec,i,j,k) = rhoY_src(spec,i,j,k) + Y_prod_diff%pr(spec)%cells(i,j,k)
 					end do
 				end if
 
-				if (this%viscosity_flag .and. cabaret_include_viscosity_in_gas_step) then
+				if (this%viscosity_flag) then
 					rhoE_src(i,j,k) = rhoE_src(i,j,k) + E_f_prod_visc%cells(i,j,k)
 					do dim = 1, dimensions
 						mom_src(dim,i,j,k) = mom_src(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k)
@@ -1426,6 +1120,9 @@ contains
 		end associate
 
 	end subroutine evaluate_effective_physical_source_rates
+
+
+	!> Project conservative source rates onto the two acoustic characteristic families.
 
 
 	subroutine physical_source_acoustic_shifts(this, dim, rho_state, p_state, c_state, E_state, vel_state, Y_state, &
@@ -1462,62 +1159,57 @@ contains
 	end subroutine physical_source_acoustic_shifts
 
 
-	subroutine physical_source_contact_shifts(this, rho_state, p_state, c_state, E_state, vel_state, Y_state, &
-			S_rho, S_mom, S_rhoE, S_rhoY, g_Y, g_entropy, g_temperature)
+	!> Project conservative source rates onto species and material temperature.
+	!!
+	!! Species rates follow dY_k/dt=(S_{rho Y_k}-Y_k S_rho)/rho.  The
+	!! temperature rate is evaluated by a small thermodynamically consistent
+	!! source probe through the JANAF mixture EOS.
+	subroutine physical_source_contact_shifts(this, rho_state, p_state, E_state, vel_state, Y_state, &
+			S_rho, S_mom, S_rhoE, S_rhoY, g_Y, g_temperature)
 		class(cabaret_solver), intent(in) :: this
-		real(dp), intent(in) :: rho_state, p_state, c_state, E_state
+		real(dp), intent(in) :: rho_state, p_state, E_state
 		real(dp), dimension(:), intent(in) :: vel_state, Y_state, S_mom, S_rhoY
 		real(dp), intent(in) :: S_rho, S_rhoE
 		real(dp), dimension(:), intent(out) :: g_Y
-		real(dp), intent(out) :: g_entropy, g_temperature
+		real(dp), intent(out) :: g_temperature
 
-		integer :: spec, species_number
-		real(dp) :: f_e, f_p, source_norm, probe_dt
-		real(dp) :: rho_trial, p_trial, T_loc, T_trial, s_loc, s_trial
+		integer :: spec
+		real(dp) :: pressure_rate, energy_rate, source_norm, probe_dt
+		real(dp) :: rho_trial, p_trial, T_state, T_trial
 		real(dp), dimension(size(Y_state)) :: Y_trial
-
-		species_number = size(Y_state)
 
 		call this%thermo%thermo_ptr%pressure_source_rate_from_conservative_sources( &
 			rho_state, p_state, E_state, vel_state, Y_state, S_rho, S_mom, S_rhoE, S_rhoY, &
-			f_p, f_e, g_Y)
+			pressure_rate, energy_rate, g_Y)
 
-		! f_p already contains the multicomponent dp/dY contribution for sources that change composition.
-		source_norm = abs(S_rho)/rho_state + abs(f_p)/p_state
-		do spec = 1, species_number
+		source_norm = abs(S_rho)/rho_state + abs(pressure_rate)/p_state
+		do spec = 1, size(Y_state)
 			source_norm = source_norm + abs(g_Y(spec))
 		end do
-
 		if (source_norm == 0.0_dp) then
-			g_entropy = 0.0_dp
 			g_temperature = 0.0_dp
 			return
 		end if
 
 		probe_dt = min(0.5_dp*this%time_step, 1.0e-8_dp/source_norm)
 		rho_trial = rho_state + probe_dt*S_rho
-		p_trial   = p_state   + probe_dt*f_p
-		do spec = 1, species_number
+		p_trial = p_state + probe_dt*pressure_rate
+		do spec = 1, size(Y_state)
 			Y_trial(spec) = Y_state(spec) + probe_dt*g_Y(spec)
 		end do
 
-		! Do not clip the source probe.  If the effective source drives the local
-		! thermodynamic perturbation outside the admissible domain, stop at the cause
-		! rather than silently estimating entropy from a repaired state.
-		if (rho_trial <= 0.0_dp) error stop 'Effective source entropy probe produced non-positive density'
-		if (p_trial <= 0.0_dp) error stop 'Effective source entropy probe produced non-positive pressure'
-		do spec = 1, species_number
-			if (Y_trial(spec) < 0.0_dp) error stop 'Effective source entropy probe produced negative mass fraction'
-		end do
+		if (rho_trial <= 0.0_dp) error stop 'CABARET source probe: non-positive density'
+		if (p_trial <= 0.0_dp) error stop 'CABARET source probe: non-positive pressure'
+		if (any(Y_trial < 0.0_dp)) error stop 'CABARET source probe: negative mass fraction'
 
-		T_loc   = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_state, rho_state, Y_state)
-		T_trial = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_trial, rho_trial, Y_trial)
-		s_loc   = this%thermo%thermo_ptr%mixture_specific_entropy(T_loc, p_state, Y_state, cabaret_entropy_p_ref)
-		s_trial = this%thermo%thermo_ptr%mixture_specific_entropy(T_trial, p_trial, Y_trial, cabaret_entropy_p_ref)
-		g_entropy = (s_trial - s_loc)/probe_dt
-		g_temperature = (T_trial - T_loc)/probe_dt
-
+		T_state = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
+			p_state, rho_state, Y_state)
+		T_trial = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
+			p_trial, rho_trial, Y_trial)
+		g_temperature = (T_trial - T_state)/probe_dt
 	end subroutine physical_source_contact_shifts
+
+	!> Close cell-centred thermodynamic variables with the mixture EOS.
 
 
 	subroutine update_cell_thermodynamics(this)
@@ -1528,6 +1220,8 @@ contains
 		call cabaret_eos_timer%toc(new_iter=.true.)
 	end subroutine update_cell_thermodynamics
 
+	!> Close face-centred thermodynamic variables with the mixture EOS.
+
 	subroutine update_flow_thermodynamics(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -1536,468 +1230,148 @@ contains
 		call cabaret_eos_timer%toc(new_iter=.true.)
 	end subroutine update_flow_thermodynamics
 
+	!> Normalize and exchange reconstructed primitive face variables.
+
 	subroutine finish_face_reconstruction(this)
 		class(cabaret_solver), intent(inout) :: this
 
-		! For the original CABARET half-step corrector, rho_old/v_old/E_f_old/Y_old
-		! are deliberately refreshed to the predicted n+1/2 state.  In the
-		! effective-source full-corrector variant they must remain equal to the
-		! beginning-of-step conservative state U^n, because the final update is
-		! assembled as U^n+0.5*dt*(A^n+A^{n+1})+dt*S_eff.
-		if (.not. cabaret_use_effective_physical_sources) then
-			call this%cache_conservative_state()
-		end if
 		call this%normalize_face_mass_fractions()
 		call this%exchange_face_primitive_state()
 	end subroutine finish_face_reconstruction
-
-
-
-	subroutine apply_riemann_pressure_projection(this)
+	!> Enforce pressure and normal-velocity equilibrium at material interfaces.
+	!!
+	!! The thermally-perfect Riemann solver supplies only the acoustic star state
+	!! (p*,u*).  CABARET retains its contact-family mass fractions and material
+	!! temperature; density is then recovered from rho=p*M(Y)/(R_u*T).
+	subroutine apply_material_contact_riemann_closure(this)
 		class(cabaret_solver), intent(inout) :: this
 
 		type(riemann_solver) :: riemann
 		integer :: dimensions, species_number
-		integer :: i, j, k, dim, dim1, spec, iter
-		integer :: il, jl, kl
-		integer :: attempt_count, success_count, failure_count, rejected_count
-		integer, dimension(3,2) :: flow_inner_loop, loop
-		real(dp) :: mol_l, mol_r, mol_ratio
-		real(dp) :: rho_l, rho_r, p_l, p_r, gamma_l, gamma_r
-		real(dp) :: v_l, v_r, p_floor, rho_floor
-		real(dp) :: p_cab, rho_cab, p_riemann, p_trial, p_new
-		real(dp) :: log_p_cab, log_p_riemann, theta_low, theta_high, theta_mid
-		real(dp) :: T_guess, T_state, T_limit, T_riemann, T_trial, T_new
-		real(dp) :: old_error, new_error, improvement_limit
-		real(dp) :: y_sum
+		integer :: i, j, k, dim, dim1, spec, il, jl, kl
+		integer, dimension(3,2) :: face_inner, loop
+		real(dp) :: molar_mass_left, molar_mass_right, molar_mass_ratio
+		real(dp) :: rho_left, rho_right, p_left, p_right, u_left, u_right
+		real(dp) :: gamma_left, gamma_right, c_left, c_right
+		real(dp) :: p_floor, rho_floor, p_star, u_star, T_star, rho_star
+		real(dp) :: p_scale, u_scale, T_scale, p_tol, u_tol, T_tol, face_molar_mass
 		real(dp), dimension(:), allocatable :: Y_left, Y_right, Y_face
-		logical :: invalid_face, contact_trigger, temperature_trigger, accept_pressure
-
-		if (.not. cabaret_use_riemann_pressure_projection) return
-		if (.not. cabaret_use_entropy_locked_contact_density) return
-		if (.not. allocated(this%s_material_f_new)) return
-		! This legacy projection assumes s_material_f_new stores entropy.
-		! It is bypassed when Fix A stores material temperature there.
-		if (cabaret_use_temperature_contact_invariant) return
+		logical :: invalid_face, material_face, equilibrium_contact
 
 		dimensions = this%domain%get_domain_dimensions()
 		species_number = this%chem%chem_ptr%species_number
-		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-		attempt_count = 0
-		success_count = 0
-		failure_count = 0
-		rejected_count = 0
+		face_inner = this%domain%get_local_inner_faces_bounds()
 
-		associate( rho       => this%rho%s_ptr       , &
-					p         => this%p%s_ptr         , &
-					gamma     => this%gamma%s_ptr     , &
-					v         => this%v%v_ptr         , &
-					Y         => this%Y%v_ptr         , &
-					rho_f_new => this%rho_f_new%s_ptr , &
-					p_f_new   => this%p_f_new%s_ptr   , &
-					Y_f_new   => this%Y_f_new%v_ptr   , &
-					s_f       => this%s_material_f_new , &
-					bc        => this%boundary%bc_ptr )
-
-	!$omp parallel default(shared) private(riemann,i,j,k,dim,dim1,spec,iter,il,jl,kl,loop, &
-	!$omp& mol_l,mol_r,mol_ratio,rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r,p_floor,rho_floor, &
-	!$omp& p_cab,rho_cab,p_riemann,p_trial,p_new,log_p_cab,log_p_riemann,theta_low,theta_high, &
-	!$omp& theta_mid,T_guess,T_state,T_limit,T_riemann,T_trial,T_new,old_error,new_error, &
-	!$omp& improvement_limit,y_sum,Y_left,Y_right,Y_face,invalid_face,contact_trigger, &
-	!$omp& temperature_trigger,accept_pressure) &
-	!$omp& reduction(+:attempt_count,success_count,failure_count,rejected_count)
+		associate(rho => this%rho%s_ptr, p => this%p%s_ptr, T => this%T%s_ptr, &
+			gamma => this%gamma%s_ptr, v => this%v%v_ptr, Y => this%Y%v_ptr, &
+			rho_face => this%rho_f_new%s_ptr, p_face => this%p_f_new%s_ptr, &
+			v_face => this%v_f_new%v_ptr, Y_face_field => this%Y_f_new%v_ptr, &
+			bc => this%boundary%bc_ptr)
+		!$omp parallel default(shared) private(riemann,i,j,k,dim,dim1,spec,il,jl,kl,loop, &
+		!$omp& molar_mass_left,molar_mass_right,molar_mass_ratio,rho_left,rho_right,p_left,p_right, &
+		!$omp& u_left,u_right,gamma_left,gamma_right,c_left,c_right,p_floor,rho_floor,p_star,u_star, &
+		!$omp& T_star,rho_star,p_scale,u_scale,T_scale,p_tol,u_tol,T_tol,face_molar_mass, &
+		!$omp& Y_left,Y_right,Y_face,invalid_face,material_face,equilibrium_contact)
 		call riemann%clear(reset_counter=.true.)
 		allocate(Y_left(species_number), Y_right(species_number), Y_face(species_number))
 
 		do dim = 1, dimensions
-			loop = flow_inner_loop
+			loop = face_inner
 			do dim1 = 1, dimensions
-				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))
+				loop(dim1,2) = face_inner(dim1,2) - (1 - I_m(dim1,dim))
 			end do
 
-		!$omp do collapse(3) schedule(static)
+			!$omp do collapse(3) schedule(static)
 			do k = loop(3,1), loop(3,2)
 			do j = loop(2,1), loop(2,2)
 			do i = loop(1,1), loop(1,2)
-				il = i - I_m(dim,1)
-				jl = j - I_m(dim,2)
-				kl = k - I_m(dim,3)
-
+				il = i - I_m(dim,1); jl = j - I_m(dim,2); kl = k - I_m(dim,3)
 				if (bc%bc_markers(i,j,k) /= 0 .or. bc%bc_markers(il,jl,kl) /= 0) cycle
 
-				mol_l = 0.0_dp
-				mol_r = 0.0_dp
-				y_sum = 0.0_dp
+				molar_mass_left = 0.0_dp
+				molar_mass_right = 0.0_dp
 				do spec = 1, species_number
 					Y_left(spec) = Y%pr(spec)%cells(il,jl,kl)
 					Y_right(spec) = Y%pr(spec)%cells(i,j,k)
-					Y_face(spec) = max(Y_f_new%pr(spec)%cells(dim,i,j,k), 0.0_dp)
-					y_sum = y_sum + Y_face(spec)
-					mol_l = mol_l + Y_left(spec) / this%thermo%thermo_ptr%molar_masses(spec)
-					mol_r = mol_r + Y_right(spec) / this%thermo%thermo_ptr%molar_masses(spec)
+					Y_face(spec) = Y_face_field%pr(spec)%cells(dim,i,j,k)
+					molar_mass_left = molar_mass_left + Y_left(spec)/this%thermo%thermo_ptr%molar_masses(spec)
+					molar_mass_right = molar_mass_right + Y_right(spec)/this%thermo%thermo_ptr%molar_masses(spec)
 				end do
-				if (y_sum > 0.0_dp) Y_face = Y_face/y_sum
+				molar_mass_left = 1.0_dp/molar_mass_left
+				molar_mass_right = 1.0_dp/molar_mass_right
+				molar_mass_ratio = max(molar_mass_left,molar_mass_right)/min(molar_mass_left,molar_mass_right)
 
-				mol_l = 1.0_dp / mol_l
-				mol_r = 1.0_dp / mol_r
-				mol_ratio = max(mol_l, mol_r) / min(mol_l, mol_r)
-				contact_trigger = (mol_ratio > cabaret_riemann_molar_mass_ratio)
-				if (.not. contact_trigger) cycle
+				invalid_face = p_face%cells(dim,i,j,k) <= 0.0_dp .or. rho_face%cells(dim,i,j,k) <= 0.0_dp
+				material_face = molar_mass_ratio > material_contact_molar_mass_ratio
+				if (.not. (invalid_face .or. material_face)) cycle
 
-				p_cab = p_f_new%cells(dim,i,j,k)
-				rho_cab = rho_f_new%cells(dim,i,j,k)
-				invalid_face = (p_cab <= 0.0_dp) .or. (rho_cab <= 0.0_dp)
+				rho_left = rho%cells(il,jl,kl); rho_right = rho%cells(i,j,k)
+				p_left = p%cells(il,jl,kl); p_right = p%cells(i,j,k)
+				u_left = v%pr(dim)%cells(il,jl,kl); u_right = v%pr(dim)%cells(i,j,k)
+				gamma_left = gamma%cells(il,jl,kl); gamma_right = gamma%cells(i,j,k)
+				p_floor = 1.0e-12_dp*max(1.0_dp,abs(p_left),abs(p_right))
+				rho_floor = 1.0e-12_dp*max(1.0_dp,abs(rho_left),abs(rho_right))
+				c_left = sqrt(max(gamma_left*p_left/max(rho_left,rho_floor),0.0_dp))
+				c_right = sqrt(max(gamma_right*p_right/max(rho_right,rho_floor),0.0_dp))
 
-				if (invalid_face) then
-					write(*,*) 'CABARET strict pressure projection: invalid face state at ', dim, i, j, k
-					write(*,*) '  p_cab, rho_cab = ', p_cab, rho_cab
-					error stop 'CABARET strict pressure projection: invalid face state'
-				end if
+				p_scale = max(1.0_dp,abs(p_left),abs(p_right))
+				u_scale = max(1.0_dp,abs(u_left),abs(u_right),c_left,c_right)
+				T_scale = max(1.0_dp,abs(T%cells(il,jl,kl)),abs(T%cells(i,j,k)))
+				p_tol = max(contact_equilibrium_p_rel_tol*p_scale,1000.0_dp*epsilon(1.0_dp)*p_scale)
+				u_tol = max(contact_equilibrium_u_rel_tol*u_scale,1000.0_dp*epsilon(1.0_dp)*u_scale)
+				T_tol = max(contact_equilibrium_T_rel_tol*T_scale,1000.0_dp*epsilon(1.0_dp)*T_scale)
+				equilibrium_contact = material_face .and. abs(p_left-p_right) <= p_tol .and. &
+					abs(u_left-u_right) <= u_tol .and. abs(T%cells(il,jl,kl)-T%cells(i,j,k)) <= T_tol
 
-				T_guess = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_cab, rho_cab, Y_face)
-				T_state = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y(s_f(dim,i,j,k), p_cab, Y_face, T_guess, &
-			cabaret_entropy_temperature_bracket_low, cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
-
-				T_limit = max(T_guess*cabaret_riemann_pressure_projection_T_ratio, &
-					T_guess + cabaret_riemann_pressure_projection_T_abs)
-				temperature_trigger = (T_state > T_limit)
-				if (.not. temperature_trigger) cycle
-
-				rho_l = rho%cells(il,jl,kl)
-				rho_r = rho%cells(i,j,k)
-				p_l = p%cells(il,jl,kl)
-				p_r = p%cells(i,j,k)
-				gamma_l = gamma%cells(il,jl,kl)
-				gamma_r = gamma%cells(i,j,k)
-				v_l = v%pr(dim)%cells(il,jl,kl)
-				v_r = v%pr(dim)%cells(i,j,k)
-
-				p_floor = 1.0e-12_dp*max(1.0_dp, abs(p_l), abs(p_r))
-				rho_floor = 1.0e-12_dp*max(1.0_dp, abs(rho_l), abs(rho_r))
-
-				attempt_count = attempt_count + 1
-				if (cabaret_use_thermally_perfect_riemann) then
+				if (equilibrium_contact) then
+					p_star = 0.5_dp*(p_left+p_right)
+					u_star = 0.5_dp*(u_left+u_right)
+					T_star = 0.5_dp*(T%cells(il,jl,kl)+T%cells(i,j,k))
+				else
 					call riemann%set_thermally_perfect_parameters(this%thermo%thermo_ptr, &
-						rho_l, rho_r, p_l, p_r, v_l, v_r, Y_left, Y_right, p_floor, rho_floor)
-				else
-					call riemann%set_parameters(rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, v_l, v_r, p_floor, rho_floor)
-				end if
-				call riemann%solve()
-
-				if (.not. riemann%get_success()) then
-					failure_count = failure_count + 1
-					cycle
-				end if
-
-				p_riemann = riemann%get_pressure()
-				if (p_riemann <= 0.0_dp) then
-					write(*,*) 'CABARET strict pressure projection: non-positive Riemann pressure at ', dim, i, j, k
-					write(*,*) '  p_riemann = ', p_riemann
-					error stop 'CABARET strict pressure projection: non-positive Riemann pressure'
-				end if
-
-				T_riemann = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y(s_f(dim,i,j,k), p_riemann, Y_face, T_guess, &
-			cabaret_entropy_temperature_bracket_low, cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
-				if (T_riemann >= T_state) then
-					rejected_count = rejected_count + 1
-					cycle
-				end if
-
-				p_new = p_riemann
-				T_new = T_riemann
-				if (cabaret_riemann_pressure_projection_blend .and. (.not. invalid_face) .and. (T_riemann <= T_limit)) then
-					log_p_cab = log(p_cab)
-					log_p_riemann = log(p_riemann)
-					theta_low = 0.0_dp
-					theta_high = 1.0_dp
-					do iter = 1, cabaret_riemann_pressure_projection_bisection_iterations
-						theta_mid = 0.5_dp*(theta_low + theta_high)
-						p_trial = exp((1.0_dp-theta_mid)*log_p_cab + theta_mid*log_p_riemann)
-						T_trial = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y(s_f(dim,i,j,k), p_trial, Y_face, T_guess, &
-			cabaret_entropy_temperature_bracket_low, cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
-						if (T_trial <= T_limit) then
-							theta_high = theta_mid
-						else
-							theta_low = theta_mid
-						end if
-					end do
-					p_new = exp((1.0_dp-theta_high)*log_p_cab + theta_high*log_p_riemann)
-					T_new = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y(s_f(dim,i,j,k), p_new, Y_face, T_guess, &
-			cabaret_entropy_temperature_bracket_low, cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
-				end if
-
-				old_error = abs(T_state - T_guess)
-				new_error = abs(T_new - T_guess)
-				improvement_limit = (1.0_dp - cabaret_riemann_pressure_projection_min_improvement)*old_error
-				accept_pressure = (p_new > 0.0_dp) .and. &
-					((new_error < improvement_limit) .or. (T_new <= T_limit))
-
-				if (accept_pressure) then
-					p_f_new%cells(dim,i,j,k) = p_new
-					success_count = success_count + 1
-				else
-					rejected_count = rejected_count + 1
-				end if
-			end do
-			end do
-			end do
-		!$omp end do nowait
-		end do
-
-		deallocate(Y_left, Y_right, Y_face)
-	!$omp end parallel
-
-		end associate
-
-		if (cabaret_riemann_pressure_projection_print_statistics .and. attempt_count > 0) then
-			print *, 'CABARET Riemann pressure projection: attempts/success/failure/rejected = ', &
-				attempt_count, success_count, failure_count, rejected_count
-		end if
-
-		call this%exchange_face_pressure_density()
-	end subroutine apply_riemann_pressure_projection
-
-	subroutine apply_material_contact_riemann_pressure_temperature_closure(this)
-		class(cabaret_solver), intent(inout) :: this
-
-		type(riemann_solver) :: riemann
-		integer :: dimensions, species_number
-		integer :: i, j, k, dim, dim1, spec
-		integer :: il, jl, kl
-		integer :: attempt_count, success_count, failure_count, candidate_reject_count
-		integer, dimension(3,2) :: flow_inner_loop, loop
-		real(dp) :: mol_l, mol_r, mol_ratio
-		real(dp) :: rho_l, rho_r, p_l, p_r, gamma_l, gamma_r
-		real(dp) :: v_l, v_r
-		real(dp) :: p_floor, rho_floor, p_star, u_star
-		real(dp) :: p_scale_eq, u_scale_eq, T_scale_eq, p_tol_eq, u_tol_eq, T_tol_eq, c_l_eq, c_r_eq
-		real(dp) :: T_guess, T_star_entropy, rho_star_entropy
-		real(dp) :: m_face, s_target, rho_min_loc, rho_max_loc
-		real(dp) :: T_low, T_high
-		real(dp), dimension(:), allocatable :: Y_left, Y_right, Y_face
-		logical :: invalid_face, contact_trigger, repair_trigger, candidate_ok, contact_equilibrium_shortcut
-		
-		if (.not. cabaret_use_material_contact_riemann_pt_closure) return
-
-		dimensions = this%domain%get_domain_dimensions()
-		species_number = this%chem%chem_ptr%species_number
-		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-		attempt_count = 0
-		success_count = 0
-		failure_count = 0
-		candidate_reject_count = 0
-		T_low = cabaret_entropy_temperature_bracket_low
-		T_high = cabaret_entropy_temperature_bracket_high
-
-		associate( rho       => this%rho%s_ptr       , &
-					p         => this%p%s_ptr         , &
-					gamma     => this%gamma%s_ptr     , &
-					T         => this%T%s_ptr         , &
-					v         => this%v%v_ptr         , &
-					Y         => this%Y%v_ptr         , &
-					rho_f_new => this%rho_f_new%s_ptr , &
-					p_f_new   => this%p_f_new%s_ptr   , &
-					v_f_new   => this%v_f_new%v_ptr   , &
-					Y_f_new   => this%Y_f_new%v_ptr   , &
-					s_f       => this%s_material_f_new , &
-					psi_f     => this%psi_material_f_new, &
-					ksi_f     => this%ksi_sensible_material_f_new, &
-					bc        => this%boundary%bc_ptr )
-
-	!$omp parallel default(shared) private(riemann,i,j,k,dim,dim1,spec,il,jl,kl,loop,mol_l,mol_r,mol_ratio, &
-	!$omp& rho_l,rho_r,p_l,p_r,gamma_l,gamma_r,v_l,v_r,p_floor,rho_floor,p_star,u_star, &
-	!$omp& p_scale_eq,u_scale_eq,T_scale_eq,p_tol_eq,u_tol_eq,T_tol_eq,c_l_eq,c_r_eq, &
-	!$omp& T_guess,T_star_entropy,rho_star_entropy,m_face,s_target,rho_min_loc,rho_max_loc, &
-	!$omp& Y_left,Y_right,Y_face,invalid_face,contact_trigger,repair_trigger,candidate_ok,contact_equilibrium_shortcut) &
-	!$omp& reduction(+:attempt_count,success_count,failure_count,candidate_reject_count)
-		call riemann%clear(reset_counter=.true.)
-		allocate(Y_left(species_number), Y_right(species_number), Y_face(species_number))
-
-		do dim = 1, dimensions
-			loop = flow_inner_loop
-			do dim1 = 1, dimensions
-				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))
-			end do
-
-		!$omp do collapse(3) schedule(static)
-			do k = loop(3,1), loop(3,2)
-			do j = loop(2,1), loop(2,2)
-			do i = loop(1,1), loop(1,2)
-				il = i - I_m(dim,1)
-				jl = j - I_m(dim,2)
-				kl = k - I_m(dim,3)
-
-				! Interior faces only.  Boundary-face states are set by the boundary-condition routines.
-				if (bc%bc_markers(i,j,k) /= 0 .or. bc%bc_markers(il,jl,kl) /= 0) cycle
-
-				mol_l = 0.0_dp
-				mol_r = 0.0_dp
-				do spec = 1, species_number
-					Y_left(spec)  = Y%pr(spec)%cells(il,jl,kl)
-					Y_right(spec) = Y%pr(spec)%cells(i,j,k)
-					Y_face(spec)  = Y_f_new%pr(spec)%cells(dim,i,j,k)
-					mol_l = mol_l + Y_left(spec)  / this%thermo%thermo_ptr%molar_masses(spec)
-					mol_r = mol_r + Y_right(spec) / this%thermo%thermo_ptr%molar_masses(spec)
-				end do
-				mol_l = 1.0_dp / mol_l
-				mol_r = 1.0_dp / mol_r
-				mol_ratio = max(mol_l, mol_r) / min(mol_l, mol_r)
-
-				rho_l = rho%cells(il,jl,kl)
-				rho_r = rho%cells(i,j,k)
-				p_l = p%cells(il,jl,kl)
-				p_r = p%cells(i,j,k)
-				gamma_l = gamma%cells(il,jl,kl)
-				gamma_r = gamma%cells(i,j,k)
-				v_l = v%pr(dim)%cells(il,jl,kl)
-				v_r = v%pr(dim)%cells(i,j,k)
-
-				invalid_face = (p_f_new%cells(dim,i,j,k) <= 0.0_dp) .or. &
-						       (rho_f_new%cells(dim,i,j,k) <= 0.0_dp)
-				contact_trigger = (mol_ratio > cabaret_riemann_molar_mass_ratio)
-				repair_trigger = invalid_face .or. contact_trigger
-
-				if (.not. repair_trigger) cycle
-				attempt_count = attempt_count + 1
-
-				p_floor = 1.0e-12_dp*max(1.0_dp, abs(p_l), abs(p_r))
-				rho_floor = 1.0e-12_dp*max(1.0_dp, abs(rho_l), abs(rho_r))
-
-				c_l_eq = sqrt(max(gamma_l*p_l/max(rho_l,rho_floor), 0.0_dp))
-				c_r_eq = sqrt(max(gamma_r*p_r/max(rho_r,rho_floor), 0.0_dp))
-				p_scale_eq = max(1.0_dp, abs(p_l), abs(p_r))
-				u_scale_eq = max(1.0_dp, abs(v_l), abs(v_r), c_l_eq, c_r_eq)
-				p_tol_eq = max(cabaret_contact_equilibrium_p_rel_tol*p_scale_eq, 1000.0_dp*epsilon(1.0_dp)*p_scale_eq)
-				u_tol_eq = max(cabaret_contact_equilibrium_u_rel_tol*u_scale_eq, 1000.0_dp*epsilon(1.0_dp)*u_scale_eq)
-				T_scale_eq = max(1.0_dp, abs(T%cells(il,jl,kl)), abs(T%cells(i,j,k)))
-				T_tol_eq = max(cabaret_contact_equilibrium_T_rel_tol*T_scale_eq, 1000.0_dp*epsilon(1.0_dp)*T_scale_eq)
-				contact_equilibrium_shortcut = cabaret_use_material_contact_equilibrium_shortcut .and. contact_trigger .and. &
-					(abs(p_l - p_r) <= p_tol_eq) .and. (abs(v_l - v_r) <= u_tol_eq) .and. &
-					(abs(T%cells(il,jl,kl) - T%cells(i,j,k)) <= T_tol_eq)
-
-				if (contact_equilibrium_shortcut) then
-					p_star = 0.5_dp*(p_l + p_r)
-					u_star = 0.5_dp*(v_l + v_r)
-				else
-					if (cabaret_use_thermally_perfect_riemann) then
-						call riemann%set_thermally_perfect_parameters(this%thermo%thermo_ptr, &
-							rho_l, rho_r, p_l, p_r, v_l, v_r, Y_left, Y_right, p_floor, rho_floor)
-					else
-						call riemann%set_parameters(rho_l, rho_r, p_l, p_r, gamma_l, gamma_r, v_l, v_r, p_floor, rho_floor)
-					end if
+						rho_left,rho_right,p_left,p_right,u_left,u_right,Y_left,Y_right,p_floor,rho_floor)
 					call riemann%solve()
-
 					if (.not. riemann%get_success()) then
-						failure_count = failure_count + 1
-						if (invalid_face) then
-							write(*,*) 'CABARET strict Riemann pressure-temperature closure: invalid face and Riemann solver failed at ', dim, i, j, k
-							write(*,*) '  p_f_new, rho_f_new = ', p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k)
-							error stop 'CABARET strict Riemann pressure-temperature closure: invalid face and Riemann solver failed'
-						end if
+						if (invalid_face) error stop 'CABARET material-face Riemann solve failed'
 						cycle
 					end if
-
 					p_star = riemann%get_pressure()
 					u_star = riemann%get_velocity()
+					T_star = this%material_temperature_f(dim,i,j,k)
 				end if
-				if (p_star <= 0.0_dp) then
-					failure_count = failure_count + 1
-					if (invalid_face) error stop 'CABARET strict Riemann pressure-temperature closure: non-positive p_star'
+
+				face_molar_mass = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_face)
+				if (p_star <= 0.0_dp .or. T_star <= 0.0_dp) then
+					if (invalid_face) error stop 'CABARET material-face closure produced invalid p or T'
+					cycle
+				end if
+				rho_star = p_star*face_molar_mass/(r_gase_J*T_star)
+				if (rho_star <= 0.0_dp) then
+					if (invalid_face) error stop 'CABARET material-face closure produced invalid density'
 					cycle
 				end if
 
-				! Keep CABARET's contact-family composition and material temperature.
-				! The Riemann solver supplies only the pressure-equilibrated acoustic
-				! state p*,u*.  Density then follows directly from the ideal-gas EOS.
-				m_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_face)
-
-				if ((p_f_new%cells(dim,i,j,k) > 0.0_dp) .and. (rho_f_new%cells(dim,i,j,k) > 0.0_dp)) then
-					T_guess = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
-						p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k), Y_face)
-				else
-					T_guess = 0.5_dp*(T%cells(il,jl,kl) + T%cells(i,j,k))
-				end if
-				T_guess = max(T_low, min(T_high, T_guess))
-
-				if (contact_equilibrium_shortcut) then
-					! Exact moving-contact equilibrium: p, u and T are constant.
-					! Do not reuse an extrapolated material-temperature/sensible-energy
-					! value here, because its small-CFL CABARET dispersion is the seed of
-					! the high-speed H2/air pressure/temperature perturbation.
-					T_star_entropy = 0.5_dp*(T%cells(il,jl,kl) + T%cells(i,j,k))
-				else if (cabaret_use_temperature_contact_invariant) then
-					if (allocated(this%s_material_f_new)) then
-						T_star_entropy = s_f(dim,i,j,k)
-					else
-						T_star_entropy = T_guess
-					end if
-				else
-					if (allocated(this%s_material_f_new)) then
-						s_target = s_f(dim,i,j,k)
-					else
-						s_target = this%thermo%thermo_ptr%mixture_specific_entropy(T_guess, &
-							p_f_new%cells(dim,i,j,k), Y_face, cabaret_entropy_p_ref)
-					end if
-					T_star_entropy = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y( &
-						s_target, p_star, Y_face, T_guess, T_low, T_high, cabaret_entropy_p_ref)
-				end if
-
-				if (T_star_entropy > 0.0_dp) then
-					rho_star_entropy = p_star*m_face/(r_gase_J*T_star_entropy)
-				else
-					rho_star_entropy = -1.0_dp
-				end if
-
-				candidate_ok = (T_star_entropy > 0.0_dp) .and. (rho_star_entropy > 0.0_dp)
-
-				if (.not. candidate_ok) then
-					candidate_reject_count = candidate_reject_count + 1
-					if (invalid_face) then
-						write(*,*) 'CABARET strict Riemann pressure-temperature closure: invalid face and temperature candidate rejected at ', dim, i, j, k
-						write(*,*) '  p_star, T_star, rho_star = ', p_star, T_star_entropy, rho_star_entropy
-						error stop 'CABARET strict Riemann pressure-temperature closure: invalid temperature candidate'
-					end if
-					cycle
-				end if
-
-				p_f_new%cells(dim,i,j,k) = p_star
-				rho_f_new%cells(dim,i,j,k) = rho_star_entropy
-				v_f_new%pr(dim)%cells(dim,i,j,k) = u_star
-
-				if (allocated(this%s_material_f_new)) then
-					if (cabaret_use_temperature_contact_invariant) then
-						s_f(dim,i,j,k) = T_star_entropy
-					else
-						s_f(dim,i,j,k) = this%thermo%thermo_ptr%mixture_specific_entropy(T_star_entropy, &
-							p_star, Y_face, cabaret_entropy_p_ref)
-					end if
-				end if
-				if (allocated(this%psi_material_f_new)) then
-					psi_f(dim,i,j,k) = m_face/rho_star_entropy
-				end if
-				if (allocated(this%ksi_sensible_material_f_new)) then
-					ksi_f(dim,i,j,k) = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
-						T_star_entropy, Y_face)
-				end if
-				success_count = success_count + 1
+				p_face%cells(dim,i,j,k) = p_star
+				rho_face%cells(dim,i,j,k) = rho_star
+				v_face%pr(dim)%cells(dim,i,j,k) = u_star
+				this%material_temperature_f(dim,i,j,k) = T_star
+				this%material_molar_volume_f(dim,i,j,k) = face_molar_mass/rho_star
+				this%material_sensible_energy_f(dim,i,j,k) = &
+					this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y(T_star,Y_face)
 			end do
 			end do
 			end do
-		!$omp end do nowait
+			!$omp end do nowait
 		end do
 
-		deallocate(Y_left, Y_right, Y_face)
-	!$omp end parallel
-
-        end associate
-
-		if (cabaret_material_contact_riemann_print_statistics .and. attempt_count > 0) then
-			print *, 'CABARET Riemann pressure-temperature closure: attempts/success/failure/rejected_candidate = ', &
-				attempt_count, success_count, failure_count, candidate_reject_count
-		end if
+		deallocate(Y_left,Y_right,Y_face)
+		!$omp end parallel
+		end associate
 
 		call this%exchange_face_primitive_state()
-	end subroutine apply_material_contact_riemann_pressure_temperature_closure
+	end subroutine apply_material_contact_riemann_closure
+
+	!> Conservative predictor from t^n to t^{n+1/2}.
 
 
 	subroutine predict_conservative_half_step(this)
@@ -2008,17 +1382,14 @@ contains
 		integer, dimension(3,2) :: cons_inner_loop
 		real(dp), dimension(3) :: cell_size
 		character(len=20) :: coordinate_system
-		real(dp) :: spec_summ, mean_higher, mean_lower, r
+		real(dp) :: spec_summ, mean_higher, mean_lower, r, geom_coeff
 		real(dp), dimension(:), allocatable :: rhoY_new
-		real(dp) :: Max_v_s, Min_v_s
 
 		dimensions      = this%domain%get_domain_dimensions()
 		species_number  = this%chem%chem_ptr%species_number
 		coordinate_system = this%domain%get_coordinate_system_name()
 		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
 		cell_size       = this%mesh%mesh_ptr%get_cell_edges_length()
-		Max_v_s = -huge(1.0_dp)
-		Min_v_s =  huge(1.0_dp)
 
 		select case(coordinate_system)
 		case ('cartesian')
@@ -2064,16 +1435,17 @@ contains
 					bc				=> this%boundary%bc_ptr		, &
 					mesh			=> this%mesh%mesh_ptr)
 
-        !$omp parallel default(shared)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r,rhoY_new)
+        !$omp parallel default(shared)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r,geom_coeff,rhoY_new)
 		allocate(rhoY_new(species_number))
 
-		!$omp do collapse(3) schedule(guided) reduction(max:Max_v_s) reduction(min:Min_v_s)	 		
+		!$omp do collapse(3) schedule(guided)	 		
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
 				
                 r = mesh%mesh(1,i,j,k)
+				geom_coeff = finite_volume_geometry_coefficient(nu, r, cell_size(1))
                 
 				rho%cells(i,j,k)	= 0.0_dp
 				E_f%cells(i,j,k)	= 0.0_dp
@@ -2088,16 +1460,14 @@ contains
 
 				do dim = 1,dimensions
                     
-                    mean_higher	= rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) 
+                    mean_higher	= rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1), &
+                    	& j+i_m(dim,2),k+i_m(dim,3))
 					mean_lower	= rho_f(dim,i,j,k) * v_f(dim,dim,i,j,k)                   
 
 					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) /cell_size(1)
                     
                     if(dim == 1) then
-						rho%cells(i,j,k)	=	rho%cells(i,j,k)	-	2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																	*	0.5_dp * (mean_higher +	mean_lower)																		&
-																	*	((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))							&
-																	/	((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1))) 	
+                    	rho%cells(i,j,k) = rho%cells(i,j,k) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
                     end if
 				end do
 				
@@ -2112,14 +1482,12 @@ contains
 				do spec = 1,species_number
 					rhoY_new(spec) = 0.0_dp
 					do	dim = 1,dimensions
-						mean_higher	=  rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * y_f(spec,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
+						mean_higher	=  rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) * y_f(spec,dim,i+i_m(dim,1),j+i_m(dim,2), &
+							& k+i_m(dim,3)) * v_f(dim,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 						mean_lower	=  rho_f(dim,i,j,k) * y_f(spec,dim,i,j,k) * v_f(dim,dim,i,j,k)
 						rhoY_new(spec)	=  rhoY_new(spec) - (mean_higher - mean_lower ) /cell_size(1)
 						if(dim == 1) then
-							rhoY_new(spec)	=  rhoY_new(spec)   - 2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-															    * 0.5_dp * (mean_higher + mean_lower)														&
-															    * ((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))											&
-															    / ((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1)))
+							rhoY_new(spec) = rhoY_new(spec) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
 						end if
 					end do
 					rhoY_rhs_old(spec,i,j,k) = rhoY_new(spec)
@@ -2145,21 +1513,20 @@ contains
 				do dim = 1,dimensions
 					do dim1 = 1,dimensions
                         
-						mean_higher	=  rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))
+						mean_higher	=  rho_f(dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))*v_f(dim,dim1,i+I_m(dim1,1),j+I_m(dim1,2), &
+							& k+I_m(dim1,3))*v_f(dim1,dim1,i+I_m(dim1,1),j+I_m(dim1,2),k+I_m(dim1,3))
 						mean_lower	=  rho_f(dim1,i,j,k)*v_f(dim,dim1,i,j,k)*v_f(dim1,dim1,i,j,k)
                         
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower ) /cell_size(1)
 
                         if(dim1 == 1) then                        
-							v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																				*	0.5_dp * (mean_higher +	mean_lower)																		&
-																				*	((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))							&
-																				/	((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1))) 
+                        	v%pr(dim)%cells(i,j,k) = v%pr(dim)%cells(i,j,k) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
                         end if                        
 
 					end do
 
-					v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k)	-	 ( p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_f(dim,i,j,k)) /cell_size(1)
+					v%pr(dim)%cells(i,j,k)	=	v%pr(dim)%cells(i,j,k)	-	 ( p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - p_f(dim, &
+						& i,j,k)) /cell_size(1)
 					
 					mom_rhs_old(dim,i,j,k) = v%pr(dim)%cells(i,j,k)
 					v%pr(dim)%cells(i,j,k)	=	rho_old(i,j,k)*v_old(dim,i,j,k) + 0.5_dp*this%time_step * &
@@ -2170,16 +1537,15 @@ contains
     
 				do dim = 1,dimensions
                     
- 					mean_higher	=  (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-					mean_lower	=  (rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)																	+	p_f(dim,i,j,k))									*v_f(dim,dim,i,j,k)                   
+ 					mean_higher	=  (rho_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))*E_f_f(dim,i+I_m(dim,1),j+I_m(dim,2), &
+ 						& k+I_m(dim,3))	+	p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))*v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2), &
+ 						& k+I_m(dim,3))
+					mean_lower	=  (rho_f(dim,i,j,k)*E_f_f(dim,i,j,k)																	+	p_f(dim,i,j,k))									*v_f(dim,dim,i,j,k)
                     
 					E_f%cells(i,j,k)	= 	E_f%cells(i,j,k) -	(mean_higher - mean_lower ) /cell_size(1)
                     
                     if(dim == 1) then
-						E_f%cells(i,j,k)	=	E_f%cells(i,j,k)	-	2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																	*	0.5_dp * (mean_higher +	mean_lower)																		&
-																	*	((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))							&
-																	/	((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1))) 
+                    	E_f%cells(i,j,k) = E_f%cells(i,j,k) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
                     end if
 				end do	
 				
@@ -2198,6 +1564,9 @@ contains
         
                     end associate
 	end subroutine predict_conservative_half_step
+
+
+	!> Reconstruct pressure, density and velocity from acoustic quasi-invariants.
 
 
 	subroutine reconstruct_acoustic_face_state(this)
@@ -2273,7 +1642,11 @@ contains
 					bc				=> this%boundary%bc_ptr, &
 					mesh			=> this%mesh%mesh_ptr)
 					
-		!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,plus,loop,G_half,G_half_old,G_half_lower,G_half_higher,r_inv,R_inv_half,R_inv_old,q_inv,Q_inv_half,Q_inv_old,v_inv,v_inv_half,v_inv_old,r_inv_new,q_inv_new,v_inv_new,v_inv_corrected,g_inv,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,alpha_loc,sign,bound_number,spec,geom_coeff,geom_source_R,geom_source_Q,phys_source_R,phys_source_Q,phys_source_contact,vel_state,Y_state,S_mom,S_rhoY,g_vel)
+		!$omp parallel default(shared)  private(i,j,k,dim,dim1,dim2,plus,loop,G_half,G_half_old,G_half_lower,G_half_higher, &
+		!$omp& r_inv,R_inv_half,R_inv_old,q_inv,Q_inv_half,Q_inv_old,v_inv,v_inv_half,v_inv_old,r_inv_new,q_inv_new, &
+		!$omp& v_inv_new,v_inv_corrected,g_inv,v_f_approx,v_s_f_approx,characteristic_speed,diss_l,diss_r,alpha_loc,sign, &
+		!$omp& bound_number,spec,geom_coeff,geom_source_R,geom_source_Q,phys_source_R,phys_source_Q,phys_source_contact, &
+		!$omp& vel_state,Y_state,S_mom,S_rhoY,g_vel)
 
 		allocate(v_inv(dimensions,2), v_inv_new(dimensions,2))
 		allocate(v_inv_half(dimensions), v_inv_old(dimensions))
@@ -2306,12 +1679,14 @@ contains
 					! ********* Lower invariants ***********
 					
 					r_inv(1) 	= v_f(dim,dim,i,j,k)									+ G_half*p_f(dim,i,j,k)
-					r_inv(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+					r_inv(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	+ G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2), &
+						& k+I_m(dim,3))
 					R_inv_half	= v%pr(dim)%cells(i,j,k)								+ G_half*(p%cells(i,j,k))
 					R_inv_old	= v_old(dim,i,j,k)										+ G_half_old*(p_old(i,j,k))
 					
 					q_inv(1) 	= v_f(dim,dim,i,j,k)									- G_half*p_f(dim,i,j,k)
-					q_inv(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
+					q_inv(2) 	= v_f(dim,dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))	- G_half*p_f(dim,i+I_m(dim,1),j+I_m(dim,2), &
+						& k+I_m(dim,3))
 					Q_inv_half	= v%pr(dim)%cells(i,j,k)								- G_half*(p%cells(i,j,k))
 					Q_inv_old	= v_old(dim,i,j,k)										- G_half_old*(p_old(i,j,k))
 
@@ -2351,11 +1726,11 @@ contains
 					alpha_loc = 0.0_dp
 
 					! Source-shifted maximum-principle interval.  Geometry is an in-step
-					! balance source.  Optional physical sources use the same effective
+					! balance source.  Physical sources use the same effective
 					! conservative rates that have already entered the predictor and will
 					! enter the corrector; no residual-based g_inv reconstruction is used.
 					geom_coeff = 0.0_dp
-					if (cabaret_use_geometry_source_shifts .and. dim == 1) then
+					if (dim == 1) then
 						geom_coeff = finite_volume_geometry_coefficient(nu, mesh%mesh(1,i,j,k), cell_size(1))
 					end if
 					geom_source_R = -geom_coeff * v_s%cells(i,j,k) * v%pr(1)%cells(i,j,k)
@@ -2365,20 +1740,18 @@ contains
 					phys_source_Q = 0.0_dp
 					phys_source_contact = 0.0_dp
 					g_vel(:) = 0.0_dp
-					if (cabaret_use_effective_physical_sources .and. cabaret_use_effective_physical_source_shifts) then
-						do dim1 = 1, dimensions
-							vel_state(dim1) = v%pr(dim1)%cells(i,j,k)
-							S_mom(dim1) = mom_src_old(dim1,i,j,k)
-						end do
-						do spec = 1, species_number
-							Y_state(spec) = Y%pr(spec)%cells(i,j,k)
-							S_rhoY(spec) = rhoY_src_old(spec,i,j,k)
-						end do
-						call this%physical_source_acoustic_shifts(dim, rho%cells(i,j,k), p%cells(i,j,k), &
-							v_s%cells(i,j,k), E_f%cells(i,j,k), vel_state, Y_state, &
-							rho_src_old(i,j,k), S_mom, rhoE_src_old(i,j,k), S_rhoY, &
-							phys_source_R, phys_source_Q, phys_source_contact, g_vel)
-					end if
+					do dim1 = 1, dimensions
+						vel_state(dim1) = v%pr(dim1)%cells(i,j,k)
+						S_mom(dim1) = mom_src_old(dim1,i,j,k)
+					end do
+					do spec = 1, species_number
+						Y_state(spec) = Y%pr(spec)%cells(i,j,k)
+						S_rhoY(spec) = rhoY_src_old(spec,i,j,k)
+					end do
+					call this%physical_source_acoustic_shifts(dim, rho%cells(i,j,k), p%cells(i,j,k), &
+						v_s%cells(i,j,k), E_f%cells(i,j,k), vel_state, Y_state, &
+						rho_src_old(i,j,k), S_mom, rhoE_src_old(i,j,k), S_rhoY, &
+						phys_source_R, phys_source_Q, phys_source_contact, g_vel)
 
 					g_inv = geom_source_R + phys_source_R
 					r_inv_corr(1,dim,i,j,k) = limit_quasi_invariant(r_inv_new(1), r_inv(1), R_inv_half, r_inv(2), &
@@ -2398,9 +1771,11 @@ contains
 						else
 							g_inv = g_vel(dim2)
 						end if
-						v_inv_corr(1,dim2,dim,i,j,k) = limit_quasi_invariant(v_inv_new(dim2,1), v_inv(dim2,1), v_inv_half(dim2), v_inv(dim2,2), &
+						v_inv_corr(1,dim2,dim,i,j,k) = limit_quasi_invariant(v_inv_new(dim2,1), v_inv(dim2,1), v_inv_half(dim2), &
+							& v_inv(dim2,2), &
 															  g_inv*this%time_step, alpha_loc, -huge(1.0_dp), huge(1.0_dp))
-						v_inv_corr(2,dim2,dim,i,j,k) = limit_quasi_invariant(v_inv_new(dim2,2), v_inv(dim2,1), v_inv_half(dim2), v_inv(dim2,2), &
+						v_inv_corr(2,dim2,dim,i,j,k) = limit_quasi_invariant(v_inv_new(dim2,2), v_inv(dim2,1), v_inv_half(dim2), &
+							& v_inv(dim2,2), &
 															  g_inv*this%time_step, alpha_loc, -huge(1.0_dp), huge(1.0_dp))
 		
                     end do
@@ -2413,14 +1788,17 @@ contains
 							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
 							if( bound_number /= 0 ) then
 
-								v_f_approx		= 0.5_dp * (v%pr(dim)%cells(i,j,k)	+ v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))
-								v_s_f_approx	= 0.5_dp * (v_s%cells(i,j,k)			+ v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)))								
+								v_f_approx		= 0.5_dp * (v%pr(dim)%cells(i,j,k)	+ v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2), &
+									& k+sign*I_m(dim,3)))
+								v_s_f_approx	= 0.5_dp * (v_s%cells(i,j,k)			+ v_s%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim, &
+									& 3)))
 		
 								characteristic_speed(1) = v_f_approx + v_s_f_approx
 								characteristic_speed(2) = v_f_approx - v_s_f_approx
 								characteristic_speed(3) = v_f_approx		
 									
-								call this%apply_boundary_conditions_flow(dim, i,j,k, characteristic_speed, q_inv_corr(:,dim,i,j,k), r_inv_corr(:,dim,i,j,k), v_inv_corr(:,:,dim,i,j,k), G_half)
+								call this%apply_boundary_conditions_flow(dim, i,j,k, characteristic_speed, q_inv_corr(:,dim,i,j,k), &
+									& r_inv_corr(:,dim,i,j,k), v_inv_corr(:,:,dim,i,j,k), G_half)
 								
 							end if
 						end do
@@ -2477,27 +1855,26 @@ contains
 			do i = loop(1,1),loop(1,2)
 				if ((bc%bc_markers(i,j,k) == 0).and.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then        
 
-					G_half_lower	= 1.0_dp / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))*rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+					G_half_lower	= 1.0_dp / (v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))*rho%cells(i-I_m(dim,1),j-I_m(dim,2), &
+						& k-I_m(dim,3)))
 					G_half_higher	= 1.0_dp / (v_s%cells(i,j,k)*rho%cells(i,j,k))
                         
 					v_f_approx		= 0.5_dp*(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ v%pr(dim)%cells(i,j,k))
-					v_s_f_approx	= 0.5_dp*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))			+ v_s%cells(i,j,k))                    
+					v_s_f_approx	= 0.5_dp*(v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))			+ v_s%cells(i,j,k))
 
 						mol_l_face = 0.0_dp
 						mol_r_face = 0.0_dp
 						material_contact_face = .false.
-						if (cabaret_skip_legacy_sound_point_on_material_contacts) then
-							do spec = 1, species_number
-								mol_l_face = mol_l_face + Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / &
-									this%thermo%thermo_ptr%molar_masses(spec)
-								mol_r_face = mol_r_face + Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
-							end do
-							if (mol_l_face > 0.0_dp .and. mol_r_face > 0.0_dp) then
-								mol_l_face = 1.0_dp / mol_l_face
-								mol_r_face = 1.0_dp / mol_r_face
-								mol_ratio_face = max(mol_l_face,mol_r_face) / min(mol_l_face,mol_r_face)
-								material_contact_face = (mol_ratio_face > cabaret_riemann_molar_mass_ratio)
-							end if
+						do spec = 1, species_number
+							mol_l_face = mol_l_face + Y%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) / &
+								this%thermo%thermo_ptr%molar_masses(spec)
+							mol_r_face = mol_r_face + Y%pr(spec)%cells(i,j,k) / this%thermo%thermo_ptr%molar_masses(spec)
+						end do
+						if (mol_l_face > 0.0_dp .and. mol_r_face > 0.0_dp) then
+							mol_l_face = 1.0_dp / mol_l_face
+							mol_r_face = 1.0_dp / mol_r_face
+							mol_ratio_face = max(mol_l_face,mol_r_face) / min(mol_l_face,mol_r_face)
+							material_contact_face = (mol_ratio_face > material_contact_molar_mass_ratio)
 						end if
 
 						sound_point_lr = ((abs(v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) < &
@@ -2518,13 +1895,16 @@ contains
 							( characteristic_speed(2) < 0.0_dp )		.and.&
 							( characteristic_speed(3) >= 0.0_dp )) then				
 
-							p_f_new%cells(dim,i,j,k)			=	(r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_inv_corr(1,dim,i,j,k)) / (G_half_lower + G_half_higher)
-							rho_f_new%cells(dim,i,j,k)			=	density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
+							p_f_new%cells(dim,i,j,k)			=	(r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_inv_corr(1,dim,i, &
+								& j,k)) / (G_half_lower + G_half_higher)
+							rho_f_new%cells(dim,i,j,k)			=	density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2, &
+								& dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
 											    rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 								
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + G_half_lower * q_inv_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim, &
+										& 3)) + G_half_lower * q_inv_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(2,dim1,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
   								end if
@@ -2539,12 +1919,15 @@ contains
 							( characteristic_speed(2) < 0.0_dp ).and.&
 							( characteristic_speed(3) < 0.0_dp )) then
 						
-							p_f_new%cells(dim,i,j,k)			=	(r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_inv_corr(1,dim,i,j,k)) / (G_half_lower + G_half_higher)
-							rho_f_new%cells(dim,i,j,k)			=	density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1,dim,dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
+							p_f_new%cells(dim,i,j,k)			=	(r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	-   q_inv_corr(1,dim,i, &
+								& j,k)) / (G_half_lower + G_half_higher)
+							rho_f_new%cells(dim,i,j,k)			=	density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1, &
+								& dim,dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
 							
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + G_half_lower * q_inv_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	(G_half_higher * r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim, &
+										& 3)) + G_half_lower * q_inv_corr(1,dim,i,j,k))	/ (G_half_lower + G_half_higher)
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(1,dim1,dim,i,j,k)
 								end if
@@ -2556,13 +1939,16 @@ contains
 							( characteristic_speed(2) >= 0.0_dp ).and.&
 							( characteristic_speed(3) >= 0.0_dp )) then
 						
-							p_f_new%cells(dim,i,j,k)	= 0.5_dp * (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - q_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / G_half_lower
-							rho_f_new%cells(dim,i,j,k)	= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
+							p_f_new%cells(dim,i,j,k)	= 0.5_dp * (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - q_inv_corr(2, &
+								& dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / G_half_lower
+							rho_f_new%cells(dim,i,j,k)	= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim, &
+								& dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
 											    rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 						
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
-									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	0.5_dp * (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + q_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	0.5_dp * (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim, &
+										& 3)) + q_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 								else
 									v_f_new%pr(dim1)%cells(dim,i,j,k)	=	v_inv_corr(2,dim1,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
 								end if
@@ -2574,7 +1960,8 @@ contains
 							( characteristic_speed(3) < 0.0_dp )) then
 						
 							p_f_new%cells(dim,i,j,k)			= 0.5_dp * (r_inv_corr(1,dim,i,j,k) - q_inv_corr(1,dim,i,j,k)) / G_half_higher
-							rho_f_new%cells(dim,i,j,k)			= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1,dim,dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
+							rho_f_new%cells(dim,i,j,k)			= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1, &
+								& dim,dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
 						
 							do dim1 = 1,dimensions
 								if ( dim == dim1 ) then 
@@ -2612,14 +1999,17 @@ contains
 						if ((.not. material_contact_face) .and. sound_point_lr) then 
 						
                             
-						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dp*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
+						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dp*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim, &
+							& 1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
 																*0.5_dp*(v_s%cells(i,j,k) + v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 		   
-						p_f_new%cells(dim,i,j,k)			= (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - v_f_new%pr(dim)%cells(dim,i,j,k))/G_half_lower
+						p_f_new%cells(dim,i,j,k)			= (r_inv_corr(2,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim, &
+							& 3)) - v_f_new%pr(dim)%cells(dim,i,j,k))/G_half_lower
      
                             
 						if (characteristic_speed(3) >= 0.0_dp) then
-							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
+							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim, &
+								& dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
 										    rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 							
 							do dim1 = 1,dimensions
@@ -2628,7 +2018,8 @@ contains
                                 end if
 							end do
                         else
-							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1,dim,dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
+							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1,dim, &
+								& dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
                                 
                             do dim1 = 1,dimensions
 								if ( dim /= dim1 ) then 
@@ -2643,13 +2034,15 @@ contains
      
 						if ((.not. material_contact_face) .and. sound_point_rl) then 
 					
-						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dp*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
+						v_f_new%pr(dim)%cells(dim,i,j,k)	=	0.5_dp*(v%pr(dim)%cells(i,j,k)/v_s%cells(i,j,k) + v%pr(dim)%cells(i-I_m(dim, &
+							& 1),j-I_m(dim,2),k-I_m(dim,3))/v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) &
 																*0.5_dp*(v_s%cells(i,j,k) + v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 		   
 						p_f_new%cells(dim,i,j,k)			= (v_f_new%pr(dim)%cells(dim,i,j,k) - q_inv_corr(1,dim,i,j,k))/G_half_higher
 						
 						if (characteristic_speed(3) >= 0.0_dp) then
-							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim,dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
+							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(2,dim, &
+								& dim,i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), &
 										    rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), v_s%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 							
                             do dim1 = 1,dimensions
@@ -2658,7 +2051,8 @@ contains
                                 end if
 							end do
                         else
-							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1,dim,dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
+							rho_f_new%cells(dim,i,j,k)		= density_from_contact_quasi_invariant(p_f_new%cells(dim,i,j,k), v_inv_corr(1,dim, &
+								& dim,i,j,k), rho%cells(i,j,k), v_s%cells(i,j,k))
                                 
                             do dim1 = 1,dimensions
 								if ( dim /= dim1 ) then 
@@ -2686,6 +2080,9 @@ contains
 	end subroutine reconstruct_acoustic_face_state
 
 
+	!> Reconstruct species, temperature, molar volume and sensible energy along u-characteristics.
+
+
 	subroutine reconstruct_contact_family_face_state(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -2696,7 +2093,7 @@ contains
 		real(dp), dimension(:,:), allocatable :: Y_inv, Y_inv_corrected, Y_inv_new
 		real(dp), dimension(:), allocatable :: Y_inv_half, Y_inv_old
 		real(dp), dimension(:), allocatable :: vel_state, Y_state, S_mom, S_rhoY, g_Y
-		real(dp) :: g_inv, alpha_loc, g_entropy, g_temperature, S_inv_lower_bound
+		real(dp) :: g_inv, alpha_loc, g_temperature, S_inv_lower_bound
 		real(dp) :: v_f_approx_lower, v_f_approx_higher
 		real(dp) :: diss_l, diss_r
 		real(dp), dimension(2) :: S_inv, S_inv_new, S_inv_corrected
@@ -2714,7 +2111,7 @@ contains
 		cell_size       = this%mesh%mesh_ptr%get_cell_edges_length()
 
 		call this%exchange_face_pressure_density()
-		call this%initialize_material_entropy_faces()
+		call this%initialize_material_contact_faces()
 
 		! Species are treated as material/contact-family invariants of the
 		! inviscid multicomponent Euler subsystem, not as thermodynamically
@@ -2736,9 +2133,9 @@ contains
 					rhoE_src_old	=> this%rhoE_src_old, &
 					rhoY_src_old	=> this%rhoY_src_old, &
 					Y_f_new		=> this%Y_f_new%v_ptr		, &
-					s_material_f_new => this%s_material_f_new, &
-					psi_material_f_new => this%psi_material_f_new, &
-					ksi_sensible_material_f_new => this%ksi_sensible_material_f_new, &
+					material_temperature_f => this%material_temperature_f, &
+					material_molar_volume_f => this%material_molar_volume_f, &
+					material_sensible_energy_f => this%material_sensible_energy_f, &
 					bc			=> this%boundary%bc_ptr)
         
 		!$omp parallel default(shared) &
@@ -2748,7 +2145,7 @@ contains
 		!$omp& Psi_inv,Psi_inv_new,Psi_inv_corrected,Psi_inv_half,Ksi_inv,Ksi_inv_new, &
 		!$omp& Ksi_inv_corrected,Ksi_inv_half,T_face_lower,T_face_higher, &
 		!$omp& m_face_lower,m_face_higher,m_cell,m_corr,molar_ratio_contact,y_pos, &
-		!$omp& y_sum_corr,molar_denom_corr,progress,vel_state,Y_state,S_mom,S_rhoY,g_Y,g_entropy,g_temperature,S_inv_lower_bound)
+		!$omp& y_sum_corr,molar_denom_corr,progress,vel_state,Y_state,S_mom,S_rhoY,g_Y,g_temperature,S_inv_lower_bound)
 		allocate(Y_inv(species_number,2), Y_inv_corrected(species_number,2), Y_inv_new(species_number,2))
 		allocate(Y_inv_half(species_number), Y_inv_old(species_number))
 		allocate(vel_state(dimensions), S_mom(dimensions))
@@ -2781,30 +2178,22 @@ contains
 						y_inv_old(spec)		= y_old(spec,i,j,k)
                     end do
 
-					! Entropy and molar volume are reconstructed with the same
+					! Temperature, molar volume and sensible energy are reconstructed with the same
 					! contact-family stencil as Y_k.  The production density closure uses
 					! psi=M(Y)/rho, because rho=M/psi is the quantity that becomes
 					! nonphysical when composition and thermodynamic contact layers drift.
 					T_face_lower  = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(this%p_f(dim,i,j,k), &
 						this%rho_f(dim,i,j,k), Y_f(:,dim,i,j,k))
-					T_face_higher = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(this%p_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), &
+					T_face_higher = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(this%p_f(dim,i+i_m(dim,1),j+i_m(dim, &
+						& 2),k+i_m(dim,3)), &
 						this%rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))
-					if (cabaret_use_temperature_contact_invariant) then
-						! Fix A: reconstruct the material temperature instead of scalar
-						! mixture entropy.  This removes the composition-dependent
-						! JANAF entropy reference jump from the CABARET reflection stencil.
-						S_inv(1) = T_face_lower
-						S_inv(2) = T_face_higher
-						S_inv_half = T%cells(i,j,k)
-					else
-						S_inv(1) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face_lower, this%p_f(dim,i,j,k), Y_f(:,dim,i,j,k), cabaret_entropy_p_ref)
-						S_inv(2) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face_higher, this%p_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), &
-							Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)), cabaret_entropy_p_ref)
-						S_inv_half = this%thermo%thermo_ptr%mixture_specific_entropy(T%cells(i,j,k), p%cells(i,j,k), Y_inv_half(:), cabaret_entropy_p_ref)
-					end if
+					S_inv(1) = T_face_lower
+					S_inv(2) = T_face_higher
+					S_inv_half = T%cells(i,j,k)
 
 					m_face_lower  = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i,j,k))
-					m_face_higher = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))
+					m_face_higher = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i+i_m(dim,1),j+i_m(dim, &
+						& 2),k+i_m(dim,3)))
 					m_cell        = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_inv_half(:))
 					Psi_inv(1)   = m_face_lower/this%rho_f(dim,i,j,k)
 					Psi_inv(2)   = m_face_higher/this%rho_f(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
@@ -2823,7 +2212,7 @@ contains
 					do spec = 1,species_number
 						y_inv_new(spec,1)	= (2.0_dp*Y_inv_half(spec) - (1.0_dp-diss_l)*y_inv(spec,2))/(1.0_dp+diss_l)
 						y_inv_new(spec,2)	= (2.0_dp*Y_inv_half(spec) - (1.0_dp-diss_r)*y_inv(spec,1))/(1.0_dp+diss_r)
-					end do	
+					end do
 
 					S_inv_new(1) = (2.0_dp*S_inv_half - (1.0_dp-diss_l)*S_inv(2))/(1.0_dp+diss_l)
 					S_inv_new(2) = (2.0_dp*S_inv_half - (1.0_dp-diss_r)*S_inv(1))/(1.0_dp+diss_r)
@@ -2833,29 +2222,20 @@ contains
 					Ksi_inv_new(2) = (2.0_dp*Ksi_inv_half - (1.0_dp-diss_r)*Ksi_inv(1))/(1.0_dp+diss_r)
 
 					g_Y(:) = 0.0_dp
-					g_entropy = 0.0_dp
 					g_temperature = 0.0_dp
-					if (cabaret_use_effective_physical_sources .and. cabaret_use_effective_physical_source_shifts) then
-						do spec = 1, species_number
-							Y_state(spec) = Y%pr(spec)%cells(i,j,k)
-							S_rhoY(spec) = rhoY_src_old(spec,i,j,k)
-						end do
-						do spec = 1, dimensions
-							vel_state(spec) = v%pr(spec)%cells(i,j,k)
-							S_mom(spec) = mom_src_old(spec,i,j,k)
-						end do
-						call this%physical_source_contact_shifts(rho%cells(i,j,k), p%cells(i,j,k), v_s%cells(i,j,k), &
-							E_f%cells(i,j,k), vel_state, Y_state, rho_src_old(i,j,k), S_mom, &
-							rhoE_src_old(i,j,k), S_rhoY, g_Y, g_entropy, g_temperature)
-					end if
-
-					if (cabaret_use_temperature_contact_invariant) then
-						g_inv = g_temperature
-						S_inv_lower_bound = 0.0_dp
-					else
-						g_inv = g_entropy
-						S_inv_lower_bound = -huge(1.0_dp)
-					end if
+					do spec = 1, species_number
+						Y_state(spec) = Y%pr(spec)%cells(i,j,k)
+						S_rhoY(spec) = rhoY_src_old(spec,i,j,k)
+					end do
+					do spec = 1, dimensions
+						vel_state(spec) = v%pr(spec)%cells(i,j,k)
+						S_mom(spec) = mom_src_old(spec,i,j,k)
+					end do
+					call this%physical_source_contact_shifts(rho%cells(i,j,k), p%cells(i,j,k), &
+						E_f%cells(i,j,k), vel_state, Y_state, rho_src_old(i,j,k), S_mom, &
+						rhoE_src_old(i,j,k), S_rhoY, g_Y, g_temperature)
+					g_inv = g_temperature
+					S_inv_lower_bound = 0.0_dp
 					alpha_loc = 0.0_dp
 					S_inv_corrected(1) = limit_quasi_invariant(S_inv_new(1), S_inv(1), S_inv_half, S_inv(2), &
 						g_inv*this%time_step, alpha_loc, S_inv_lower_bound, huge(1.0_dp))
@@ -2878,15 +2258,16 @@ contains
 						! effective sources use dY_k/dt=(S_rhoY-Y_k*S_rho)/rho.
 						g_inv = g_Y(spec)
 						alpha_loc = 0.0_dp
-						y_inv_corrected(spec,1) = limit_quasi_invariant(y_inv_new(spec,1), y_inv(spec,1), Y_inv_half(spec), y_inv(spec,2), &
+						y_inv_corrected(spec,1) = limit_quasi_invariant(y_inv_new(spec,1), y_inv(spec,1), Y_inv_half(spec), y_inv(spec, &
+							& 2), &
 													  g_inv*this%time_step, alpha_loc, 0.0_dp, 1.0_dp)
-						y_inv_corrected(spec,2) = limit_quasi_invariant(y_inv_new(spec,2), y_inv(spec,1), Y_inv_half(spec), y_inv(spec,2), &
+						y_inv_corrected(spec,2) = limit_quasi_invariant(y_inv_new(spec,2), y_inv(spec,1), Y_inv_half(spec), y_inv(spec, &
+							& 2), &
 													  g_inv*this%time_step, alpha_loc, 0.0_dp, 1.0_dp)
 					end do
 
-					if (cabaret_use_material_progress_coupled_molar_volume) then
-						molar_ratio_contact = max(m_face_lower,m_face_higher)/min(m_face_lower,m_face_higher)
-						if ((molar_ratio_contact > cabaret_material_molar_volume_coupling_molar_mass_ratio) .and. &
+					molar_ratio_contact = max(m_face_lower,m_face_higher)/min(m_face_lower,m_face_higher)
+					if ((molar_ratio_contact > direct_psi_contact_molar_mass_ratio) .and. &
 							(abs(m_face_higher - m_face_lower) > 10.0_dp*tiny(1.0_dp)*max(abs(m_face_higher),abs(m_face_lower)))) then
 							do bound_number = 1, 2
 								y_sum_corr = 0.0_dp
@@ -2904,14 +2285,14 @@ contains
 								end if
 							end do
 						end if
-					end if
 					
 #ifdef OMP					
 					call omp_set_lock(lock(i,j,k))
 					call omp_set_lock(lock(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))	
 #endif
 
-					!# Boundary conditions on Y are set up along with other flow variables, here values on boundaries should not be updated
+					!  Boundary conditions on Y are set up along with other flow variables, here values on boundaries should not be
+					! updated
 					do spec = 1,species_number
 						if ( (I_m(dim,1)*i + I_m(dim,2)*j + I_m(dim,3)*k) /= cons_utter_loop(dim,1) ) then
 							bound_number	= bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
@@ -2921,9 +2302,9 @@ contains
 								if (v_f_approx_lower < 0.0_dp) then
                                 	Y_f_new%pr(spec)%cells(dim,i,j,k) =  (y_inv_corrected(spec,1))
 									if (spec == 1) then
-										s_material_f_new(dim,i,j,k) = S_inv_corrected(1)
-										psi_material_f_new(dim,i,j,k) = Psi_inv_corrected(1)
-										ksi_sensible_material_f_new(dim,i,j,k) = Ksi_inv_corrected(1)
+										material_temperature_f(dim,i,j,k) = S_inv_corrected(1)
+										material_molar_volume_f(dim,i,j,k) = Psi_inv_corrected(1)
+										material_sensible_energy_f(dim,i,j,k) = Ksi_inv_corrected(1)
 									end if
 								end if	
 							end if
@@ -2937,9 +2318,9 @@ contains
 								if (v_f_approx_higher >= 0.0_dp) then
 									Y_f_new%pr(spec)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = (y_inv_corrected(spec,2)) 	
 									if (spec == 1) then
-										s_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = S_inv_corrected(2)
-										psi_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = Psi_inv_corrected(2)
-										ksi_sensible_material_f_new(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = Ksi_inv_corrected(2)
+										material_temperature_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = S_inv_corrected(2)
+										material_molar_volume_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = Psi_inv_corrected(2)
+										material_sensible_energy_f(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) = Ksi_inv_corrected(2)
 									end if
    								end if
                             end if
@@ -2968,6 +2349,9 @@ contains
 	end subroutine reconstruct_contact_family_face_state
 
 
+	!> Conservative trapezoidal corrector from t^n to t^{n+1}.
+
+
 	subroutine correct_conservative_full_step(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -2976,7 +2360,7 @@ contains
 		integer, dimension(3,2) :: cons_inner_loop
 		real(dp), dimension(3) :: cell_size
 		character(len=20) :: coordinate_system
-		real(dp) :: spec_summ, mean_higher, mean_lower, r
+		real(dp) :: spec_summ, mean_higher, mean_lower, r, geom_coeff
 		real(dp), dimension(:), allocatable :: rhoY_new
 
 		dimensions      = this%domain%get_domain_dimensions()
@@ -3025,7 +2409,7 @@ contains
 					bc				=> this%boundary%bc_ptr     , &
 					mesh			=> this%mesh%mesh_ptr)
             
-		!$omp parallel default(shared)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r,rhoY_new)
+		!$omp parallel default(shared)  private(i,j,k,dim,dim1,spec,spec_summ,mean_higher,mean_lower,r,geom_coeff,rhoY_new)
 		allocate(rhoY_new(species_number))
          
 		!$omp do collapse(3) schedule(guided)			
@@ -3036,6 +2420,7 @@ contains
 			if (bc%bc_markers(i,j,k) == 0) then	
                 
                 r = mesh%mesh(1,i,j,k)
+				geom_coeff = finite_volume_geometry_coefficient(nu, r, cell_size(1))
                 
 				rho%cells(i,j,k)	= 0.0_dp
 				E_f%cells(i,j,k)	= 0.0_dp
@@ -3050,26 +2435,19 @@ contains
                 
 				do dim = 1,dimensions
                     
-                    mean_higher	= rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) 
+                    mean_higher	= rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim, &
+                    	& 3))  *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
 					mean_lower	= rho_f_new%cells(dim,i,j,k)    *v_f_new%pr(dim)%cells(dim,i,j,k)                    
 
 					rho%cells(i,j,k)	=	rho%cells(i,j,k) - (mean_higher - mean_lower) /cell_size(1)
                     
                     if(dim == 1) then
-						rho%cells(i,j,k)	=	rho%cells(i,j,k)	-	2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																	*	0.5_dp * (mean_higher +	mean_lower)																		&
-																	*	((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))							&
-																	/	((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1)))
+                    	rho%cells(i,j,k) = rho%cells(i,j,k) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
                     end if
 				end do                
 
-				if (cabaret_use_effective_physical_sources) then
-					rho%cells(i,j,k) = rho_old(i,j,k) + 0.5_dp*this%time_step * &
-						(rho_rhs_old(i,j,k) + rho%cells(i,j,k)) + this%time_step*rho_src_old(i,j,k)
-				else
-					rho%cells(i,j,k)	=	rho_old(i,j,k) + 0.5_dp*this%time_step * &
-						(rho%cells(i,j,k) + rho_src_old(i,j,k))
-				end if
+				rho%cells(i,j,k) = rho_old(i,j,k) + 0.5_dp*this%time_step * &
+					(rho_rhs_old(i,j,k) + rho%cells(i,j,k)) + this%time_step*rho_src_old(i,j,k)
 	   
 				! Species are advanced as conservative partial densities rho*Y_k.
 				! Mass fractions are recovered after positivity correction of rho*Y_k.
@@ -3077,23 +2455,17 @@ contains
 				do spec = 1,species_number
 					rhoY_new(spec) = 0.0_dp
 					do	dim = 1,dimensions
-						mean_higher	=  rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  * y_f_new%pr(spec)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
-						mean_lower	=  rho_f_new%cells(dim,i,j,k)    * y_f_new%pr(spec)%cells(dim,i,j,k)   *v_f_new%pr(dim)%cells(dim,i,j,k)
+						mean_higher	=  rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))  * y_f_new%pr(spec)%cells(dim, &
+							& i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)) *v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
+						mean_lower	=  rho_f_new%cells(dim,i,j,k)    * y_f_new%pr(spec)%cells(dim,i,j,k)   *v_f_new%pr(dim)%cells(dim,i, &
+							& j,k)
 						rhoY_new(spec)	=  rhoY_new(spec) - (mean_higher - mean_lower ) /cell_size(1)
 						if(dim == 1) then
-							rhoY_new(spec)	=  rhoY_new(spec) - 2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																	* 0.5_dp * (mean_higher + mean_lower)														&
-																	* ((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))											&
-																	/ ((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1)))
+							rhoY_new(spec) = rhoY_new(spec) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
 						end if
 					end do
-					if (cabaret_use_effective_physical_sources) then
-						rhoY_new(spec) = rho_old(i,j,k) * Y_old(spec,i,j,k) + 0.5_dp * this%time_step * &
-							(rhoY_rhs_old(spec,i,j,k) + rhoY_new(spec)) + this%time_step*rhoY_src_old(spec,i,j,k)
-					else
-						rhoY_new(spec) = rho_old(i,j,k) * Y_old(spec,i,j,k) + 0.5_dp * this%time_step * &
-							(rhoY_new(spec) + rhoY_src_old(spec,i,j,k))
-					end if
+					rhoY_new(spec) = rho_old(i,j,k) * Y_old(spec,i,j,k) + 0.5_dp * this%time_step * &
+						(rhoY_rhs_old(spec,i,j,k) + rhoY_new(spec)) + this%time_step*rhoY_src_old(spec,i,j,k)
 					spec_summ = spec_summ + max(rhoY_new(spec), 0.0_dp)
 				end do
 
@@ -3113,17 +2485,16 @@ contains
 				end if
 				do dim = 1,dimensions
 					do dim1 = 1,dimensions
-						mean_higher	= rho_f_new%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))  *v_f_new%pr(dim)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3)) *v_f_new%pr(dim1)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))
+						mean_higher	= rho_f_new%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3))  *v_f_new%pr(dim)%cells(dim1, &
+							& i+i_m(dim1,1),j+i_m(dim1,2),k+i_m(dim1,3)) *v_f_new%pr(dim1)%cells(dim1,i+i_m(dim1,1),j+i_m(dim1,2), &
+							& k+i_m(dim1,3))
 						mean_lower	= rho_f_new%cells(dim1,i,j,k)  *v_f_new%pr(dim)%cells(dim1,i,j,k) *v_f_new%pr(dim1)%cells(dim1,i,j,k)
 													
 						v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/cell_size(1)
                         
                         
                         if(dim1 == 1) then                        
-							v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																				*	0.5_dp * (mean_higher +	mean_lower)																		&
-																				*	((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))							&
-																				/	((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1))) 
+                        	v%pr(dim)%cells(i,j,k) = v%pr(dim)%cells(i,j,k) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
                         end if                        
 					end do
 	   
@@ -3132,37 +2503,27 @@ contains
 													
 					v%pr(dim)%cells(i,j,k)	=  v%pr(dim)%cells(i,j,k)	-	(mean_higher - mean_lower)	/cell_size(1)
 					
-					if (cabaret_use_effective_physical_sources) then
-						v%pr(dim)%cells(i,j,k) = rho_old(i,j,k)*v_old(dim,i,j,k) + 0.5_dp*this%time_step * &
-							(mom_rhs_old(dim,i,j,k) + v%pr(dim)%cells(i,j,k)) + this%time_step*mom_src_old(dim,i,j,k)
-					else
-						v%pr(dim)%cells(i,j,k)	= rho_old(i,j,k)*v_old(dim,i,j,k) +  0.5_dp * this%time_step * &
-							(v%pr(dim)%cells(i,j,k) + mom_src_old(dim,i,j,k))
-					end if
+					v%pr(dim)%cells(i,j,k) = rho_old(i,j,k)*v_old(dim,i,j,k) + 0.5_dp*this%time_step * &
+						(mom_rhs_old(dim,i,j,k) + v%pr(dim)%cells(i,j,k)) + this%time_step*mom_src_old(dim,i,j,k)
 					v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) / rho%cells(i,j,k) 
 				end do	
 	   
 				E_f%cells(i,j,k)		=	0.0_dp  
 				do dim = 1,dimensions
-					mean_higher	= (rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))*E_f_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))	+	p_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3)))*v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
-					mean_lower	= (rho_f_new%cells(dim,i,j,k)*E_f_f_new%cells(dim,i,j,k)	+	p_f_new%cells(dim,i,j,k))*v_f_new%pr(dim)%cells(dim,i,j,k)	
+					mean_higher	= (rho_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))*E_f_f_new%cells(dim,i+i_m(dim,1), &
+						& j+i_m(dim,2),k+i_m(dim,3))	+	p_f_new%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim, &
+						& 3)))*v_f_new%pr(dim)%cells(dim,i+i_m(dim,1),j+i_m(dim,2),k+i_m(dim,3))
+					mean_lower	= (rho_f_new%cells(dim,i,j,k)*E_f_f_new%cells(dim,i,j,k)	+	p_f_new%cells(dim,i,j, &
+						& k))*v_f_new%pr(dim)%cells(dim,i,j,k)
 				
 					E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	(mean_higher - mean_lower)	/cell_size(1)
                     
                     if(dim == 1) then
-						E_f%cells(i,j,k)        = 	E_f%cells(i,j,k)		-	2.0_dp * (nu - 1)/((r + 0.5_dp*cell_size(1))**(nu - 1) + (r - 0.5_dp*cell_size(1))**(nu - 1))		&
-																				*	0.5_dp * (mean_higher +	mean_lower)																		&
-																				*	((r + 0.5_dp*cell_size(1))**(nu - 1) - (r - 0.5_dp*cell_size(1))**(nu - 1))							&
-																				/	((r + 0.5_dp*cell_size(1)) - (r - 0.5_dp*cell_size(1))) 
+                    	E_f%cells(i,j,k) = E_f%cells(i,j,k) - geom_coeff*0.5_dp*(mean_higher + mean_lower)
                     end if
 				end do	
-				if (cabaret_use_effective_physical_sources) then
-					E_f%cells(i,j,k) = rho_old(i,j,k) * E_f_old(i,j,k) + 0.5_dp*this%time_step * &
-						(rhoE_rhs_old(i,j,k) + E_f%cells(i,j,k)) + this%time_step*rhoE_src_old(i,j,k)
-				else
-					E_f%cells(i,j,k) = rho_old(i,j,k) * E_f_old(i,j,k) + 0.5_dp * this%time_step * &
-						(E_f%cells(i,j,k) + rhoE_src_old(i,j,k))
-				end if
+				E_f%cells(i,j,k) = rho_old(i,j,k) * E_f_old(i,j,k) + 0.5_dp*this%time_step * &
+					(rhoE_rhs_old(i,j,k) + E_f%cells(i,j,k)) + this%time_step*rhoE_src_old(i,j,k)
 				E_f%cells(i,j,k) = E_f%cells(i,j,k) /rho%cells(i,j,k)
 	
 			end if
@@ -3178,6 +2539,9 @@ contains
 	end subroutine correct_conservative_full_step
 
 
+	!> Apply final cell boundary conditions and exchange the corrected state.
+
+
 	subroutine finalize_gas_dynamics_step(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -3189,242 +2553,86 @@ contains
 
 		call this%apply_boundary_conditions_main()
 
-		if(this%additional_particles_phases_number /= 0 .and. &
-			(.not. (cabaret_use_effective_physical_sources .and. cabaret_include_particles_in_gas_step))) then
+		if (this%additional_particles_phases_number /= 0) then
 			do particles_phase_counter = 1, this%additional_particles_phases_number
     			call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_main(this%time)
 			end do
 		end if
 	end subroutine finalize_gas_dynamics_step
-
-
+	!> Advance particle phases after the source-aware CABARET gas step.
+	!!
+	!! Chemistry, diffusion, heat conduction, radiation and viscosity are
+	!! evaluated before the predictor and already included in the conservative
+	!! CABARET update.  Particle coupling remains operator split because the
+	!! particle solver owns its own integration sequence.
 	subroutine solve_split_physics(this)
 		class(cabaret_solver), intent(inout) :: this
+		integer :: phase
 
-		integer :: particles_phase_counter
-
-        call cabaret_heattransfer_timer%tic()
-		if (this%heat_trans_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_heat_transfer_in_gas_step))) &
-			call this%heat_trans_solver%solve_heat_transfer(this%time_step)
-        call cabaret_heattransfer_timer%toc(new_iter=.true.)
-        call cabaret_radiation_timer%tic()
-		if (this%radiation_flag .and. &
-			(.not. (cabaret_use_effective_physical_sources .and. cabaret_include_radiation_in_gas_step))) &
-			call this%radiation_solver%solve_radiation(this%time_step)
-        call cabaret_radiation_timer%toc(new_iter=.true.)
-        
-        
-        call cabaret_diffusion_timer%tic()
-		if (this%diffusion_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_diffusion_in_gas_step))) &
-			call this%diff_solver%solve_diffusion(this%time_step)
-        call cabaret_diffusion_timer%toc(new_iter=.true.)
-        
-        call cabaret_viscosity_timer%tic()
-		if (this%viscosity_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_viscosity_in_gas_step))) &
-			call this%viscosity_solver%solve_viscosity(this%time_step)
-        call cabaret_viscosity_timer%toc(new_iter=.true.)
-        
-        call cabaret_chemistry_timer%tic()
-		if (this%reactive_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_chemistry_in_gas_step))) &
-			call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
-        call cabaret_chemistry_timer%toc(new_iter=.true.)
-        
-
-		if(this%additional_particles_phases_number /= 0 .and. &
-			(.not. (cabaret_use_effective_physical_sources .and. cabaret_include_particles_in_gas_step))) then
-			do particles_phase_counter = 1, this%additional_particles_phases_number
-				call this%particles_solver(particles_phase_counter)%particles_solve(this%time_step)				!# Lagrangian particles solver
+		if (this%additional_particles_phases_number == 0) return
+		do phase = 1, this%additional_particles_phases_number
+                call this%particles_solver(phase)%particles_solve(this%time_step)				                !# Lagrangian particles solver
 !				call this%particles_solver(particles_phase_counter)%particles_euler_step_v_E(this%time_step)	!# Continuum particles solver
 !				call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum particles solver
 !				call this%particles_solver(particles_phase_counter)%particles_lagrange_step(this%time_step)		!# Continuum particles solver
 !				call this%particles_solver(particles_phase_counter)%particles_final_step(this%time_step)		!# Continuum particles solver		
-			end do		
-		end if 	        
+		end do
 	end subroutine solve_split_physics
-
-
+	!> Apply particle production fields to the gas state.
 	subroutine apply_split_sources(this)
 		class(cabaret_solver), intent(inout) :: this
 
-		real(dp) :: energy_output_time = 2.0e-07_dp
-		real(dp) :: energy_output_radii = 4.0e-04_dp
-		real(dp) :: energy_source = 1.9e+04_dp
-		real(dp), save :: energy_output_rho = 0.0_dp
-		real(dp), save :: energy_output = 0.0_dp
-		integer, save :: energy_output_flag = 0
 		integer :: dimensions, species_number
-		integer :: i, j, k, dim, spec, particles_phase_counter
-		integer, dimension(3,2) :: cons_inner_loop
-		real(dp), dimension(3) :: cell_size
-		real(dp) :: spec_summ, buoyancy_factor, buoyancy_acceleration
-		real(dp) :: velocity_dot_a, acceleration_squared
-		
-		dimensions      = this%domain%get_domain_dimensions()
-		species_number  = this%chem%chem_ptr%species_number
-		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-		cell_size       = this%mesh%mesh_ptr%get_cell_edges_length()
+		integer :: i, j, k, dim, spec, phase
+		integer, dimension(3,2) :: inner
+		real(dp) :: mass_fraction_sum
 
-        associate(  E_f_prod		=> this%E_f_prod			, &
-			        v_prod			=> this%v_prod				, &
-			        Y_prod			=> this%Y_prod				, &
-			        rho_prod		=> this%rho_prod)
-    
-		E_f_prod	= 0.0_dp
-		rho_prod	= 0.0_dp
-		Y_prod		= 0.0_dp
-		v_prod		= 0.0_dp	
-        end associate
-        
-        associate(	rho			=> this%rho%s_ptr		, &
-					E_f			=> this%E_f%s_ptr		, &
+		if (this%additional_particles_phases_number == 0) return
 
-		        	v			=> this%v%v_ptr	, &
-					Y			=> this%Y%v_ptr	, &
+		dimensions = this%domain%get_domain_dimensions()
+		species_number = this%chem%chem_ptr%species_number
+		inner = this%domain%get_local_inner_cells_bounds()
 
-                    v_prod_visc		=> this%v_prod_visc%v_ptr	, &
-					Y_prod_chem		=> this%Y_prod_chem%v_ptr	, &
-					Y_prod_diff		=> this%Y_prod_diff%v_ptr	, &
-					E_f_prod_chem 	=> this%E_f_prod_chem%s_ptr	, &
-					E_f_prod_heat	=> this%E_f_prod_heat%s_ptr	, &
-					E_f_prod_visc	=> this%E_f_prod_visc%s_ptr	, &
-					E_f_prod_diff	=> this%E_f_prod_diff%s_ptr	, &
-					E_f_prod		=> this%E_f_prod			, &
-					v_prod			=> this%v_prod				, &
-					Y_prod			=> this%Y_prod				, &
-					rho_prod		=> this%rho_prod			, &
-            
-       
-					rho_prod_particles  => this%rho_prod_particles	, &
-					E_f_prod_particles  => this%E_f_prod_particles	, &
-                    v_prod_particles	=> this%v_prod_particles	, &
-					Y_prod_particles	=> this%Y_prod_particles	, &
+		associate(rho => this%rho%s_ptr, E => this%E_f%s_ptr, v => this%v%v_ptr, &
+			Y => this%Y%v_ptr, bc => this%boundary%bc_ptr)
+		!$omp parallel do collapse(3) schedule(guided) default(shared) &
+		!$omp& private(i,j,k,dim,spec,phase,mass_fraction_sum)
+		do k = inner(3,1), inner(3,2)
+		do j = inner(2,1), inner(2,2)
+		do i = inner(1,1), inner(1,2)
+			if (bc%bc_markers(i,j,k) /= 0) cycle
 
-					bc				=> this%boundary%bc_ptr         , &
-					mesh			=> this%mesh%mesh_ptr)
-		
-		!$omp parallel default(shared) private(i,j,k,dim,spec,spec_summ,buoyancy_factor, &
-        !$omp& buoyancy_acceleration,velocity_dot_a,acceleration_squared)
-        
-		!$omp do collapse(3) schedule(guided)		
-		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			
-			if(bc%bc_markers(i,j,k) == 0) then	
-				
-				if (this%reactive_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_chemistry_in_gas_step)))	then
-					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_chem%cells(i,j,k) * this%time_step
-					do spec = 1,species_number
-						Y_prod(spec,i,j,k)	= Y_prod(spec,i,j,k)	+ Y_prod_chem%pr(spec)%cells(i,j,k) * this%time_step
-					end do		
-                end if
-                
-				if (this%heat_trans_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_heat_transfer_in_gas_step)))	then
-					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_heat%cells(i,j,k) * this%time_step
-                end if
-                
-				if (this%radiation_flag .and. &
-					(.not. (cabaret_use_effective_physical_sources .and. cabaret_include_radiation_in_gas_step))) then
-					E_f_prod(i,j,k) = E_f_prod(i,j,k) + &
-						this%E_f_prod_rad%s_ptr%cells(i,j,k) * this%time_step
-				end if
-                
- 				if (this%diffusion_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_diffusion_in_gas_step)))	then
-					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_diff%cells(i,j,k) * this%time_step
-					do spec = 1, species_number
-						Y_prod(spec,i,j,k)	= Y_prod(spec,i,j,k)	+ Y_prod_diff%pr(spec)%cells(i,j,k) * this%time_step
-					end do
-				end if
-
-				if (this%viscosity_flag .and. (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_viscosity_in_gas_step)))	then
-					E_f_prod(i,j,k) = E_f_prod(i,j,k) + E_f_prod_visc%cells(i,j,k) * this%time_step
-					do dim = 1, dimensions
-						v_prod(dim,i,j,k)	= v_prod(dim,i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) * this%time_step
-					end do
-                end if		
-                
-				! ************************* Energy release ******************
-				if (energy_output_flag == 1) then 
-					if(this%time <= energy_output_time) then
-						if(mesh%mesh(1,i,j,k) <= mesh%mesh(1,1,j,k) + energy_output_radii) then
-							E_f_prod(i,j,k)			= E_f_prod(i,j,k)	+ energy_source * 1.0e+10 * this%time_step *  rho%cells(i,j,k) !* cell_size(1) ! * 4.0_dp * Pi * mesh%mesh(1,i,j,k) * mesh%mesh(1,i,j,k)
-							energy_output_rho		= energy_output_rho	+ energy_source * 1.0e+10 * this%time_step *  rho%cells(i,j,k) * cell_size(1) * 4.0_dp * Pi  ! * mesh%mesh(1,i,j,k) * mesh%mesh(1,i,j,k)
-							energy_output			= energy_output		+ energy_source * 1.0e+10 * this%time_step
-						end if
-					else	
-						energy_output_flag = 2
-					end if
-				else
-					if (energy_output_flag == 2) then
-						print *, ' Energy input	: ', energy_output_rho
-						print *, ' Time	: ', this%time
-						print *, 'r_0 : ', mesh%mesh(1,1,j,k), ' r_f : ', energy_output_radii/cell_size(1)
-						stop
-						energy_output_flag = 0
-					end if				
-				end if
-				! ***********************************************************				
-				
-				! Legacy split-source fallback.  The FDS-compatible reduced acceleration is
-				! constant during this kick; update momentum and kinetic energy exactly.
-				if (.not. cabaret_use_effective_physical_sources) then
-					buoyancy_factor = (this%rho_0-rho%cells(i,j,k))/rho%cells(i,j,k)
-					velocity_dot_a = 0.0_dp
-					acceleration_squared = 0.0_dp
-					do dim = 1, dimensions
-						buoyancy_acceleration = buoyancy_factor*this%g(dim)
-						velocity_dot_a = velocity_dot_a+ &
-							v%pr(dim)%cells(i,j,k)*buoyancy_acceleration
-						acceleration_squared = acceleration_squared+buoyancy_acceleration**2
-						v_prod(dim,i,j,k) = v_prod(dim,i,j,k)+ &
-							rho%cells(i,j,k)*buoyancy_acceleration*this%time_step
-					end do
-					E_f_prod(i,j,k) = E_f_prod(i,j,k)+rho%cells(i,j,k)* &
-						(velocity_dot_a*this%time_step+0.5_dp*acceleration_squared*this%time_step**2)
-				end if
-
-				E_f%cells(i,j,k) = E_f%cells(i,j,k) + E_f_prod(i,j,k)/rho%cells(i,j,k)
-				
-				spec_summ = 0.0_dp
-				do spec = 1, species_number
-					Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod(spec,i,j,k)/rho%cells(i,j,k)                   
-					spec_summ = spec_summ + Y%pr(spec)%cells(i,j,k)
-                end do		
-				
+			do phase = 1, this%additional_particles_phases_number
+				E%cells(i,j,k) = E%cells(i,j,k) + &
+					this%E_f_prod_particles(phase)%s_ptr%cells(i,j,k)
+				rho%cells(i,j,k) = rho%cells(i,j,k) + &
+					this%rho_prod_particles(phase)%s_ptr%cells(i,j,k)
 				do dim = 1, dimensions
-					v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) + v_prod(dim,i,j,k) /rho%cells(i,j,k)
-                end do					
-                
-                if (this%additional_particles_phases_number /= 0 .and. &
-                    (.not. (cabaret_use_effective_physical_sources .and. cabaret_include_particles_in_gas_step))) then
-                    spec_summ = 0.0_dp
-					do particles_phase_counter = 1, this%additional_particles_phases_number
-						E_f%cells(i,j,k)	= E_f%cells(i,j,k) + E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)
-                        rho%cells(i,j,k)    = rho%cells(i,j,k) + rho_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)
-                        do dim = 1, dimensions
-                            v%pr(dim)%cells(i,j,k)	= v%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k)
-                        end do
-                        do spec = 1, species_number
-							Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
-                            spec_summ = spec_summ + Y%pr(spec)%cells(i,j,k)
-						end do	
-					end do		
-                end if                 
-                                
-				do spec = 1,species_number
-					Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dp) / spec_summ 
+					v%pr(dim)%cells(i,j,k) = v%pr(dim)%cells(i,j,k) + &
+						this%v_prod_particles(phase)%v_ptr%pr(dim)%cells(i,j,k)
 				end do
-                
-			end if	
-		end do	
+				do spec = 1, species_number
+					Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + &
+						this%Y_prod_particles(phase)%v_ptr%pr(spec)%cells(i,j,k)
+				end do
+			end do
+
+			mass_fraction_sum = 0.0_dp
+			do spec = 1, species_number
+				Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dp)
+				mass_fraction_sum = mass_fraction_sum + Y%pr(spec)%cells(i,j,k)
+			end do
+			do spec = 1, species_number
+				Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k)/mass_fraction_sum
+			end do
 		end do
 		end do
-		!$omp end do nowait
-		!$omp end parallel	
-				
-        end associate
+		end do
+		!$omp end parallel do
+		end associate
 	end subroutine apply_split_sources
 
+	!> Store reconstructed face variables as the old flow state for the next step.
 
 	subroutine cache_flow_state_for_next_step(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -3491,6 +2699,8 @@ contains
 	! modify.  They intentionally do not alter the mathematical algorithm except
 	! for the explicitly marked consistency fixes in the face-species treatment.
 
+	!> Cache the complete beginning-of-step cell state.
+
 	subroutine cache_conservative_state(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -3513,6 +2723,8 @@ contains
 		end do
 	end subroutine cache_conservative_state
 
+	!> Exchange all conservative/thermodynamic cell halo fields required by CABARET.
+
 	subroutine exchange_conservative_state(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -3526,12 +2738,16 @@ contains
 		call this%mpi_support%exchange_conservative_vector_field(this%v%v_ptr)
 	end subroutine exchange_conservative_state
 
+	!> Exchange reconstructed face pressure and density.
+
 	subroutine exchange_face_pressure_density(this)
 		class(cabaret_solver), intent(inout) :: this
 
 		call this%mpi_support%exchange_flow_scalar_field(this%rho_f_new%s_ptr)
 		call this%mpi_support%exchange_flow_scalar_field(this%p_f_new%s_ptr)
 	end subroutine exchange_face_pressure_density
+
+	!> Exchange reconstructed face pressure, density, velocity and composition.
 
 	subroutine exchange_face_primitive_state(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -3541,6 +2757,8 @@ contains
 		call this%mpi_support%exchange_flow_vector_field(this%v_f_new%v_ptr)
 		call this%mpi_support%exchange_flow_vector_field(this%Y_f_new%v_ptr)
 	end subroutine exchange_face_primitive_state
+
+	!> Exchange all face fields needed by the conservative corrector.
 
 	subroutine exchange_face_thermodynamic_state(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -3552,6 +2770,8 @@ contains
 		call this%mpi_support%exchange_flow_vector_field(this%Y_f_new%v_ptr)
 	end subroutine exchange_face_thermodynamic_state
 
+	!> Clear face reconstruction output fields before characteristic extrapolation.
+
 	subroutine zero_new_flow_state(this)
 		class(cabaret_solver), intent(inout) :: this
 
@@ -3562,9 +2782,9 @@ contains
 
 		this%p_f_new%s_ptr%cells   = 0.0_dp
 		this%rho_f_new%s_ptr%cells = 0.0_dp
-		if (allocated(this%s_material_f_new)) this%s_material_f_new = 0.0_dp
-		if (allocated(this%psi_material_f_new)) this%psi_material_f_new = 0.0_dp
-		if (allocated(this%ksi_sensible_material_f_new)) this%ksi_sensible_material_f_new = 0.0_dp
+		if (allocated(this%material_temperature_f)) this%material_temperature_f = 0.0_dp
+		if (allocated(this%material_molar_volume_f)) this%material_molar_volume_f = 0.0_dp
+		if (allocated(this%material_sensible_energy_f)) this%material_sensible_energy_f = 0.0_dp
 
 		do dim = 1, dimensions
 			this%v_f_new%v_ptr%pr(dim)%cells = 0.0_dp
@@ -3576,44 +2796,39 @@ contains
 	end subroutine zero_new_flow_state
 
 
-	subroutine initialize_material_entropy_faces(this)
+	!> Initialize contact-family temperature, molar-volume and sensible-energy coordinates.
+	!> Initialize contact-family temperature, molar volume and sensible energy.
+	subroutine initialize_material_contact_faces(this)
 		class(cabaret_solver), intent(inout) :: this
 
 		integer :: dim, dim1, i, j, k, dimensions
-		integer, dimension(3,2) :: flow_inner_loop, loop
-		real(dp) :: T_face, m_face, ksi_face
+		integer, dimension(3,2) :: face_inner, loop
+		real(dp) :: T_face, molar_mass
 
-		if (.not. cabaret_use_entropy_locked_contact_density) return
+		dimensions = this%domain%get_domain_dimensions()
+		face_inner = this%domain%get_local_inner_faces_bounds()
 
-		dimensions      = this%domain%get_domain_dimensions()
-		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-
-		associate( p_f => this%p_f, rho_f => this%rho_f, Y_f => this%Y_f, &
-		           s_f => this%s_material_f_new, psi_f => this%psi_material_f_new, &
-		           ksi_f => this%ksi_sensible_material_f_new )
-		!$omp parallel default(shared) private(dim,dim1,i,j,k,loop,T_face,m_face,ksi_face)
+		associate(p_face => this%p_f, rho_face => this%rho_f, Y_face => this%Y_f)
+		!$omp parallel default(shared) private(dim,dim1,i,j,k,loop,T_face,molar_mass)
 		do dim = 1, dimensions
-			loop = flow_inner_loop
+			loop = face_inner
 			do dim1 = 1, dimensions
-				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))
+				loop(dim1,2) = face_inner(dim1,2) - (1 - I_m(dim1,dim))
 			end do
 
 			!$omp do collapse(3) schedule(static)
 			do k = loop(3,1), loop(3,2)
 			do j = loop(2,1), loop(2,2)
 			do i = loop(1,1), loop(1,2)
-				T_face = this%thermo%thermo_ptr%temperature_from_pressure_density_Y(p_f(dim,i,j,k), rho_f(dim,i,j,k), Y_f(:,dim,i,j,k))
-				if (cabaret_use_temperature_contact_invariant) then
-					s_f(dim,i,j,k) = T_face
-				else
-					s_f(dim,i,j,k) = this%thermo%thermo_ptr%mixture_specific_entropy(T_face, &
-						p_f(dim,i,j,k), Y_f(:,dim,i,j,k), cabaret_entropy_p_ref)
-				end if
-				m_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_f(:,dim,i,j,k))
-				psi_f(dim,i,j,k) = m_face/rho_f(dim,i,j,k)
-				ksi_face = this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
-					T_face, Y_f(:,dim,i,j,k))
-				ksi_f(dim,i,j,k) = ksi_face
+				T_face = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
+					p_face(dim,i,j,k), rho_face(dim,i,j,k), Y_face(:,dim,i,j,k))
+				molar_mass = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions( &
+					Y_face(:,dim,i,j,k))
+				this%material_temperature_f(dim,i,j,k) = T_face
+				this%material_molar_volume_f(dim,i,j,k) = molar_mass/rho_face(dim,i,j,k)
+				this%material_sensible_energy_f(dim,i,j,k) = &
+					this%thermo%thermo_ptr%sensible_energy_parameter_from_temperature_Y( &
+						T_face, Y_face(:,dim,i,j,k))
 			end do
 			end do
 			end do
@@ -3621,445 +2836,188 @@ contains
 		end do
 		!$omp end parallel
 		end associate
-	end subroutine initialize_material_entropy_faces
+	end subroutine initialize_material_contact_faces
 
-
-	subroutine enforce_material_contact_density_from_entropy(this)
+	!> Close material-face density and enforce a local thermodynamic invariant domain.
+	!!
+	!! Baseline density is obtained from reconstructed (p,Y,T).  A selectively
+	!! reconstructed molar-volume state and a pressure-equilibrium-preserving
+	!! sensible-energy state may replace the baseline only inside the mixed part
+	!! of a material layer.  The final density is bounded by adjacent cell states.
+	subroutine close_material_contact_density(this)
 		class(cabaret_solver), intent(inout) :: this
 
-		integer :: dim, dim1, i, j, k, dimensions, spec, species_number
-		integer, dimension(3,2) :: flow_inner_loop, loop
-		integer :: il, jl, kl
-		integer :: temperature_guard_count, molar_volume_guard_count, psi_contact_count, density_guard_count
-		integer :: sensible_pep_candidate_count, sensible_pep_accepted_count
-		integer :: sensible_pep_reject_temperature_count, sensible_pep_reject_density_count
-		real(dp) :: m_left, m_right, molar_ratio, T_guess, T_entropy, T_used, T_guard
-		real(dp) :: T_left, T_right, T_ref, m_face
+		integer :: dimensions, species_number
+		integer :: dim, dim1, i, j, k, il, jl, kl, spec
+		integer, dimension(3,2) :: face_inner, loop
+		real(dp) :: M_left, M_right, M_min, M_max, M_span, M_face, M_margin, M_ratio
+		real(dp) :: T_left, T_right, T_guess, T_contact, T_reference
+		real(dp) :: psi_used, psi_candidate, T_candidate, T_candidate_limit
+		real(dp) :: psi_left, psi_right, psi_local_low, psi_local_high
+		real(dp) :: ksi_candidate, T_base, T_pep, psi_pep
+		real(dp) :: T_low, T_high, psi_T_low, psi_T_high
+		real(dp) :: rho_min, rho_max, rho_span, rho_tol, rho_low, rho_high
+		real(dp) :: psi_rho_low, psi_rho_high, psi_adm_low, psi_adm_high
+		real(dp) :: dpsi, theta_low, theta_high, theta, psi_test, rho_face_value
 		real(dp) :: molar_denom_left, molar_denom_right
-		real(dp) :: psi_left, psi_right, psi_min, psi_max, psi_span
-		real(dp) :: psi_clip_tol, psi_trigger_tol, psi_entropy, psi_used
-		real(dp) :: psi_lower_clip, psi_upper_clip, psi_lower_trigger, psi_upper_trigger
-		real(dp) :: T_consequence_limit
-		real(dp) :: psi_candidate, T_candidate, T_candidate_limit
-		real(dp) :: rho_face_guard, rho_left_loc, rho_right_loc, rho_min_loc, rho_max_loc
-		real(dp) :: rho_span_loc, rho_tol_loc, rho_lower_bound, rho_upper_bound
-		real(dp) :: m_min, m_max, m_span, m_margin
-		real(dp) :: ksi_candidate, T_pep, psi_pep, rho_pep, T_base, rho_base
-		real(dp) :: T_pep_limit, T_relax_limit
-		real(dp) :: psi_base, dpsi_pep, psi_adm_low, psi_adm_high, psi_test
-		real(dp) :: T_lower_bound, T_upper_bound, psi_T_low, psi_T_high
-		real(dp) :: psi_rho_low, psi_rho_high, psi_loc_low, psi_loc_high
-		real(dp) :: theta_low_adm, theta_high_adm
-		real(dp) :: p_left_loc, p_right_loc, u_left_loc, u_right_loc
-		real(dp) :: c_left_loc, c_right_loc, p_jump_tol, u_jump_tol
-		real(dp) :: theta_pep
-		logical :: apply_entropy_lock, apply_temperature_guard, apply_molar_volume_guard
-		logical :: use_direct_psi_contact_density, direct_psi_candidate_valid
-		logical :: apply_density_guard
-		logical :: strong_guard_contact, temperature_consequence, face_is_genuinely_mixed
-		logical :: use_sensible_pep_contact, pressure_smooth, velocity_smooth
-		logical :: sensible_pep_candidate_valid, reject_by_temperature, reject_by_density
 		real(dp), dimension(:), allocatable :: Y_face
+		logical :: mixed_face, direct_psi_valid
 
-		if (.not. cabaret_use_entropy_locked_contact_density) return
+		dimensions = this%domain%get_domain_dimensions()
+		species_number = this%chem%chem_ptr%species_number
+		face_inner = this%domain%get_local_inner_faces_bounds()
 
-		dimensions      = this%domain%get_domain_dimensions()
-		species_number  = this%chem%chem_ptr%species_number
-		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-		temperature_guard_count   = 0
-		molar_volume_guard_count = 0
-		psi_contact_count = 0
-		density_guard_count = 0
-		sensible_pep_candidate_count = 0
-		sensible_pep_accepted_count = 0
-		sensible_pep_reject_temperature_count = 0
-		sensible_pep_reject_density_count = 0
-
-		associate( rho_f_new => this%rho_f_new%s_ptr, &
-				   p_f_new   => this%p_f_new%s_ptr, &
-				   Y_f_new   => this%Y_f_new%v_ptr, &
-				   Y         => this%Y%v_ptr, &
-				   rho       => this%rho%s_ptr, &
-				   T         => this%T%s_ptr, &
-				   p         => this%p%s_ptr, &
-				   v         => this%v%v_ptr, &
-				   v_s       => this%v_s%s_ptr, &
-				   s_f       => this%s_material_f_new, &
-				   psi_f     => this%psi_material_f_new, &
-				   ksi_f     => this%ksi_sensible_material_f_new, &
-				   bc        => this%boundary%bc_ptr )
-
-		!$omp parallel default(shared) private(dim,dim1,i,j,k,loop,il,jl,kl,spec,Y_face, &
-		!$omp& m_left,m_right,molar_ratio,T_guess,T_entropy,T_used,T_guard,T_left,T_right,T_ref, &
-		!$omp& m_face,molar_denom_left,molar_denom_right,psi_left,psi_right,psi_min,psi_max, &
-		!$omp& psi_span,psi_clip_tol,psi_trigger_tol,psi_entropy,psi_used,psi_lower_clip, &
-		!$omp& psi_upper_clip,psi_lower_trigger,psi_upper_trigger,T_consequence_limit, &
-		!$omp& psi_candidate,T_candidate,T_candidate_limit,rho_face_guard,rho_left_loc,rho_right_loc, &
-		!$omp& rho_min_loc,rho_max_loc,rho_span_loc,rho_tol_loc,rho_lower_bound,rho_upper_bound, &
-		!$omp& m_min,m_max,m_span,m_margin,ksi_candidate,T_pep,psi_pep,rho_pep,T_base,rho_base, &
-		!$omp& T_pep_limit,T_relax_limit,psi_base,dpsi_pep,psi_adm_low,psi_adm_high,psi_test, &
-		!$omp& T_lower_bound,T_upper_bound,psi_T_low,psi_T_high,psi_rho_low,psi_rho_high, &
-		!$omp& psi_loc_low,psi_loc_high,theta_low_adm,theta_high_adm, &
-		!$omp& p_left_loc,p_right_loc,u_left_loc,u_right_loc,c_left_loc, &
-		!$omp& c_right_loc,p_jump_tol,u_jump_tol,theta_pep, &
-		!$omp& apply_entropy_lock,apply_temperature_guard,apply_molar_volume_guard, &
-		!$omp& strong_guard_contact,temperature_consequence,use_direct_psi_contact_density, &
-		!$omp& direct_psi_candidate_valid,apply_density_guard,face_is_genuinely_mixed,use_sensible_pep_contact, &
-		!$omp& pressure_smooth,velocity_smooth,sensible_pep_candidate_valid,reject_by_temperature,reject_by_density) &
-		!$omp& reduction(+:temperature_guard_count,molar_volume_guard_count,psi_contact_count,density_guard_count, &
-		!$omp& sensible_pep_candidate_count,sensible_pep_accepted_count, &
-		!$omp& sensible_pep_reject_temperature_count,sensible_pep_reject_density_count)
+		associate(rho_face => this%rho_f_new%s_ptr, p_face => this%p_f_new%s_ptr, &
+			Y_face_field => this%Y_f_new%v_ptr, Y => this%Y%v_ptr, rho => this%rho%s_ptr, &
+			T => this%T%s_ptr, bc => this%boundary%bc_ptr)
+		!$omp parallel default(shared) private(dim,dim1,i,j,k,il,jl,kl,spec,loop,Y_face, &
+		!$omp& M_left,M_right,M_min,M_max,M_span,M_face,M_margin,M_ratio,T_left,T_right, &
+		!$omp& T_guess,T_contact,T_reference,psi_used,psi_candidate,T_candidate,T_candidate_limit, &
+		!$omp& psi_left,psi_right,psi_local_low,psi_local_high,ksi_candidate,T_base,T_pep,psi_pep,T_low,T_high, &
+		!$omp& psi_T_low,psi_T_high,rho_min,rho_max,rho_span,rho_tol,rho_low, &
+		!$omp& rho_high,psi_rho_low,psi_rho_high,psi_adm_low,psi_adm_high,dpsi,theta_low,theta_high, &
+		!$omp& theta,psi_test,rho_face_value,molar_denom_left,molar_denom_right,mixed_face,direct_psi_valid)
 		allocate(Y_face(species_number))
+
 		do dim = 1, dimensions
-			loop = flow_inner_loop
+			loop = face_inner
 			do dim1 = 1, dimensions
-				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))
+				loop(dim1,2) = face_inner(dim1,2) - (1 - I_m(dim1,dim))
 			end do
 
 			!$omp do collapse(3) schedule(guided)
 			do k = loop(3,1), loop(3,2)
 			do j = loop(2,1), loop(2,2)
 			do i = loop(1,1), loop(1,2)
-				il = i - I_m(dim,1)
-				jl = j - I_m(dim,2)
-				kl = k - I_m(dim,3)
+				il = i-I_m(dim,1); jl = j-I_m(dim,2); kl = k-I_m(dim,3)
+				if (bc%bc_markers(i,j,k) /= 0 .or. bc%bc_markers(il,jl,kl) /= 0) cycle
 
-				if ((bc%bc_markers(i,j,k) == 0) .and. (bc%bc_markers(il,jl,kl) == 0)) then
-					molar_denom_left  = 0.0_dp
-					molar_denom_right = 0.0_dp
-					do spec = 1, species_number
-						molar_denom_left  = molar_denom_left  + &
-							Y%pr(spec)%cells(il,jl,kl)/this%thermo%thermo_ptr%molar_masses(spec)
-						molar_denom_right = molar_denom_right + &
-							Y%pr(spec)%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec)
-					end do
-					m_left  = 1.0_dp/molar_denom_left
-					m_right = 1.0_dp/molar_denom_right
-					m_min = min(m_left,m_right)
-					m_max = max(m_left,m_right)
-					molar_ratio = m_max/m_min
+				molar_denom_left = 0.0_dp
+				molar_denom_right = 0.0_dp
+				do spec = 1, species_number
+					molar_denom_left = molar_denom_left + &
+						Y%pr(spec)%cells(il,jl,kl)/this%thermo%thermo_ptr%molar_masses(spec)
+					molar_denom_right = molar_denom_right + &
+						Y%pr(spec)%cells(i,j,k)/this%thermo%thermo_ptr%molar_masses(spec)
+					Y_face(spec) = Y_face_field%pr(spec)%cells(dim,i,j,k)
+				end do
+				M_left = 1.0_dp/molar_denom_left
+				M_right = 1.0_dp/molar_denom_right
+				M_min = min(M_left,M_right); M_max = max(M_left,M_right)
+				M_ratio = M_max/M_min
+				if (M_ratio <= contact_reconstruction_molar_mass_ratio) cycle
 
-					apply_entropy_lock = cabaret_entropy_lock_all_interior_faces .or. &
-						(molar_ratio > cabaret_entropy_lock_molar_mass_ratio)
+				T_contact = this%material_temperature_f(dim,i,j,k)
+				if (T_contact <= 0.0_dp) error stop 'CABARET contact closure: non-positive material temperature'
+				M_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_face)
+				psi_used = r_gase_J*T_contact/p_face%cells(dim,i,j,k)
 
-					if (apply_entropy_lock) then
-						do spec = 1, species_number
-							Y_face(spec) = Y_f_new%pr(spec)%cells(dim,i,j,k)
-						end do
+				T_left = T%cells(il,jl,kl); T_right = T%cells(i,j,k)
+				T_guess = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
+					p_face%cells(dim,i,j,k),rho_face%cells(dim,i,j,k),Y_face)
+				T_reference = max(T_guess,T_left,T_right)
+				M_span = M_max-M_min
 
-						T_guess = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
-							p_f_new%cells(dim,i,j,k), rho_f_new%cells(dim,i,j,k), Y_face)
-						if (cabaret_use_temperature_contact_invariant) then
-							T_entropy = s_f(dim,i,j,k)
-							if (T_entropy <= 0.0_dp) then
-								write(*,*) 'CABARET temperature contact invariant: non-positive T at ', dim, i, j, k
-								write(*,*) '  T_face, p_f, rho_f = ', T_entropy, p_f_new%cells(dim,i,j,k), &
-									rho_f_new%cells(dim,i,j,k)
-								error stop 'CABARET temperature contact invariant: non-positive T'
-							end if
+				! Select direct CABARET molar volume only in the genuinely mixed layer.
+				M_margin = direct_psi_face_mixture_rel_tol*M_span
+				mixed_face = M_ratio > direct_psi_contact_molar_mass_ratio .and. &
+					M_span > 10.0_dp*tiny(1.0_dp)*M_max .and. &
+					M_face > M_min+M_margin .and. M_face < M_max-M_margin
+				psi_candidate = this%material_molar_volume_f(dim,i,j,k)
+				T_candidate = p_face%cells(dim,i,j,k)*psi_candidate/r_gase_J
+				T_candidate_limit = max(T_reference,T_contact)*(1.0_dp+direct_psi_temperature_rel_tol) + &
+					direct_psi_temperature_abs_tol
+				direct_psi_valid = mixed_face .and. psi_candidate > 0.0_dp .and. &
+					T_candidate <= T_candidate_limit
+				if (direct_psi_valid) psi_used = psi_candidate
+
+				! Parameter-free sensible-energy PEP projection onto the local
+				! temperature-density-molar-volume invariant domain.
+				mixed_face = M_span > 10.0_dp*tiny(1.0_dp)*M_max .and. &
+					M_face > M_min .and. M_face < M_max
+				if (mixed_face) then
+					ksi_candidate = this%material_sensible_energy_f(dim,i,j,k)
+					T_base = p_face%cells(dim,i,j,k)*psi_used/r_gase_J
+					T_pep = this%thermo%thermo_ptr%temperature_from_sensible_energy_parameter_Y( &
+						ksi_candidate,Y_face,T_base)
+					if (T_pep > 0.0_dp) then
+						psi_pep = r_gase_J*T_pep/p_face%cells(dim,i,j,k)
+					else
+						psi_pep = -1.0_dp
+					end if
+
+					T_low = min(T_left,T_right,T_base)
+					T_high = max(T_left,T_right,T_base)
+					psi_T_low = r_gase_J*T_low/p_face%cells(dim,i,j,k)
+					psi_T_high = r_gase_J*T_high/p_face%cells(dim,i,j,k)
+
+					rho_min = min(rho%cells(il,jl,kl),rho%cells(i,j,k))
+					rho_max = max(rho%cells(il,jl,kl),rho%cells(i,j,k))
+					rho_span = rho_max-rho_min
+					rho_tol = face_density_guard_abs_tol+face_density_guard_rel_tol*rho_span
+					rho_low = rho_min-rho_tol; rho_high = rho_max+rho_tol
+					if (rho_low > 0.0_dp) then
+						psi_rho_low = M_face/rho_high
+						psi_rho_high = M_face/rho_low
+					else
+						psi_rho_low = huge(1.0_dp); psi_rho_high = -huge(1.0_dp)
+					end if
+
+					psi_left = M_left/rho%cells(il,jl,kl)
+					psi_right = M_right/rho%cells(i,j,k)
+					psi_local_low = min(psi_left,psi_right)
+					psi_local_high = max(psi_left,psi_right)
+					psi_adm_low = max(psi_T_low,psi_rho_low,psi_local_low)
+					psi_adm_high = min(psi_T_high,psi_rho_high,psi_local_high)
+
+					dpsi = psi_pep-psi_used
+					theta_low = 0.0_dp; theta_high = 1.0_dp
+					if (psi_pep > 0.0_dp .and. psi_adm_low <= psi_adm_high .and. &
+						abs(dpsi) > 10.0_dp*tiny(1.0_dp)*max(abs(psi_used),abs(psi_pep))) then
+						if (dpsi > 0.0_dp) then
+							theta_low = max(theta_low,(psi_adm_low-psi_used)/dpsi)
+							theta_high = min(theta_high,(psi_adm_high-psi_used)/dpsi)
 						else
-							T_entropy = this%thermo%thermo_ptr%temperature_from_entropy_pressure_Y( &
-								s_f(dim,i,j,k), p_f_new%cells(dim,i,j,k), Y_face, T_guess, &
-								cabaret_entropy_temperature_bracket_low, &
-								cabaret_entropy_temperature_bracket_high, cabaret_entropy_p_ref)
+							theta_low = max(theta_low,(psi_adm_high-psi_used)/dpsi)
+							theta_high = min(theta_high,(psi_adm_low-psi_used)/dpsi)
 						end if
-
-						T_used = T_entropy
-						apply_temperature_guard = .false.
-						T_left  = T%cells(il,jl,kl)
-						T_right = T%cells(i,j,k)
-						T_ref   = max(T_guess, T_left, T_right)
-						if (cabaret_use_entropy_lock_temperature_guard) then
-							T_guard = T_ref*cabaret_entropy_lock_temperature_guard_ratio + &
-								cabaret_entropy_lock_temperature_guard_abs
-							apply_temperature_guard = (T_entropy > T_guard)
-							if (apply_temperature_guard) then
-								T_used = T_guard
-								temperature_guard_count = temperature_guard_count + 1
-							end if
+						theta_low = max(0.0_dp,theta_low); theta_high = min(1.0_dp,theta_high)
+						if (theta_high >= theta_low .and. theta_high > 0.0_dp) then
+							theta = theta_high
+							psi_test = psi_used+theta*dpsi
+							if (psi_test >= psi_adm_low .and. psi_test <= psi_adm_high) psi_used = psi_test
 						end if
-
-						m_face = this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_face)
-						psi_used = r_gase_J*T_used/p_f_new%cells(dim,i,j,k)
-
-						apply_molar_volume_guard = .false.
-						strong_guard_contact = .false.
-						psi_left = 0.0_dp
-						psi_right = 0.0_dp
-						psi_lower_clip = 0.0_dp
-						psi_upper_clip = huge(1.0_dp)
-						psi_lower_trigger = 0.0_dp
-						psi_upper_trigger = huge(1.0_dp)
-						if (cabaret_use_entropy_lock_molar_volume_guard) then
-							strong_guard_contact = cabaret_entropy_lock_all_interior_faces .or. &
-								(molar_ratio > cabaret_entropy_lock_molar_volume_guard_molar_mass_ratio)
-
-							if (strong_guard_contact) then
-								psi_left  = m_left/rho%cells(il,jl,kl)
-								psi_right = m_right/rho%cells(i,j,k)
-								psi_min   = min(psi_left,psi_right)
-								psi_max   = max(max(psi_left,psi_right), psi_min)
-								psi_span  = psi_max - psi_min
-								psi_clip_tol = cabaret_entropy_lock_molar_volume_guard_clip_abs_tol + &
-									cabaret_entropy_lock_molar_volume_guard_clip_rel_tol*psi_span
-								psi_trigger_tol = cabaret_entropy_lock_molar_volume_guard_trigger_abs_tol + &
-									cabaret_entropy_lock_molar_volume_guard_trigger_rel_tol*psi_span
-								psi_lower_clip    = psi_min - psi_clip_tol
-								psi_upper_clip    = max(psi_lower_clip, psi_max + psi_clip_tol)
-								psi_lower_trigger = psi_min - psi_trigger_tol
-								psi_upper_trigger = max(psi_lower_trigger, psi_max + psi_trigger_tol)
-								psi_entropy = psi_used
-
-								T_consequence_limit = T_ref*(1.0_dp + &
-									cabaret_entropy_lock_molar_volume_guard_T_ratio) + &
-									cabaret_entropy_lock_molar_volume_guard_T_abs
-								temperature_consequence = (T_entropy > T_consequence_limit)
-
-								if (psi_entropy <= 0.0_dp) then
-									write(*,*) 'CABARET strict molar-volume guard: invalid psi at ', dim, i, j, k
-									write(*,*) '  psi_entropy, T_used, p_f = ', &
-										psi_entropy, T_used, p_f_new%cells(dim,i,j,k)
-									error stop 'CABARET strict molar-volume guard: invalid psi'
-								end if
-
-								if (temperature_consequence .and. (psi_entropy > psi_upper_trigger)) then
-									psi_used = psi_upper_clip
-									apply_molar_volume_guard = .true.
-								else if ((.not. cabaret_entropy_lock_molar_volume_guard_upper_only) .and. &
-									temperature_consequence .and. (psi_entropy < psi_lower_trigger)) then
-									psi_used = psi_lower_clip
-									apply_molar_volume_guard = .true.
-								end if
-
-								if (apply_molar_volume_guard) then
-									molar_volume_guard_count = molar_volume_guard_count + 1
-								end if
-							end if
-						end if
-
-						! Selective material-psi candidate.  It is not a replacement for the
-						! entropy lock.  It is accepted only inside the mixed part of a strong
-						! material contact; pure-side faces keep the guarded entropy closure.
-						use_direct_psi_contact_density = cabaret_use_material_molar_volume_contact_density .and. &
-							allocated(this%psi_material_f_new) .and. (psi_f(dim,i,j,k) > 0.0_dp)
-						direct_psi_candidate_valid = .false.
-						if (use_direct_psi_contact_density) then
-							psi_candidate = psi_f(dim,i,j,k)
-							T_candidate = p_f_new%cells(dim,i,j,k)*psi_candidate/r_gase_J
-							m_span = m_max - m_min
-							m_margin = cabaret_material_molar_volume_face_mixture_rel_tol*m_span
-							face_is_genuinely_mixed = (molar_ratio > &
-								cabaret_material_molar_volume_coupling_molar_mass_ratio) .and. &
-								(m_span > 10.0_dp*tiny(1.0_dp)*m_max) .and. &
-								(m_face > m_min + m_margin) .and. (m_face < m_max - m_margin)
-
-							T_candidate_limit = max(T_ref, T_used)*(1.0_dp + &
-								cabaret_material_molar_volume_direct_T_ratio) + &
-								cabaret_material_molar_volume_direct_T_abs
-							direct_psi_candidate_valid = face_is_genuinely_mixed .and. &
-								(T_candidate <= T_candidate_limit)
-							if (strong_guard_contact) then
-								direct_psi_candidate_valid = direct_psi_candidate_valid .and. &
-									(psi_candidate >= psi_lower_clip) .and. (psi_candidate <= psi_upper_clip)
-							end if
-
-							if (direct_psi_candidate_valid) then
-								psi_used = psi_candidate
-								psi_contact_count = psi_contact_count + 1
-							end if
-						end if
-
-
-						! Relaxed sensible-energy PEP contact projection.  The baseline
-						! state remains the entropy/direct-psi result currently stored in
-						! psi_used.  The sensible-energy PEP state defines only a target
-						! molar volume psi_pep.  The actual correction is a single convex
-						! coefficient theta chosen so that
-						!
-						!     psi(theta)=psi_base+theta*(psi_pep-psi_base)
-						!
-						! remains inside the local admissible interval imposed by
-						! temperature, density and molar-volume bounds.  This consolidates
-						! the previous engineering accept/reject gates into one CABARET-like
-						! nonlinear contact limiter.
-						use_sensible_pep_contact = cabaret_use_sensible_energy_pep_contact .and. &
-							cabaret_use_sensible_pep_admissible_projection .and. &
-							allocated(this%ksi_sensible_material_f_new)
-						sensible_pep_candidate_valid = .false.
-						if (use_sensible_pep_contact) then
-							m_span = m_max - m_min
-							! Parameter-free material-contact activation: apply the PEP projection
-							! only when the reconstructed face composition lies strictly inside
-							! the local two-cell molar-mass interval.  Acoustic safety is supplied
-							! by the invariant-domain projection below, not by tunable pressure
-							! or velocity jump thresholds.
-							face_is_genuinely_mixed = (m_span > 10.0_dp*tiny(1.0_dp)*m_max) .and. &
-								(m_face > m_min) .and. (m_face < m_max)
-							pressure_smooth = .true.
-							velocity_smooth = .true.
-
-							if (face_is_genuinely_mixed) then
-								sensible_pep_candidate_count = sensible_pep_candidate_count + 1
-								ksi_candidate = ksi_f(dim,i,j,k)
-								T_base = p_f_new%cells(dim,i,j,k)*psi_used/r_gase_J
-								psi_base = psi_used
-								T_pep = this%thermo%thermo_ptr%temperature_from_sensible_energy_parameter_Y( &
-									ksi_candidate, Y_face, T_base)
-								if (T_pep > 0.0_dp) then
-									psi_pep = r_gase_J*T_pep/p_f_new%cells(dim,i,j,k)
-									rho_pep = m_face/psi_pep
-								else
-									psi_pep = -1.0_dp
-									rho_pep = -1.0_dp
-								end if
-
-								! Temperature admissible interval, converted to an interval for psi.
-								T_lower_bound = min(min(T_left,T_right),T_base)*(1.0_dp - &
-									cabaret_sensible_pep_T_lower_ratio) - cabaret_sensible_pep_T_lower_abs
-								T_upper_bound = max(max(T_left,T_right),T_base)*(1.0_dp + &
-									cabaret_sensible_pep_T_ratio) + cabaret_sensible_pep_T_abs
-								if (T_lower_bound < 0.0_dp) T_lower_bound = 0.0_dp
-								psi_T_low  = r_gase_J*T_lower_bound/p_f_new%cells(dim,i,j,k)
-								psi_T_high = r_gase_J*T_upper_bound/p_f_new%cells(dim,i,j,k)
-
-								! Density admissible interval, also converted to an interval for psi.
-								rho_left_loc  = rho%cells(il,jl,kl)
-								rho_right_loc = rho%cells(i,j,k)
-								rho_min_loc   = min(rho_left_loc,rho_right_loc)
-								rho_max_loc   = max(rho_left_loc,rho_right_loc)
-								rho_span_loc  = rho_max_loc - rho_min_loc
-								rho_tol_loc   = cabaret_entropy_lock_face_density_guard_abs_tol + &
-									cabaret_entropy_lock_face_density_guard_rel_tol*rho_span_loc
-								rho_lower_bound = rho_min_loc - rho_tol_loc
-								rho_upper_bound = rho_max_loc + rho_tol_loc
-
-								if (rho_lower_bound > 0.0_dp) then
-									psi_rho_low  = m_face/rho_upper_bound
-									psi_rho_high = m_face/rho_lower_bound
-								else
-									psi_rho_low  = huge(1.0_dp)
-									psi_rho_high = -huge(1.0_dp)
-								end if
-
-								! Local molar-volume interval.  If the entropy-lock molar-volume
-								! guard already constructed a strong-contact interval, reuse it;
-								! otherwise build the interval directly from adjacent cell states.
-								if (strong_guard_contact) then
-									psi_loc_low  = psi_lower_clip
-									psi_loc_high = psi_upper_clip
-								else
-									psi_left = m_left/rho%cells(il,jl,kl)
-									psi_right = m_right/rho%cells(i,j,k)
-									psi_min = min(psi_left,psi_right)
-									psi_max = max(psi_left,psi_right)
-									psi_span = psi_max - psi_min
-									psi_clip_tol = cabaret_sensible_pep_psi_abs_tol + &
-										cabaret_sensible_pep_psi_rel_tol*psi_span
-									psi_loc_low  = psi_min - psi_clip_tol
-									psi_loc_high = psi_max + psi_clip_tol
-								end if
-
-								psi_adm_low  = max(max(psi_T_low,  psi_rho_low),  psi_loc_low)
-								psi_adm_high = min(min(psi_T_high, psi_rho_high), psi_loc_high)
-								reject_by_temperature = (T_pep <= 0.0_dp) .or. &
-									(T_pep < T_lower_bound) .or. (T_pep > T_upper_bound)
-								reject_by_density = (rho_lower_bound <= 0.0_dp) .or. &
-									(rho_pep < rho_lower_bound) .or. (rho_pep > rho_upper_bound)
-								if (reject_by_temperature) sensible_pep_reject_temperature_count = &
-									sensible_pep_reject_temperature_count + 1
-								if (reject_by_density) sensible_pep_reject_density_count = &
-									sensible_pep_reject_density_count + 1
-
-								dpsi_pep = psi_pep - psi_base
-								theta_low_adm = 0.0_dp
-								theta_high_adm = 1.0_dp
-
-								if ((psi_adm_low <= psi_adm_high) .and. (psi_pep > 0.0_dp) .and. &
-									(abs(dpsi_pep) > 10.0_dp*tiny(1.0_dp)*max(abs(psi_base),abs(psi_pep)))) then
-									if (dpsi_pep > 0.0_dp) then
-										theta_low_adm  = max(theta_low_adm,  (psi_adm_low  - psi_base)/dpsi_pep)
-										theta_high_adm = min(theta_high_adm, (psi_adm_high - psi_base)/dpsi_pep)
-									else
-										theta_low_adm  = max(theta_low_adm,  (psi_adm_high - psi_base)/dpsi_pep)
-										theta_high_adm = min(theta_high_adm, (psi_adm_low  - psi_base)/dpsi_pep)
-									end if
-									theta_low_adm  = max(0.0_dp, theta_low_adm)
-									theta_high_adm = min(1.0_dp, theta_high_adm)
-									if ((theta_high_adm >= theta_low_adm) .and. (theta_high_adm > 0.0_dp)) then
-										theta_pep = theta_high_adm
-										psi_test = psi_base + theta_pep*dpsi_pep
-										if ((psi_test >= psi_adm_low) .and. (psi_test <= psi_adm_high)) then
-											psi_used = psi_test
-											sensible_pep_candidate_valid = .true.
-											sensible_pep_accepted_count = sensible_pep_accepted_count + 1
-										end if
-									end if
-								end if
-							end if
-						end if
-
-
-						! Final local face-density guard.  This prevents a face density
-						! generated by entropy/direct-psi closure from leaving the local
-						! two-cell density interval.  It changes only psi_used and therefore
-						! keeps p_f and Y_f untouched.
-						apply_density_guard = cabaret_use_entropy_lock_face_density_guard .and. &
-							(molar_ratio > cabaret_entropy_lock_face_density_guard_molar_mass_ratio)
-						if (apply_density_guard) then
-							rho_left_loc  = rho%cells(il,jl,kl)
-							rho_right_loc = rho%cells(i,j,k)
-							rho_min_loc   = min(rho_left_loc,rho_right_loc)
-							rho_max_loc   = max(rho_left_loc,rho_right_loc)
-							rho_span_loc  = rho_max_loc - rho_min_loc
-							rho_tol_loc   = cabaret_entropy_lock_face_density_guard_abs_tol + &
-								cabaret_entropy_lock_face_density_guard_rel_tol*rho_span_loc
-							rho_lower_bound = rho_min_loc - rho_tol_loc
-							rho_upper_bound = rho_max_loc + rho_tol_loc
-							if (rho_lower_bound > 0.0_dp) then
-								rho_face_guard = m_face/psi_used
-								if (rho_face_guard < rho_lower_bound) then
-									psi_used = m_face/rho_lower_bound
-									density_guard_count = density_guard_count + 1
-								else if (rho_face_guard > rho_upper_bound) then
-									psi_used = m_face/rho_upper_bound
-									density_guard_count = density_guard_count + 1
-								end if
-							end if
-						end if
-
-						rho_f_new%cells(dim,i,j,k) = m_face/psi_used
 					end if
 				end if
+
+				! Final density invariant-domain projection.
+				if (M_ratio > face_density_guard_molar_mass_ratio) then
+					rho_min = min(rho%cells(il,jl,kl),rho%cells(i,j,k))
+					rho_max = max(rho%cells(il,jl,kl),rho%cells(i,j,k))
+					rho_span = rho_max-rho_min
+					rho_tol = face_density_guard_abs_tol+face_density_guard_rel_tol*rho_span
+					rho_low = rho_min-rho_tol; rho_high = rho_max+rho_tol
+					if (rho_low > 0.0_dp) then
+						rho_face_value = M_face/psi_used
+						if (rho_face_value < rho_low) psi_used = M_face/rho_low
+						if (rho_face_value > rho_high) psi_used = M_face/rho_high
+					end if
+				end if
+				rho_face%cells(dim,i,j,k) = M_face/psi_used
 			end do
 			end do
 			end do
 			!$omp end do nowait
 		end do
+
 		deallocate(Y_face)
 		!$omp end parallel
 		end associate
 
-		if (cabaret_entropy_lock_temperature_guard_print_statistics .and. temperature_guard_count > 0) then
-			print *, 'CABARET entropy-lock temperature guard clipped faces:', temperature_guard_count
-		end if
-		if (cabaret_entropy_lock_molar_volume_guard_print_statistics .and. molar_volume_guard_count > 0) then
-			print *, 'CABARET entropy-lock molar-volume guard clipped faces:', molar_volume_guard_count
-		end if
-		if (cabaret_material_molar_volume_contact_print_statistics .and. psi_contact_count > 0) then
-			print *, 'CABARET selective direct material psi faces:', psi_contact_count
-		end if
-		if (cabaret_entropy_lock_face_density_guard_print_statistics .and. density_guard_count > 0) then
-			print *, 'CABARET entropy-lock face density guard clipped faces:', density_guard_count
-		end if
-		if (cabaret_sensible_pep_contact_print_statistics .and. sensible_pep_candidate_count > 0) then
-			print *, 'CABARET sensible-PEP candidates/accepted/rejected(T,rho):', &
-				sensible_pep_candidate_count, sensible_pep_accepted_count, &
-				sensible_pep_reject_temperature_count, sensible_pep_reject_density_count
-		end if
-
-		! rho_f_new has changed after the regular face exchange in finish_face_reconstruction().
 		call this%exchange_face_pressure_density()
-	end subroutine enforce_material_contact_density_from_entropy
+	end subroutine close_material_contact_density
+
+	!> Enforce non-negative face mass fractions with unit sum.
 
 	subroutine normalize_face_mass_fractions(this)
 		class(cabaret_solver), intent(inout) :: this
@@ -4115,7 +3073,8 @@ contains
 							end do
 						else
 							do spec = 1, species_number
-								this%Y_f_new%v_ptr%pr(spec)%cells(dim,i,j,k) = max(this%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)), 0.0_dp)
+								this%Y_f_new%v_ptr%pr(spec)%cells(dim,i,j,k) = max(this%Y%v_ptr%pr(spec)%cells(i-I_m(dim,1),j-I_m(dim,2), &
+									& k-I_m(dim,3)), 0.0_dp)
 								spec_summ = spec_summ + this%Y_f_new%v_ptr%pr(spec)%cells(dim,i,j,k)
 							end do
 						end if
@@ -4134,132 +3093,8 @@ contains
 	end subroutine normalize_face_mass_fractions
 
 
-	real(dp) function cell_length(this, dim) result(dx)
-		class(cabaret_solver), intent(in) :: this
-		integer, intent(in) :: dim
-		real(dp), dimension(3) :: cell_size
-
-		cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
-		if (dim >= 1 .and. dim <= size(cell_size) .and. cell_size(dim) > 0.0_dp) then
-			dx = cell_size(dim)
-		else
-			dx = cell_size(1)
-		end if
-	end function cell_length
-
-	logical function state_is_finite(this, value) result(ok)
-		class(cabaret_solver), intent(in) :: this
-		real(dp), intent(in) :: value
-
-		ok = (abs(value) < huge(1.0_dp))
-	end function state_is_finite
-
-	subroutine check_conservative_state(this, stage_name)
-		class(cabaret_solver), intent(in) :: this
-		character(len=*), intent(in) :: stage_name
-
-		integer :: i, j, k, spec, species_number
-		integer, dimension(3,2) :: cons_inner_loop
-		real(dp) :: y_sum, kinetic, e_internal
-
-		if (.not. cabaret_debug_checks) return
-
-		species_number  = this%chem%chem_ptr%species_number
-		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-
-		do k = cons_inner_loop(3,1), cons_inner_loop(3,2)
-		do j = cons_inner_loop(2,1), cons_inner_loop(2,2)
-		do i = cons_inner_loop(1,1), cons_inner_loop(1,2)
-			if (this%boundary%bc_ptr%bc_markers(i,j,k) == 0) then
-				if (this%rho%s_ptr%cells(i,j,k) <= 0.0_dp) then
-					write(*,*) 'CABARET state check: non-positive rho at ', trim(stage_name), i, j, k, this%rho%s_ptr%cells(i,j,k)
-				end if
-				if (this%p%s_ptr%cells(i,j,k) <= 0.0_dp) then
-					write(*,*) 'CABARET state check: non-positive p at ', trim(stage_name), i, j, k, this%p%s_ptr%cells(i,j,k)
-				end if
-				if (this%T%s_ptr%cells(i,j,k) <= 0.0_dp) then
-					write(*,*) 'CABARET state check: non-positive T at ', trim(stage_name), i, j, k, this%T%s_ptr%cells(i,j,k)
-				end if
-
-				y_sum = 0.0_dp
-				do spec = 1, species_number
-					y_sum = y_sum + this%Y%v_ptr%pr(spec)%cells(i,j,k)
-				end do
-				if (abs(y_sum - 1.0_dp) > 1.0e-8_dp) then
-					write(*,*) 'CABARET state check: sum(Y) /= 1 at ', trim(stage_name), i, j, k, y_sum
-				end if
-
-				kinetic = 0.0_dp
-				! The loop over velocity components is intentionally written explicitly through size guards.
-				if (this%domain%get_domain_dimensions() >= 1) kinetic = kinetic + 0.5_dp*this%v%v_ptr%pr(1)%cells(i,j,k)**2
-				if (this%domain%get_domain_dimensions() >= 2) kinetic = kinetic + 0.5_dp*this%v%v_ptr%pr(2)%cells(i,j,k)**2
-				if (this%domain%get_domain_dimensions() >= 3) kinetic = kinetic + 0.5_dp*this%v%v_ptr%pr(3)%cells(i,j,k)**2
-				e_internal = this%E_f%s_ptr%cells(i,j,k) - kinetic
-				if (e_internal <= 0.0_dp) then
-					write(*,*) 'CABARET state check: non-positive internal energy at ', trim(stage_name), i, j, k, e_internal
-				end if
-			end if
-		end do
-		end do
-		end do
-	end subroutine check_conservative_state
-
-	subroutine check_face_state(this, stage_name)
-		class(cabaret_solver), intent(in) :: this
-		character(len=*), intent(in) :: stage_name
-
-		integer :: i, j, k, dim, dim1, spec, dimensions, species_number
-		integer, dimension(3,2) :: flow_inner_loop, loop
-		real(dp) :: y_sum, kinetic, e_internal
-
-		if (.not. cabaret_debug_checks) return
-
-		dimensions      = this%domain%get_domain_dimensions()
-		species_number  = this%chem%chem_ptr%species_number
-		flow_inner_loop = this%domain%get_local_inner_faces_bounds()
-
-		do dim = 1, dimensions
-			loop = flow_inner_loop
-			do dim1 = 1, dimensions
-				loop(dim1,2) = flow_inner_loop(dim1,2) - (1 - I_m(dim1,dim))
-			end do
-
-			do k = loop(3,1), loop(3,2)
-			do j = loop(2,1), loop(2,2)
-			do i = loop(1,1), loop(1,2)
-				if (this%rho_f_new%s_ptr%cells(dim,i,j,k) <= 0.0_dp) then
-					write(*,*) 'CABARET face check: non-positive rho_f at ', trim(stage_name), dim, i, j, k, this%rho_f_new%s_ptr%cells(dim,i,j,k)
-				end if
-				if (this%p_f_new%s_ptr%cells(dim,i,j,k) <= 0.0_dp) then
-					write(*,*) 'CABARET face check: non-positive p_f at ', trim(stage_name), dim, i, j, k, this%p_f_new%s_ptr%cells(dim,i,j,k)
-				end if
-				if (this%T_f_new%s_ptr%cells(dim,i,j,k) <= 0.0_dp) then
-					write(*,*) 'CABARET face check: non-positive T_f at ', trim(stage_name), dim, i, j, k, this%T_f_new%s_ptr%cells(dim,i,j,k)
-				end if
-
-				y_sum = 0.0_dp
-				do spec = 1, species_number
-					y_sum = y_sum + this%Y_f_new%v_ptr%pr(spec)%cells(dim,i,j,k)
-				end do
-				if (abs(y_sum - 1.0_dp) > 1.0e-8_dp) then
-					write(*,*) 'CABARET face check: sum(Y_f) /= 1 at ', trim(stage_name), dim, i, j, k, y_sum
-				end if
-
-				kinetic = 0.0_dp
-				do dim1 = 1, dimensions
-					kinetic = kinetic + 0.5_dp*this%v_f_new%v_ptr%pr(dim1)%cells(dim,i,j,k)**2
-				end do
-				e_internal = this%E_f_f_new%s_ptr%cells(dim,i,j,k) - kinetic
-				if (e_internal <= 0.0_dp) then
-					write(*,*) 'CABARET face check: non-positive internal energy at ', trim(stage_name), dim, i, j, k, e_internal
-				end if
-			end do
-			end do
-			end do
-		end do
-	end subroutine check_face_state
-
-	subroutine apply_boundary_conditions_flow(this, dim,i,j,k, characteristic_speed, q_inv_corrected, r_inv_corrected, v_inv_corrected, G_half)
+	subroutine apply_boundary_conditions_flow(this, dim,i,j,k, characteristic_speed, q_inv_corrected, r_inv_corrected, &
+		& v_inv_corrected, G_half)
 
 		class(cabaret_solver)		,intent(inout)		:: this
 		integer						,intent(in)			:: i, j, k, dim
@@ -4480,6 +3315,8 @@ contains
 		end associate
 
 	end subroutine
+
+	!> Fill conservative ghost cells for wall, symmetry and open boundaries.
 
 	subroutine apply_boundary_conditions_main(this)
 
@@ -4720,6 +3557,8 @@ contains
 		end associate
 	end subroutine
 	
+	!> Compute the global explicit time step from the multidimensional acoustic CFL constraint.
+	
 	subroutine calculate_time_step(this)
 
 #ifdef mpi
@@ -4728,7 +3567,7 @@ contains
 
 		class(cabaret_solver)	,intent(inout)	:: this
 		
-		real(dp)	:: local_min_dt, global_min_dt, delta_t_interm, velocity_value
+		real(dp)	:: local_min_dt, global_min_dt, delta_t_interm
 		real(dp)	:: directional_wave_sum
 		integer		:: dimensions
 		integer		:: mpi_communicator
@@ -4756,10 +3595,8 @@ contains
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
 			if(bc%bc_markers(i,j,k) == 0) then
-				velocity_value = 0.0_dp
 				directional_wave_sum = 0.0_dp
 				do dim = 1,dimensions
-					velocity_value = velocity_value + v%pr(dim)%cells(i,j,k)*v%pr(dim)%cells(i,j,k)
 					if (cell_size(dim) > 0.0_dp) then
 						directional_wave_sum = directional_wave_sum + (abs(v%pr(dim)%cells(i,j,k)) + v_s%cells(i,j,k)) / cell_size(dim)
 					end if
@@ -4767,11 +3604,8 @@ contains
 
 				if (directional_wave_sum > 0.0_dp) then
 					delta_t_interm = 1.0_dp / directional_wave_sum
-				else
-					delta_t_interm = minval(cell_size, mask = cell_size > 0.0_dp) / sqrt(velocity_value) + v_s%cells(i,j,k)
+					local_min_dt = min(local_min_dt, delta_t_interm)
 				end if
-
-				local_min_dt = min(local_min_dt, delta_t_interm)
 			end if
 		end do
 		end do
@@ -4783,16 +3617,15 @@ contains
 		global_min_dt = local_min_dt
 #endif
 
-		if (global_min_dt < huge(1.0_dp)) then
+		! If all local cells are inactive, retain the previously configured step.
+		if (global_min_dt < huge(1.0_dp)) &
 			this%time_step = this%courant_fraction * global_min_dt
-		else
-			! Keep the previous value if all local cells are inactive.
-			this%time_step = this%time_step
-		end if
 
 		end associate
 			
 	end subroutine calculate_time_step
+
+	!> Set the user-controlled Courant multiplier.
 
 	subroutine set_CFL_coefficient(this,coefficient)
 		class(cabaret_solver)	,intent(inout)	:: this
@@ -4802,12 +3635,16 @@ contains
 		
 	end subroutine
 	
+	!> Return the current time-step size.
+	
 	pure function get_time_step(this)
 		real(dp)						:: get_time_step
 		class(cabaret_solver)	,intent(in)		:: this
 
 		get_time_step = this%time_step
 	end function
+
+	!> Return the current simulation time.
 
 	pure function get_time(this)
 		real(dp)						:: get_time
@@ -4816,272 +3653,4 @@ contains
 		get_time = this%time
 	end function
 
-	!subroutine check_symmetry(this)
- !   
-	!	class(cabaret_solver)	,intent(inout)	:: this
-	!	
-	!	real(dp)	:: delta_t_interm, time_step(1), velocity_value
-	!	real(dp)	,dimension(:)	,allocatable	,save	:: time_step_array
- !
-	!	integer						:: dimensions, species_number
-	!	integer						:: processor_rank, processor_number, mpi_communicator
- !
-	!	integer		,dimension(3,2)	:: cons_inner_loop, cons_utter_loop, flow_inner_loop
- !       integer		,dimension(3,2)	:: loop
-	!	real(dp)	,dimension(3)	:: cell_size
-	!	integer	:: sign
-	!	integer :: i,j,k,dim,dim1,error, spec
- !
-	!	associate(	rho			=> this%rho%s_ptr		, &
-	!				p			=> this%p%s_ptr			, &
-	!				E_f			=> this%E_f%s_ptr		, &
-	!				v			=> this%v%v_ptr			, &
-	!				Y			=> this%Y%v_ptr			, &
-	!				
-	!				v_f			=> this%v_f		, &
-	!				rho_f		=> this%rho_f	, &
-	!				E_f_f		=> this%E_f_f	, &
-	!				e_i_f		=> this%e_i_f	, &
-	!				p_f			=> this%p_f		, &
-	!				v_s_f		=> this%v_s_f	, & 
-	!				Y_f			=> this%Y_f		, &
-	!				
-	!				p_f_new		=> this%p_f_new%s_ptr		, &	
-	!				rho_f_new	=> this%rho_f_new%s_ptr		, &
-	!				E_f_f_new	=> this%E_f_f_new%s_ptr		, &
-	!				Y_f_new		=> this%Y_f_new%v_ptr		, &
-	!				v_f_new		=> this%v_f_new%v_ptr		, &
- !
-	!				bc				=> this%boundary%bc_ptr		, &
-	!				mesh			=> this%mesh%mesh_ptr)
-	!	
-	!	dimensions			= this%domain%get_domain_dimensions()
-	!	species_number      = this%chem%chem_ptr%species_number
-	!	cons_inner_loop		= this%domain%get_local_inner_cells_bounds()
- !       cons_utter_loop		= this%domain%get_local_utter_cells_bounds()
- !       flow_inner_loop		= this%domain%get_local_inner_faces_bounds()
- !
-	!	cell_size			= mesh%get_cell_edges_length()					
-	!				
- !       !# central symmetry
- !       
-	!	do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-	!	do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-	!	do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-	!		if(bc%bc_markers(i,j,k) == 0) then
-	!			if (rho%cells(i,j,k) - rho%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1) /= 0 ) then
- !                   print *, "density asymmetry", i,j,k, rho%cells(i,j,k) - rho%cells(cons_inner_loop(1,2)-i,cons_inner_loop(2,2)-j,cons_inner_loop(3,2)-k)
- !                   pause
- !               end if
- !               if (E_f%cells(i,j,k) - E_f%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1) /= 0 ) then
- !                   print *, "energy asymmetry", i,j,k, E_f%cells(i,j,k) - E_f%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1)
- !                   pause
- !               end if
- !               do dim = 1, dimensions
-	!				if (abs(v%pr(dim)%cells(i,j,k)) - abs(v%pr(dim)%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1)) /= 0 ) then
-	!					print *, "velocity ",dim, " asymmetry", i,j,k, abs(v%pr(dim)%cells(i,j,k)) - abs(v%pr(dim)%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1))
- !                       pause
- !                   end if 
-	!			end do
- !               do spec = 1, species_number
-	!				if (Y%pr(spec)%cells(i,j,k) - Y%pr(spec)%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1) /= 0 ) then
-	!					print *, "Concentration ",spec, " asymmetry", i,j,k, Y%pr(spec)%cells(i,j,k) - Y%pr(spec)%cells(cons_inner_loop(1,2)-i+1,cons_inner_loop(2,2)-j+1,cons_inner_loop(3,2)-k+1) 
- !                       pause
- !                   end if 
-	!			end do            
-	!		end if
-	!	end do
-	!	end do
- !       end do
- !
-	!	do dim = 1,dimensions
- !
-	!		! Avoid looping in transverse direction in ghost cells
- !
-	!		loop(3,1) = cons_inner_loop(3,1)*I_m(dim,3) + cons_inner_loop(3,1)*(1 - I_m(dim,3))
-	!		loop(3,2) = cons_utter_loop(3,2)*I_m(dim,3) + cons_inner_loop(3,2)*(1 - I_m(dim,3))
- !
-	!		loop(2,1) = cons_inner_loop(2,1)*I_m(dim,2) + cons_inner_loop(2,1)*(1 - I_m(dim,2))
-	!		loop(2,2) = cons_utter_loop(2,2)*I_m(dim,2) + cons_inner_loop(2,2)*(1 - I_m(dim,2))	
- !
-	!		loop(1,1) = cons_inner_loop(1,1)*I_m(dim,1) + cons_inner_loop(1,1)*(1 - I_m(dim,1))
-	!		loop(1,2) = cons_utter_loop(1,2)*I_m(dim,1) + cons_inner_loop(1,2)*(1 - I_m(dim,1))						
- !
-	!		!$omp do collapse(3) schedule(guided)	
-	!		do k = loop(3,1),loop(3,2)
-	!		do j = loop(2,1),loop(2,2)
-	!		do i = loop(1,1),loop(1,2)
- !                   
-	!			if (rho_f_new%cells(dim,i,j,k) - rho_f_new%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1) /= 0 ) then
-	!				print *, "flow density asymmetry" 
- !                   print *, i,j,k, loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1
- !                   print *, rho_f_new%cells(dim,i,j,k) - rho_f_new%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1)
-	!				pause
-	!			end if
-	!			if (p_f_new%cells(dim,i,j,k) - p_f_new%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1) /= 0 ) then
-	!				print *, "flow pressure asymmetry", i,j,k, p_f_new%cells(dim,i,j,k) - p_f_new%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1)
-	!				pause
-	!			end if
-	!			do dim1 = 1, dimensions
-	!				if (abs(v_f_new%pr(dim)%cells(dim,i,j,k)) - abs(v_f_new%pr(dim)%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1)) /= 0 ) then
-	!					print *, "Flow velocity ",dim, " asymmetry", i,j,k, abs(v_f_new%pr(dim)%cells(dim,i,j,k)) - abs(v_f_new%pr(dim)%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1))
-	!					pause
-	!				end if 
-	!			end do
-	!			do spec = 1, species_number
-	!				if (Y_f_new%pr(spec)%cells(dim,i,j,k) - Y_f_new%pr(spec)%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1) /= 0 ) then
-	!					print *, "Flow concentration ",spec, " asymmetry", i,j,k, Y_f_new%pr(spec)%cells(dim,i,j,k) - Y_f_new%pr(spec)%cells(dim,loop(1,2)-i+1,loop(2,2)-j+1,loop(3,2)-k+1)
-	!					pause
-	!				end if 
- !               end do
- !
-	!		end do
-	!		end do
-	!		end do        
- !       
- !       end do
- !       
-	!	end associate    
- !   
- !   
- !   
- !   end subroutine
-    
-  !  subroutine if_stabilized(this,time,stabilized)
-		!class(cabaret_solver)	,intent(inout)	:: this
-		!real(dp)			,intent(in)			:: time    
-  !
-		!logical				,intent(out)	:: stabilized
-		!
-  !      logical						:: boundary 
-		!real(dp)	,dimension(3)	:: cell_size		
-		!
-		!real(dp)					:: max_val, left_val, right_val, flame_velocity, flame_surface_length, surface_factor
-		!real(dp)					:: a, b 
-		!real(dp)					:: time_diff, time_delay, time_stabilization
-		!real(dp), save			:: previous_flame_location = 0.0_dp, current_flame_location = 0.0_dp, farfield_velocity = 0.0_dp
-		!real(dp), save			:: previous_time = 0.0_dp, current_time = 0.0_dp
-  !      real(dp), save			:: av_flame_velocity = 0.0_dp, previous_av_flame_velocity = 0.0_dp
-		!real(dp), dimension(20),	save	:: flame_velocity_array = 0.0_dp
-		!integer		,save			:: correction = 0, counter = 0
-		!integer						:: flame_front_index
-		!character(len=200)			:: file_name
-		!
-		!
-		!integer	:: dimensions, species_number
-		!integer	,dimension(3,2)	:: cons_inner_loop
-  !
-		!real(dp)				:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
-		!integer					:: lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2 
-		!
-		!integer :: CO_index, H2O2_index, HO2_index
-		!integer	:: bound_number,sign
-		!integer :: i,j,k,plus,dim,dim1,spec, lp_index,lp_index2,lp_index3
-		!
-		!
-		!character(len=20)		:: boundary_type_name
-		!
-		!dimensions		= this%domain%get_domain_dimensions()
-		!species_number	= this%chem%chem_ptr%species_number
-		!
-		!cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-		!		
-		!cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-  !
-		!HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
-		!
-		!stabilized = .false.
-		!
-		!associate (	v				=> this%v%v_ptr				, &
-		!			T				=> this%T%s_ptr				, &
-		!			Y				=> this%Y%v_ptr				, &
-		!			bc				=> this%boundary%bc_ptr)
-	 !
-		!time_delay			= 1e-05_dp			
-		!time_diff			= 1e-04_dp
-		!time_stabilization	= 5e-06_dp			
-		!
-		!if ( time > (correction+1)*(time_diff) + time_delay) then			
-		!			
-		!	current_time = time
-		!
-		!	!# 1D front tracer
-		!	do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-		!	do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-		!		max_val = 0.0_dp
-		!		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
-		!			if(bc%bc_markers(i,j,k) == 0) then	
-		!			
-		!				!! Grad temp
-		!				!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
-		!				!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-		!				!	flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
-		!				!	flame_front_index = i
-		!				!end if
-		!			
-		!				! max HO2
-		!				if (abs(Y%pr(HO2_index)%cells(i,j,k)) > max_val) then
-		!					max_val = Y%pr(HO2_index)%cells(i,j,k)
-		!					flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
-		!					flame_front_index = i
-		!				end if	
-		!			end if
-		!		end do
-		!	end do
-		!	end do
-	 !
-		!	!left_val	= T%cells(flame_front_index,1,1) - T%cells(flame_front_index-2,1,1)
-		!	!right_val	= T%cells(flame_front_index+2,1,1) - T%cells(flame_front_index,1,1)
-		!	 
-		!	left_val	= Y%pr(HO2_index)%cells(flame_front_index-1,1,1)
-		!	right_val	= Y%pr(HO2_index)%cells(flame_front_index+1,1,1)				 
-		!	
-		!	a = (right_val + left_val - 2.0_dp * max_val)/2.0_dp/cell_size(1)**2
-		!	b = (max_val - left_val)/cell_size(1) - a*(2.0_dp*flame_front_coords(1) - cell_size(1))
-		!	
-		!	current_flame_location = -b/2.0_dp/a
-  !
-		!	if(correction == 0) then
-		!		previous_flame_location = current_flame_location
-  !          end if
-		!	
-  !          boundary = .false.
-  !          if(flame_front_index > cons_inner_loop(1,2) - 10) boundary = .true.
-  !          
-		!	if( (correction /= 0).and.(current_flame_location /=  previous_flame_location) )then 
-  !              
-		!		flame_velocity = (current_flame_location - previous_flame_location)/(current_time - previous_time)
-  !
-		!		previous_flame_location = current_flame_location
-		!		previous_time = current_time
-		!		
-  !              previous_av_flame_velocity = sum(flame_velocity_array)
-  !              
-  !              do i = 19, 1, -1
-		!			flame_velocity_array(i+1) = flame_velocity_array(i)  
-  !              end do
-  !              flame_velocity_array(1) = flame_velocity
-  !              
-  !              av_flame_velocity = sum(flame_velocity_array)
-  !              
-		!		if( (correction /= 0).and.(abs(av_flame_velocity - previous_av_flame_velocity) < 1e-03))then 
-		!			counter = counter + 1
-  !              end if
-  !              
-  !              write (flame_loc_unit,'(5E14.6)') time, current_flame_location, flame_velocity, av_flame_velocity, abs(av_flame_velocity - previous_av_flame_velocity)
-  !
-		!	end if
-  !
-		!	if ((counter > 10).or.boundary) then
-		!		stabilized = .true.
-		!	end if
-		!	
-		!	correction = correction + 1
-		!	
-		!end if	
-		!	
-		!end associate
-  !  end subroutine	
-    
-    
 end module
