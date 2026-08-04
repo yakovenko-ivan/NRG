@@ -1,1145 +1,1251 @@
 module cpm_solver_class
 
-	use kind_parameters
-	use global_data
-	use data_manager_class
-	use data_io_class	
-	use computational_domain_class
-	use computational_mesh_class
-	use boundary_conditions_class
-	use field_pointers
-	use table_approximated_real_gas_class
-	use chemical_kinetics_solver_class
-	use chemical_properties_class
-	use thermophysical_properties_class
-	
-	use viscosity_solver_class
-	use coarse_particles_method
-	use fourier_heat_transfer_solver_class
-	use fickean_diffusion_solver_class
-	
-	use lagrangian_particles_solver_class
-	use continuous_particles_solver_class	
-    
-	use mpi_communications_class
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
-    use benchmarking    
-	use solver_options_class
-	
-	implicit none
+    use kind_parameters
+    use global_data
+    use data_manager_class
+    use data_io_class
+    use computational_domain_class
+    use computational_mesh_class
+    use boundary_conditions_class
+    use field_pointers
+    use table_approximated_real_gas_class
+    use chemical_kinetics_solver_class
+    use chemical_properties_class
+    use viscosity_solver_class
+    use fourier_heat_transfer_solver_class
+    use fickean_diffusion_solver_class
+    use continuous_particles_solver_class, only: continuous_particles_solver, &
+        continuous_particles_solver_c
+    use mpi_communications_class
+    use benchmarking
+    use solver_options_class
 
-#ifdef OMP	
-	include "omp_lib.h"
-#endif
-	
-	private
-	public	:: cpm_solver, cpm_solver_c
+    implicit none
 
-	type(field_scalar_cons)	,target	:: E_f_int
-	type(field_vector_cons)	,target	:: v_int, Y_int
-	
-    real(dp)	,dimension(:)	,allocatable	:: flame_front_coords
-    integer	:: flame_loc_unit    
+    private
+    public :: cpm_solver, cpm_solver_c
 
-    type(timer)     :: cpm_timer
-    type(timer)     :: cpm_gas_dynamics_timer
-    type(timer)     :: cpm_eos_timer
-    type(timer)     :: cpm_chemistry_timer
-    type(timer)     :: cpm_diffusion_timer
-    type(timer)     :: cpm_heattransfer_timer
-    type(timer)     :: cpm_viscosity_timer
-    
-	type cpm_solver
-		logical			            :: diffusion_flag, viscosity_flag, heat_trans_flag, reactive_flag, perturbed_velocity, hydrodynamics_flag, multiphase_flag, CFL_condition_flag
-		real(dp)		            :: courant_fraction
-		real(dp)                    :: time, time_step, initial_time_step
-        real(dp),   dimension(3)    :: g
-		integer			            :: additional_particles_phases_number
-		
-		type(viscosity_solver)				:: visc_solver
-		type(coarse_particles)				:: gas_dynamics_solver
-		type(heat_transfer_solver)			:: heat_trans_solver
-		type(diffusion_solver)				:: diff_solver
-		type(chemical_kinetics_solver)		:: chem_kin_solver
-		type(table_approximated_real_gas)	:: state_eq
-		
-!		type(lagrangian_particles_solver)   , dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
-		type(continuous_particles_solver)   , dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
+    ! Data-manager fields owned by the merged coarse-particle solver.
+    type(field_scalar_cons), target :: cpm_density_interm
+    type(field_scalar_cons), target :: cpm_energy_interm
+    type(field_scalar_cons), target :: cpm_pressure_work
+    type(field_scalar_flow), target :: cpm_mass_flux
+    type(field_vector_cons), target :: cpm_velocity_interm
+    type(field_vector_cons), target :: cpm_species_interm
+    type(field_vector_cons), target :: cpm_velocity_increment
+    type(field_vector_flow), target :: cpm_face_velocity
 
-		type(computational_domain)					:: domain
-		type(mpi_communications)					:: mpi_support		
-		type(chemical_properties_pointer)			:: chem
-		type(thermophysical_properties_pointer)		:: thermo
-		type(computational_mesh_pointer)			:: mesh
-		type(boundary_conditions_pointer)			:: boundary
+    type(timer) :: cpm_timer
+    type(timer) :: cpm_gas_dynamics_timer
+    type(timer) :: cpm_eos_timer
+    type(timer) :: cpm_chemistry_timer
+    type(timer) :: cpm_diffusion_timer
+    type(timer) :: cpm_heattransfer_timer
+    type(timer) :: cpm_viscosity_timer
 
-		type(field_scalar_cons_pointer)	:: rho	, T				, p				, v_s			, mix_mol_mass
-		type(field_scalar_cons_pointer)	:: E_f	, E_f_prod_chem	, E_f_prod_heat	, E_f_prod_gd	, E_f_prod_visc	, E_f_prod_diff, E_f_int
-		type(field_vector_cons_pointer)	:: v	, v_prod_gd		, v_prod_sources, v_prod_visc	, v_prod_source	, v_int
-		type(field_vector_cons_pointer)	:: Y	, Y_prod_diff	, Y_prod_chem	, Y_int
-		type(field_vector_flow_pointer)	:: v_f
-		
-		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	::  rho_prod_particles, E_f_prod_particles
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  Y_prod_particles
-		
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	::  v_prod_particles			!# Continuum particles solver
-	contains
-		procedure	,private	:: apply_boundary_conditions_main
-		procedure	,private	:: apply_boundary_conditions_interm_v
-		procedure	,private	:: apply_boundary_conditions_interm_E_Y		
-		procedure	,private	:: calculate_interm_v
-		procedure	,private	:: calculate_interm_E_Y
-		procedure				:: solve_problem
-		procedure				:: calculate_time_step
-		procedure				:: set_CFL_coefficient	
-		procedure				:: get_CFL_coefficient		
-		procedure				:: get_time_step
-		procedure				:: get_time
-        procedure	,private	:: if_stabilized
-	end type
+    type :: cpm_solver
+        logical :: diffusion_flag = .false.
+        logical :: viscosity_flag = .false.
+        logical :: heat_trans_flag = .false.
+        logical :: reactive_flag = .false.
+        logical :: hydrodynamics_flag = .true.
+        logical :: CFL_condition_flag = .false.
 
-	interface	cpm_solver_c
-		module procedure	constructor
-	end interface
+        real(dp) :: courant_fraction = 0.5_dp
+        real(dp) :: time = 0.0_dp
+        real(dp) :: time_step = 0.0_dp
+        real(dp) :: initial_time_step = 0.0_dp
+        real(dp), dimension(3) :: g = 0.0_dp
+
+        integer :: additional_particles_phases_number = 0
+
+        type(viscosity_solver) :: visc_solver
+        type(heat_transfer_solver) :: heat_trans_solver
+        type(diffusion_solver) :: diff_solver
+        type(chemical_kinetics_solver) :: chem_kin_solver
+        type(table_approximated_real_gas) :: state_eq
+        type(continuous_particles_solver), dimension(:), allocatable :: particles_solver
+
+        type(computational_domain) :: domain
+        type(mpi_communications) :: mpi_support
+        type(chemical_properties_pointer) :: chem
+        type(computational_mesh_pointer) :: mesh
+        type(boundary_conditions_pointer) :: boundary
+
+        type(field_scalar_cons_pointer) :: rho
+        type(field_scalar_cons_pointer) :: rho_int
+        type(field_scalar_cons_pointer) :: T
+        type(field_scalar_cons_pointer) :: p
+        type(field_scalar_cons_pointer) :: v_s
+        type(field_scalar_cons_pointer) :: mix_mol_mass
+        type(field_scalar_cons_pointer) :: E_f
+        type(field_scalar_cons_pointer) :: E_f_int
+        type(field_scalar_cons_pointer) :: E_f_prod_gd
+        type(field_scalar_cons_pointer) :: E_f_prod_chem
+        type(field_scalar_cons_pointer) :: E_f_prod_heat
+        type(field_scalar_cons_pointer) :: E_f_prod_visc
+        type(field_scalar_cons_pointer) :: E_f_prod_diff
+
+        type(field_vector_cons_pointer) :: v
+        type(field_vector_cons_pointer) :: v_int
+        type(field_vector_cons_pointer) :: v_prod_gd
+        type(field_vector_cons_pointer) :: v_prod_visc
+        type(field_vector_cons_pointer) :: Y
+        type(field_vector_cons_pointer) :: Y_int
+        type(field_vector_cons_pointer) :: Y_prod_diff
+        type(field_vector_cons_pointer) :: Y_prod_chem
+
+        type(field_scalar_flow_pointer) :: m_flux
+        type(field_vector_flow_pointer) :: v_f
+
+        type(field_scalar_cons_pointer), dimension(:), allocatable :: E_f_prod_particles
+        type(field_vector_cons_pointer), dimension(:), allocatable :: Y_prod_particles
+        type(field_vector_cons_pointer), dimension(:), allocatable :: v_prod_particles
+
+    contains
+        procedure, private :: apply_boundary_conditions_main
+        procedure, private :: apply_boundary_conditions_interm_v
+        procedure, private :: apply_boundary_conditions_interm_E_Y
+        procedure, private :: calculate_pressure_velocity_increment
+        procedure, private :: calculate_interm_v
+        procedure, private :: calculate_pressure_work_increment
+        procedure, private :: calculate_interm_E_Y
+        procedure, private :: calculate_lagrangian_mass_flux
+        procedure, private :: apply_conservative_transport
+        procedure, private :: update_face_velocity
+        procedure, private :: geometry_power
+        procedure, private :: cell_metric
+        procedure, private :: face_metric
+        procedure :: solve_problem
+        procedure :: calculate_time_step
+        procedure :: set_CFL_coefficient
+        procedure :: get_CFL_coefficient
+        procedure :: get_time_step
+        procedure :: get_time
+    end type cpm_solver
+
+    interface cpm_solver_c
+        module procedure constructor
+    end interface cpm_solver_c
 
 contains
 
-	type(cpm_solver)	function constructor(manager,problem_data_io)
-		type(data_manager)						,intent(inout)	:: manager
-		type(data_io)							,intent(inout)	:: problem_data_io
+    type(cpm_solver) function constructor(manager, problem_data_io)
+        type(data_manager), intent(inout) :: manager
+        type(data_io), intent(inout) :: problem_data_io
 
-		real(dp)	:: calculation_time
-		
-		type(field_scalar_cons_pointer)	:: scal_c_ptr
-		type(field_vector_cons_pointer)	:: vect_c_ptr
-		type(field_tensor_cons_pointer)	:: tens_c_ptr		
+        type(field_scalar_cons_pointer) :: scal_c_ptr
+        type(field_vector_cons_pointer) :: vect_c_ptr
+        type(field_tensor_cons_pointer) :: tens_c_ptr
+        type(particles_phase) :: particles_params
 
-		type(field_scalar_flow_pointer)	:: scal_f_ptr		
-		type(field_vector_flow_pointer)	:: vect_f_ptr
-		type(field_tensor_flow_pointer)	:: tens_f_ptr	
-		
-		type(particles_phase)           :: particles_params
-        
-		integer				:: particles_phase_counter
-		character(len=40)	:: var_name
-		
-        integer	,dimension(3,2)	:: cons_allocation_bounds
+        real(dp) :: calculation_time
+        integer :: particles_phase_counter
+        character(len=40) :: var_name
 
-		constructor%diffusion_flag			= manager%solver_options%get_molecular_diffusion_flag()
-		constructor%viscosity_flag			= manager%solver_options%get_viscosity_flag()
-		constructor%heat_trans_flag			= manager%solver_options%get_heat_transfer_flag()
-		constructor%reactive_flag			= manager%solver_options%get_chemical_reaction_flag()
-		constructor%hydrodynamics_flag		= manager%solver_options%get_hydrodynamics_flag()
-		constructor%courant_fraction		= manager%solver_options%get_CFL_condition_coefficient()
-		constructor%CFL_condition_flag		= manager%solver_options%get_CFL_condition_flag()
-		constructor%perturbed_velocity		= .false.
-        
-        constructor%g                       = manager%solver_options%get_grav_acc()
+        constructor%diffusion_flag = manager%solver_options%get_molecular_diffusion_flag()
+        constructor%viscosity_flag = manager%solver_options%get_viscosity_flag()
+        constructor%heat_trans_flag = manager%solver_options%get_heat_transfer_flag()
+        constructor%reactive_flag = manager%solver_options%get_chemical_reaction_flag()
+        constructor%hydrodynamics_flag = manager%solver_options%get_hydrodynamics_flag()
+        constructor%courant_fraction = manager%solver_options%get_CFL_condition_coefficient()
+        constructor%CFL_condition_flag = manager%solver_options%get_CFL_condition_flag()
+        constructor%g = manager%solver_options%get_grav_acc()
+        constructor%additional_particles_phases_number = &
+            manager%solver_options%get_additional_particles_phases_number()
 
-		constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()
-		constructor%additional_particles_phases_number	= manager%solver_options%get_additional_particles_phases_number()
-		
-		
-		constructor%domain				= manager%domain
-		constructor%mpi_support			= manager%mpi_communications		
-		constructor%chem%chem_ptr		=> manager%chemistry%chem_ptr
-		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
-		constructor%boundary%bc_ptr	    => manager%boundary_conditions_pointer%bc_ptr
-		constructor%mesh%mesh_ptr		=> manager%computational_mesh_pointer%mesh_ptr
-        
-        cons_allocation_bounds		    = manager%domain%get_local_utter_cells_bounds()
+        if (.not.ieee_is_finite(constructor%courant_fraction) .or. &
+            constructor%courant_fraction <= 0.0_dp .or. constructor%courant_fraction > 1.0_dp) then
+            error stop 'CPM constructor: CFL coefficient must be in (0,1]'
+        end if
 
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'density')
-		constructor%rho%s_ptr					=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'temperature')
-		constructor%T%s_ptr					=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'pressure')
-		constructor%p%s_ptr					=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'full_energy')
-		constructor%E_f%s_ptr					=> scal_c_ptr%s_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity')
-		constructor%v%v_ptr						=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_mass_fraction')
-		constructor%Y%v_ptr						=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'mixture_molar_mass')
-		constructor%mix_mol_mass%s_ptr		=> scal_c_ptr%s_ptr	
-		
-		call manager%get_flow_field_pointer_by_name(scal_f_ptr,vect_f_ptr,tens_f_ptr,'velocity_flow')
-		constructor%v_f%v_ptr				=> vect_f_ptr%v_ptr		
+        constructor%domain = manager%domain
+        constructor%mpi_support = manager%mpi_communications
+        constructor%chem%chem_ptr => manager%chemistry%chem_ptr
+        constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
+        constructor%mesh%mesh_ptr => manager%computational_mesh_pointer%mesh_ptr
 
-		call manager%create_scalar_field(E_f_int	,'full_energy_interm'					,'E_f_int')
-		constructor%E_f_int%s_ptr				=> E_f_int
-		call manager%create_vector_field(v_int		,'velocity_interm'						,'v_int'	,'spatial')
-		constructor%v_int%v_ptr					=> v_int
-		call manager%create_vector_field(Y_int		,'specie_mass_fraction_interm'	,'Y_int'	,'chemical')
-		constructor%Y_int%v_ptr					=> Y_int
-		constructor%gas_dynamics_solver	= coarse_particles_c(manager, constructor%g)
-		
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_production_gas_dynamics')
-		constructor%v_prod_gd%v_ptr				=> vect_c_ptr%v_ptr
-        call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_production_sources')
-		constructor%v_prod_sources%v_ptr		=> vect_c_ptr%v_ptr
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_gas_dynamics')
-		constructor%E_f_prod_gd%s_ptr			=> scal_c_ptr%s_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, 'density')
+        constructor%rho%s_ptr => scal_c_ptr%s_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, 'temperature')
+        constructor%T%s_ptr => scal_c_ptr%s_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, 'pressure')
+        constructor%p%s_ptr => scal_c_ptr%s_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, 'full_energy')
+        constructor%E_f%s_ptr => scal_c_ptr%s_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, 'velocity')
+        constructor%v%v_ptr => vect_c_ptr%v_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+            'specie_mass_fraction')
+        constructor%Y%v_ptr => vect_c_ptr%v_ptr
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+            'mixture_molar_mass')
+        constructor%mix_mol_mass%s_ptr => scal_c_ptr%s_ptr
 
-		!constructor%sources	= sources_c(manager)
-		!call manager%get_field_pointer(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_production_sources')
-		!constructor%v_prod_source%v_ptr			=> vect_c_ptr%v_ptr
+        ! The former coarse_particles object created these fields indirectly.
+        ! They are now created once, before the EOS and source subsolvers are constructed.
+        call manager%create_scalar_field(cpm_density_interm, 'density_interm_cpm', 'rho_int_cpm')
+        constructor%rho_int%s_ptr => cpm_density_interm
+        call manager%create_scalar_field(cpm_energy_interm, 'full_energy_interm', 'E_f_int')
+        constructor%E_f_int%s_ptr => cpm_energy_interm
+        call manager%create_scalar_field(cpm_pressure_work, &
+            'energy_production_gas_dynamics', 'E_f_prod_gd')
+        constructor%E_f_prod_gd%s_ptr => cpm_pressure_work
+        call manager%create_scalar_field(cpm_mass_flux, 'mass_flux', 'm_flux')
+        constructor%m_flux%s_ptr => cpm_mass_flux
 
-		constructor%state_eq	=	table_approximated_real_gas_c(manager)
-		call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_of_sound')
-		constructor%v_s%s_ptr			=> scal_c_ptr%s_ptr		
+        call manager%create_vector_field(cpm_velocity_interm, 'velocity_interm', 'v_int', 'spatial')
+        constructor%v_int%v_ptr => cpm_velocity_interm
+        call manager%create_vector_field(cpm_species_interm, &
+            'specie_mass_fraction_interm', 'Y_int', 'chemical')
+        constructor%Y_int%v_ptr => cpm_species_interm
+        call manager%create_vector_field(cpm_velocity_increment, &
+            'velocity_production_gas_dynamics', 'v_prod_gd', 'spatial')
+        constructor%v_prod_gd%v_ptr => cpm_velocity_increment
+        call manager%create_vector_field(cpm_face_velocity, 'velocity_flow', 'v_f', 'spatial')
+        constructor%v_f%v_ptr => cpm_face_velocity
 
-		if(constructor%viscosity_flag) then
-			constructor%visc_solver			= viscosity_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_viscosity')
-			constructor%E_f_prod_visc%s_ptr			=> scal_c_ptr%s_ptr
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_production_viscosity')
-			constructor%v_prod_visc%v_ptr			=> vect_c_ptr%v_ptr
-		end if
+        constructor%state_eq = table_approximated_real_gas_c(manager)
+        call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+            'velocity_of_sound')
+        constructor%v_s%s_ptr => scal_c_ptr%s_ptr
 
-		if (constructor%heat_trans_flag) then
-			constructor%heat_trans_solver	= heat_transfer_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_heat_transfer')
-			constructor%E_f_prod_heat%s_ptr			=> scal_c_ptr%s_ptr
-		end if
+        if (constructor%viscosity_flag) then
+            constructor%visc_solver = viscosity_solver_c(manager)
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'energy_production_viscosity')
+            constructor%E_f_prod_visc%s_ptr => scal_c_ptr%s_ptr
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'velocity_production_viscosity')
+            constructor%v_prod_visc%v_ptr => vect_c_ptr%v_ptr
+        end if
 
-		if (constructor%diffusion_flag) then
-			constructor%diff_solver			= diffusion_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_diffusion')
-			constructor%E_f_prod_diff%s_ptr			=> scal_c_ptr%s_ptr
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_production_diffusion')
-			constructor%Y_prod_diff%v_ptr			=> vect_c_ptr%v_ptr
-		end if
+        if (constructor%heat_trans_flag) then
+            constructor%heat_trans_solver = heat_transfer_solver_c(manager)
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'energy_production_heat_transfer')
+            constructor%E_f_prod_heat%s_ptr => scal_c_ptr%s_ptr
+        end if
 
-		if(constructor%additional_particles_phases_number /= 0) then
-			allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
-			call constructor%particles_solver(1)%pre_constructor(constructor%additional_particles_phases_number)
-			allocate(constructor%rho_prod_particles(constructor%additional_particles_phases_number))
-			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
-			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
-			allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
-			do particles_phase_counter = 1, constructor%additional_particles_phases_number
-				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
-!				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Lagrangian particles solver
-				constructor%particles_solver(particles_phase_counter)	= continuous_particles_solver_c(manager, particles_params, particles_phase_counter)     !# Continuum particles solver
-				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
-				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr
-				write(var_name,'(A,I2.2)') 'density_production_particles', particles_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
-				constructor%rho_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr                
-				write(var_name,'(A,I2.2)') 'velocity_production_particles', particles_phase_counter						
-				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)						!# Continuous particles solver								
-				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_c_ptr%v_ptr						!# Continuous particles solver
-				write(var_name,'(A,I2.2)') 'concentration_production_particles', particles_phase_counter
-				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
-				constructor%Y_prod_particles(particles_phase_counter)%v_ptr		=> vect_c_ptr%v_ptr                
-			end do		
-		end if 	
-		
-		if (constructor%reactive_flag) then
-			constructor%chem_kin_solver		= chemical_kinetics_solver_c(manager)
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_chemistry')
-			constructor%E_f_prod_chem%s_ptr			=> scal_c_ptr%s_ptr
-			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'specie_production_chemistry')
-			constructor%Y_prod_chem%v_ptr			=> vect_c_ptr%v_ptr
-		end if		
-		
-		problem_data_io		= data_io_c(manager,calculation_time)
-		
-		if(problem_data_io%get_load_counter() /= 0) then
-			call problem_data_io%add_io_scalar_cons_field(constructor%E_f)
-		end if
-		
-		call problem_data_io%input_all_data()
-			
-		if(problem_data_io%get_load_counter() == 1) then
-			call problem_data_io%add_io_scalar_cons_field(constructor%E_f)
-		end if
-		
-		if(problem_data_io%get_load_counter() == 1) then
-			call constructor%state_eq%apply_state_equation_for_initial_conditions()
-			if(constructor%additional_particles_phases_number /= 0) then
-				do particles_phase_counter = 1, constructor%additional_particles_phases_number
-					call constructor%particles_solver(particles_phase_counter)%set_initial_distributions()
-				end do
-            end if
-			if(constructor%additional_particles_phases_number /= 0) then
-				do particles_phase_counter = 1, constructor%additional_particles_phases_number
-					call constructor%particles_solver(particles_phase_counter)%set_initial_distributions()
-				end do
-			end if            
-		else
-			call constructor%state_eq%apply_state_equation()
-			call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
-		end if		
-		
-		
-		call constructor%mpi_support%exchange_conservative_scalar_field(constructor%p%s_ptr)
-		call constructor%mpi_support%exchange_conservative_scalar_field(constructor%rho%s_ptr)
-		call constructor%mpi_support%exchange_conservative_scalar_field(constructor%T%s_ptr)
+        if (constructor%diffusion_flag) then
+            constructor%diff_solver = diffusion_solver_c(manager)
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'energy_production_diffusion')
+            constructor%E_f_prod_diff%s_ptr => scal_c_ptr%s_ptr
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'specie_production_diffusion')
+            constructor%Y_prod_diff%v_ptr => vect_c_ptr%v_ptr
+        end if
 
-		call constructor%mpi_support%exchange_conservative_vector_field(constructor%Y%v_ptr)
-		call constructor%mpi_support%exchange_conservative_vector_field(constructor%v%v_ptr)
+        if (constructor%reactive_flag) then
+            constructor%chem_kin_solver = chemical_kinetics_solver_c(manager)
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'energy_production_chemistry')
+            constructor%E_f_prod_chem%s_ptr => scal_c_ptr%s_ptr
+            call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
+                'specie_production_chemistry')
+            constructor%Y_prod_chem%v_ptr => vect_c_ptr%v_ptr
+        end if
 
-		call constructor%mpi_support%exchange_boundary_conditions_markers(constructor%boundary%bc_ptr)
-		call constructor%mpi_support%exchange_mesh(constructor%mesh%mesh_ptr)
+        if (constructor%additional_particles_phases_number > 0) then
+            allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
+            call constructor%particles_solver(1)%pre_constructor( &
+                constructor%additional_particles_phases_number)
+            allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
+            allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
+            allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
 
-		constructor%time		        =   calculation_time
-		constructor%time_step	        =   manager%solver_options%get_initial_time_step()
-		constructor%initial_time_step   =   manager%solver_options%get_initial_time_step()
+            do particles_phase_counter = 1, constructor%additional_particles_phases_number
+                particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
+                constructor%particles_solver(particles_phase_counter) = continuous_particles_solver_c( &
+                    manager, particles_params, particles_phase_counter)
 
-        allocate(flame_front_coords(cons_allocation_bounds(2,1):cons_allocation_bounds(2,2)))
-        
-        open(newunit = flame_loc_unit, file = 'av_flame_data.dat', status = 'replace', form = 'formatted')
-        
-    call manager%create_timer(cpm_timer                 ,'CPM solver time'                  , 'sol_t')
-    call manager%create_timer(cpm_gas_dynamics_timer    ,'CPM gas dynamics time'            , 'gd_t')
-    call manager%create_timer(cpm_eos_timer             ,'CPM eos solver time'              , 'eos_t')
-    call manager%create_timer(cpm_chemistry_timer       ,'CPM chemistry solver time'        , 'chem_t')
-    call manager%create_timer(cpm_diffusion_timer       ,'CPM diffusion solver time'        , 'diff_t')
-    call manager%create_timer(cpm_heattransfer_timer    ,'CPM heattransfer solver time'     , 'ht_t')
-    call manager%create_timer(cpm_viscosity_timer       ,'CPM viscosity solver time'        , 'visc_t')
-        
-	end function
+                write(var_name, '(A,I2.2)') 'energy_production_particles', particles_phase_counter
+                call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, var_name)
+                constructor%E_f_prod_particles(particles_phase_counter)%s_ptr => scal_c_ptr%s_ptr
 
-	subroutine solve_problem(this)
-		class(cpm_solver)	,intent(inout)	:: this
+                write(var_name, '(A,I2.2)') 'velocity_production_particles', particles_phase_counter
+                call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, var_name)
+                constructor%v_prod_particles(particles_phase_counter)%v_ptr => vect_c_ptr%v_ptr
 
-		integer	:: particles_phase_counter
-		integer	:: specie
-        
-        logical	:: stabilized
+                write(var_name, '(A,I2.2)') 'concentration_production_particles', &
+                    particles_phase_counter
+                call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, var_name)
+                constructor%Y_prod_particles(particles_phase_counter)%v_ptr => vect_c_ptr%v_ptr
+            end do
+        end if
+
+        problem_data_io = data_io_c(manager, calculation_time)
+        if (problem_data_io%get_load_counter() /= 0) then
+            call problem_data_io%add_io_scalar_cons_field(constructor%E_f)
+        end if
+        call problem_data_io%input_all_data()
+        if (problem_data_io%get_load_counter() == 1) then
+            call problem_data_io%add_io_scalar_cons_field(constructor%E_f)
+        end if
+
+        if (problem_data_io%get_load_counter() == 1) then
+            call constructor%state_eq%apply_state_equation_for_initial_conditions()
+            do particles_phase_counter = 1, constructor%additional_particles_phases_number
+                call constructor%particles_solver(particles_phase_counter)%set_initial_distributions()
+            end do
+        else
+            call constructor%state_eq%apply_state_equation()
+            call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
+        end if
+
+        call constructor%apply_boundary_conditions_main()
+        call constructor%mpi_support%exchange_conservative_scalar_field(constructor%p%s_ptr)
+        call constructor%mpi_support%exchange_conservative_scalar_field(constructor%rho%s_ptr)
+        call constructor%mpi_support%exchange_conservative_scalar_field(constructor%T%s_ptr)
+        call constructor%mpi_support%exchange_conservative_scalar_field(constructor%E_f%s_ptr)
+        call constructor%mpi_support%exchange_conservative_vector_field(constructor%Y%v_ptr)
+        call constructor%mpi_support%exchange_conservative_vector_field(constructor%v%v_ptr)
+        call constructor%mpi_support%exchange_boundary_conditions_markers(constructor%boundary%bc_ptr)
+        call constructor%mpi_support%exchange_mesh(constructor%mesh%mesh_ptr)
+
+        constructor%time = calculation_time
+        constructor%initial_time_step = manager%solver_options%get_initial_time_step()
+        constructor%time_step = constructor%initial_time_step
+        constructor%rho_int%s_ptr%cells = constructor%rho%s_ptr%cells
+        constructor%E_f_int%s_ptr%cells = constructor%E_f%s_ptr%cells
+        call constructor%update_face_velocity()
+
+        call manager%create_timer(cpm_timer, 'CPM solver time', 'sol_t')
+        call manager%create_timer(cpm_gas_dynamics_timer, 'CPM gas dynamics time', 'gd_t')
+        call manager%create_timer(cpm_eos_timer, 'CPM eos solver time', 'eos_t')
+        call manager%create_timer(cpm_chemistry_timer, 'CPM chemistry solver time', 'chem_t')
+        call manager%create_timer(cpm_diffusion_timer, 'CPM diffusion solver time', 'diff_t')
+        call manager%create_timer(cpm_heattransfer_timer, 'CPM heattransfer solver time', 'ht_t')
+        call manager%create_timer(cpm_viscosity_timer, 'CPM viscosity solver time', 'visc_t')
+    end function constructor
+
+
+    subroutine solve_problem(this)
+        class(cpm_solver), intent(inout) :: this
+        integer :: phase
 
         call cpm_timer%tic()
- 
-		this%time = this%time + this%time_step		
-		
-		call this%apply_boundary_conditions_main()
-		if(this%additional_particles_phases_number /= 0) then
-			do particles_phase_counter = 1, this%additional_particles_phases_number
-    			call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_main(this%time)
-            end do		
-        end if
-        
+        this%time = this%time + this%time_step
+
+        call this%apply_boundary_conditions_main()
+        call this%mpi_support%exchange_conservative_scalar_field(this%p%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%rho%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%T%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%E_f%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%Y%v_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%v%v_ptr)
+
+        do phase = 1, this%additional_particles_phases_number
+            call this%particles_solver(phase)%apply_boundary_conditions_main(this%time)
+        end do
+
         call cpm_viscosity_timer%tic()
-		if (this%viscosity_flag)		call this%visc_solver%solve_viscosity(this%time_step)
-		call cpm_viscosity_timer%toc(new_iter=.true.)
-        
+        if (this%viscosity_flag) call this%visc_solver%solve_viscosity(this%time_step)
+        call cpm_viscosity_timer%toc(new_iter=.true.)
+
         call cpm_heattransfer_timer%tic()
-		if (this%heat_trans_flag)		call this%heat_trans_solver%solve_heat_transfer(this%time_step)
-		call cpm_heattransfer_timer%toc(new_iter=.true.)
-        
+        if (this%heat_trans_flag) call this%heat_trans_solver%solve_heat_transfer(this%time_step)
+        call cpm_heattransfer_timer%toc(new_iter=.true.)
+
         call cpm_diffusion_timer%tic()
-		if (this%diffusion_flag)		call this%diff_solver%solve_diffusion(this%time_step)
-		call cpm_diffusion_timer%toc(new_iter=.true.)
-        
+        if (this%diffusion_flag) call this%diff_solver%solve_diffusion(this%time_step)
+        call cpm_diffusion_timer%toc(new_iter=.true.)
+
         call cpm_chemistry_timer%tic()
-		if (this%reactive_flag)			call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
-		call cpm_chemistry_timer%toc(new_iter=.true.)
-        
-        
-		!call this%sources%calculate_sources(this%time,this%time_step)
-		if (this%perturbed_velocity)	call this%gas_dynamics_solver%perturb_velocity_field(this%time_step)
-        
-		if(this%additional_particles_phases_number /= 0) then
-			do particles_phase_counter = 1, this%additional_particles_phases_number
-!				call this%particles_solver(particles_phase_counter)%particles_solve(this%time_step)				!# Lagrangian particles solver
-				call this%particles_solver(particles_phase_counter)%particles_euler_step_v_E(this%time_step)	!# Continuum particles solver
-				call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_interm_v_p()		!# Continuum particles solver
-				call this%particles_solver(particles_phase_counter)%particles_lagrange_step(this%time_step)		!# Continuum particles solver
-				call this%particles_solver(particles_phase_counter)%particles_final_step(this%time_step)		!# Continuum particles solver		
-			end do		
-		end if 		
-		
-        call cpm_gas_dynamics_timer%tic()
-		call this%gas_dynamics_solver%euler_step_v(this%time_step)
-        call cpm_gas_dynamics_timer%toc()
+        if (this%reactive_flag) call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
+        call cpm_chemistry_timer%toc(new_iter=.true.)
+
+        do phase = 1, this%additional_particles_phases_number
+            call this%particles_solver(phase)%particles_euler_step_v_E(this%time_step)
+            call this%particles_solver(phase)%apply_boundary_conditions_interm_v_p()
+            call this%particles_solver(phase)%particles_lagrange_step(this%time_step)
+            call this%particles_solver(phase)%particles_final_step(this%time_step)
+        end do
 
         call cpm_gas_dynamics_timer%tic()
-		call this%calculate_interm_v(this%time_step)
-		call this%apply_boundary_conditions_interm_v()
-
-		call this%gas_dynamics_solver%euler_step_E(this%time_step)
-		call this%calculate_interm_E_Y(this%time_step)
-		call this%apply_boundary_conditions_interm_E_Y()
-		
-		call this%gas_dynamics_solver%lagrange_step(this%time_step)
-		call this%gas_dynamics_solver%final_step(this%time_step)
+        call this%calculate_pressure_velocity_increment(this%time_step)
+        call this%calculate_interm_v(this%time_step)
+        call this%apply_boundary_conditions_interm_v()
+        call this%calculate_pressure_work_increment(this%time_step)
+        call this%calculate_interm_E_Y(this%time_step)
+        call this%apply_boundary_conditions_interm_E_Y()
+        call this%calculate_lagrangian_mass_flux(this%time_step)
+        call this%apply_conservative_transport()
         call cpm_gas_dynamics_timer%toc(new_iter=.true.)
 
         call cpm_eos_timer%tic()
-		call this%state_eq%apply_state_equation()
+        call this%state_eq%apply_state_equation()
         call cpm_eos_timer%toc(new_iter=.true.)
 
-		if (this%CFL_condition_flag) then
-			call this%calculate_time_step()
-		end if		
-		
+        call this%apply_boundary_conditions_main()
+        call this%update_face_velocity()
+        if (this%CFL_condition_flag) call this%calculate_time_step()
         call cpm_timer%toc(new_iter=.true.)
+    end subroutine solve_problem
 
-        !call this%if_stabilized(this%time, stabilized)
-        !if (stabilized) stop       
-        
-		!call this%state_eq%check_conservation_laws()
 
-	end subroutine
+    subroutine calculate_pressure_velocity_increment(this, time_step)
+        class(cpm_solver), intent(inout) :: this
+        real(dp), intent(in) :: time_step
 
-	subroutine calculate_interm_v(this,time_step)
-		class(cpm_solver)	,intent(inout)	:: this
-		real(dp)			,intent(in)		:: time_step
+        integer :: dimensions
+        integer :: i, j, k, dim
+        integer, dimension(3,2) :: loop
+        real(dp), dimension(3) :: dx
+        real(dp) :: pressure_gradient
 
-		integer	:: particles_phase_counter
-		integer	:: dimensions
-		integer	,dimension(3,2)	:: cons_inner_loop
+        dimensions = this%domain%get_domain_dimensions()
+        loop = this%domain%get_local_inner_cells_bounds()
+        dx = this%mesh%mesh_ptr%get_cell_edges_length()
+        call this%mpi_support%exchange_conservative_scalar_field(this%p%s_ptr)
 
-		integer	:: bound_number
-		integer :: i,j,k,dim,specie_number
-		
-		dimensions		= this%domain%get_domain_dimensions()
-		
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-				
-
-		associate (	rho					=> this%rho%s_ptr			    , &
-					v					=> this%v%v_ptr				    , &
-					v_int				=> this%v_int%v_ptr			    , &
-					v_prod_gd			=> this%v_prod_gd%v_ptr		    , &
-					v_prod_visc			=> this%v_prod_visc%v_ptr	    , &
-					v_prod_sources		=> this%v_prod_sources%v_ptr    , &
-					v_prod_particles	=> this%v_prod_particles	    , &
-					bc					=> this%boundary%bc_ptr)
-
-		!$omp parallel default(shared)  private(i,j,k,dim,particles_phase_counter) , &
-		!$omp& shared(this,cons_inner_loop,dimensions,time_step)
-        
-		!$omp do collapse(3) schedule(guided)
-
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then					
-					do dim = 1, dimensions
-						v_int%pr(dim)%cells(i,j,k) = v%pr(dim)%cells(i,j,k)
-						
-						if (this%hydrodynamics_flag)	v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_gd%pr(dim)%cells(i,j,k)! + v_prod_source%pr(dim)%cells(i,j,k)
-						
-						if (this%viscosity_flag)		v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_visc%pr(dim)%cells(i,j,k) / rho%cells(i,j,k) * time_step
-						
-                        if (this%perturbed_velocity)	v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_sources%pr(dim)%cells(i,j,k) / rho%cells(i,j,k) * time_step
-                        
-						if (this%additional_particles_phases_number /= 0) then
-							do particles_phase_counter = 1, this%additional_particles_phases_number
-								v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) * time_step																		!# Continuum particles solver
-!								v_int%pr(dim)%cells(i,j,k) =  v_int%pr(dim)%cells(i,j,k)	!+ 0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k) &
-																							!			+ v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * time_step		!# Lagrangian particles solver
-							end do		
-						end if						
-						
-						if (this%additional_particles_phases_number /= 0) then
-							do particles_phase_counter = 1, this%additional_particles_phases_number
-!								v_int%pr(dim)%cells(i,j,k) = v_int%pr(dim)%cells(i,j,k) + v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k)																		!# Continuum particles solver
-								v_int%pr(dim)%cells(i,j,k) =  v_int%pr(dim)%cells(i,j,k)	!+ 0.5_dp*(v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i,j,k) & 
-																							!			+ v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * time_step	!# Lagrangian particles solver
-							end do		
+        associate(p => this%p%s_ptr, rho => this%rho%s_ptr, dv => this%v_prod_gd%v_ptr, &
+                  bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,dim,pressure_gradient)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    do dim = 1, dimensions
+                        if (this%hydrodynamics_flag) then
+                            pressure_gradient = 0.5_dp * ( &
+                                p%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - &
+                                p%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / dx(dim)
+                            dv%pr(dim)%cells(i,j,k) = &
+                                time_step * (this%g(dim) - pressure_gradient / rho%cells(i,j,k))
+                        else
+                            dv%pr(dim)%cells(i,j,k) = 0.0_dp
                         end if
-					end do
-				end if
-			end do
-			end do
-			end do
-		!$omp end do nowait
-			
-		!$omp end parallel
-		end associate
-			
+                    end do
+                end do
+            end do
+        end do
+        !$omp end parallel do
+        end associate
+    end subroutine calculate_pressure_velocity_increment
 
 
-	end subroutine
-	
-	
-	subroutine calculate_interm_E_Y(this,time_step)
-		class(cpm_solver)	,intent(inout)	:: this
-		real(dp)			,intent(in)		:: time_step
-		
-		integer	:: particles_phase_counter
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
+    subroutine calculate_interm_v(this, time_step)
+        class(cpm_solver), intent(inout) :: this
+        real(dp), intent(in) :: time_step
 
-		integer	:: bound_number
-		integer :: i,j,k,dim,spec
+        integer :: dimensions, species_number
+        integer :: i, j, k, dim, spec, phase
+        integer, dimension(3,2) :: loop
+        real(dp), allocatable :: partial_density(:)
+        real(dp) :: source, rho_new, momentum, negative_tolerance, scale
 
-		real(dp)		:: spec_summ
-		real(dp)		:: energy_source = 397500000.0_dp
-		real(dp)	,save	:: energy_output = 0.0_dp
-				
-		dimensions		= this%domain%get_domain_dimensions()
-		species_number	= this%chem%chem_ptr%species_number
-				
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()		
-		
-		associate (	rho				    => this%rho%s_ptr			, &
-                    rho_prod_particles  => this%rho_prod_particles	, &
-					E_f				    => this%E_f%s_ptr			, &
-					E_f_int 		    => this%E_f_int%s_ptr		, &
-					E_f_prod_chem 	    => this%E_f_prod_chem%s_ptr	, &
-					E_f_prod_heat	    => this%E_f_prod_heat%s_ptr	, &
-					E_f_prod_gd 	    => this%E_f_prod_gd%s_ptr	, &
-					E_f_prod_visc	    => this%E_f_prod_visc%s_ptr	, &
-					E_f_prod_diff	    => this%E_f_prod_diff%s_ptr	, &
-					E_f_prod_particles  => this%E_f_prod_particles	, &
-					Y				    => this%Y%v_ptr				, &
-					Y_int			    => this%Y_int%v_ptr			, &
-					Y_prod_diff		    => this%Y_prod_diff%v_ptr	, &
-					Y_prod_chem		    => this%Y_prod_chem%v_ptr	, &
-                    Y_prod_particles	=> this%Y_prod_particles	, &
-					T				    => this%T%s_ptr				, &
-					bc				    => this%boundary%bc_ptr)
-					
-		!$omp parallel default(shared)  private(i,j,k,dim,particles_phase_counter,spec,spec_summ,energy_output) !, &
-		!!$omp& shared(this,dimensions,species_number,cons_inner_loop,energy_source,time_step)
-		
-		!$omp do collapse(3) schedule(guided)
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chem%chem_ptr%species_number
+        loop = this%domain%get_local_inner_cells_bounds()
 
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			
-				if(bc%bc_markers(i,j,k) == 0) then					
-					E_f_int%cells(i,j,k) = E_f%cells(i,j,k) 
+        associate(rho => this%rho%s_ptr, rho_int => this%rho_int%s_ptr, &
+                  v => this%v%v_ptr, v_int => this%v_int%v_ptr, &
+                  dv => this%v_prod_gd%v_ptr, Y => this%Y%v_ptr, Y_int => this%Y_int%v_ptr, &
+                  bc => this%boundary%bc_ptr)
+        !$omp parallel default(shared) private(i,j,k,dim,spec,phase,partial_density,source, &
+        !$omp& rho_new,momentum,negative_tolerance,scale)
+        allocate(partial_density(species_number))
+        !$omp do collapse(3) schedule(static)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
 
-					if (this%hydrodynamics_flag)	E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) + E_f_prod_gd%cells(i,j,k)
-					
-					if (this%viscosity_flag)	E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) + E_f_prod_visc%cells(i,j,k) * time_step / rho%cells(i,j,k) 
-					if (this%heat_trans_flag)	E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) + E_f_prod_heat%cells(i,j,k) * time_step / rho%cells(i,j,k) 
-					if (this%diffusion_flag)	E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) + E_f_prod_diff%cells(i,j,k) * time_step / rho%cells(i,j,k) 
-					if (this%reactive_flag)		E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) + E_f_prod_chem%cells(i,j,k) * time_step / rho%cells(i,j,k)
+                    rho_new = 0.0_dp
+                    do spec = 1, species_number
+                        source = 0.0_dp
+                        if (this%diffusion_flag) then
+                            source = source + this%Y_prod_diff%v_ptr%pr(spec)%cells(i,j,k)
+                        end if
+                        if (this%reactive_flag) then
+                            source = source + this%Y_prod_chem%v_ptr%pr(spec)%cells(i,j,k)
+                        end if
+                        do phase = 1, this%additional_particles_phases_number
+                            source = source + &
+                                this%Y_prod_particles(phase)%v_ptr%pr(spec)%cells(i,j,k)
+                        end do
 
-					if (this%additional_particles_phases_number /= 0) then
-						do particles_phase_counter = 1, this%additional_particles_phases_number
-							E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) !+ E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)
-						end do		
-                    end if					
-					
-					if (this%additional_particles_phases_number /= 0) then
-						do particles_phase_counter = 1, this%additional_particles_phases_number
-							E_f_int%cells(i,j,k) = E_f_int%cells(i,j,k) + E_f_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k) * time_step / rho%cells(i,j,k)
-!                            rho%cells(i,j,k)     = rho%cells(i,j,k) + rho_prod_particles(particles_phase_counter)%s_ptr%cells(i,j,k)
-						end do		
-					end if	                    
-                    
-					! ************************* Energy release ******************
-					!if(this%time <= 1.0E-07_dp) then
-					!	if(i <= 80) then
-					!		if (this%sources_flag)	then
-					!			E_f_int%cells(i,j,k)	= E_f_int%cells(i,j,k)	+ energy_source * this%time_step * 1.0E06_dp 
-					!			energy_output			= energy_output			+ energy_source * this%time_step * 1.0E06_dp *  rho%cells(i,1,1)
-					!		end if
-					!	end if
-					!end if
-					! ***********************************************************	
+                        partial_density(spec) = rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k) + &
+                            time_step * source
+                        scale = max(abs(rho%cells(i,j,k) * Y%pr(spec)%cells(i,j,k)), &
+                            abs(time_step * source), 1.0_dp)
+                        negative_tolerance = 1000.0_dp * epsilon(1.0_dp) * scale
+                        if (partial_density(spec) < -negative_tolerance) then
+                            error stop 'CPM intermediate state: negative species partial density'
+                        end if
+                        partial_density(spec) = max(partial_density(spec), 0.0_dp)
+                        rho_new = rho_new + partial_density(spec)
+                    end do
 
-					spec_summ = 0.0
-					do spec = 1, species_number
+                    if (.not.ieee_is_finite(rho_new) .or. rho_new <= tiny(1.0_dp)) then
+                        error stop 'CPM intermediate state: non-positive density'
+                    end if
+                    rho_int%cells(i,j,k) = rho_new
+                    do spec = 1, species_number
+                        Y_int%pr(spec)%cells(i,j,k) = partial_density(spec) / rho_new
+                    end do
 
-						Y_int%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k)
-					
-						if (this%diffusion_flag)	Y_int%pr(spec)%cells(i,j,k) = Y_int%pr(spec)%cells(i,j,k) + Y_prod_diff%pr(spec)%cells(i,j,k)  * time_step / rho%cells(i,j,k)
-						if (this%reactive_flag)		Y_int%pr(spec)%cells(i,j,k) = Y_int%pr(spec)%cells(i,j,k) + Y_prod_chem%pr(spec)%cells(i,j,k)  * time_step / rho%cells(i,j,k)
-						
-						if (this%additional_particles_phases_number /= 0) then
-							do particles_phase_counter = 1, this%additional_particles_phases_number
-								Y_int%pr(spec)%cells(i,j,k) = Y_int%pr(spec)%cells(i,j,k) + Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k) * time_step / rho%cells(i,j,k)
-							end do		
-						end if
-							
-						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dp) then
-							spec_summ = spec_summ + max(Y_int%pr(spec)%cells(i,j,k), 0.0_dp)
-						end if
-					end do
-					
-					do spec = 1,species_number
-						if (this%thermo%thermo_ptr%molar_masses(spec) /= 0.0_dp) then
-					!		Y_int%pr(spec)%cells(i,j,k) = max(Y_int%pr(spec)%cells(i,j,k), 0.0_dp) / spec_summ
-						end if
-					end do					
-				
-				end if
-		
-			end do
-			end do
-			end do
-		!$omp end do nowait
-		!$omp end parallel
-			
+                    do dim = 1, dimensions
+                        momentum = rho%cells(i,j,k) * &
+                            (v%pr(dim)%cells(i,j,k) + dv%pr(dim)%cells(i,j,k))
+                        if (this%viscosity_flag) then
+                            momentum = momentum + time_step * &
+                                this%v_prod_visc%v_ptr%pr(dim)%cells(i,j,k)
+                        end if
+                        do phase = 1, this%additional_particles_phases_number
+                            momentum = momentum + time_step * rho%cells(i,j,k) * &
+                                this%v_prod_particles(phase)%v_ptr%pr(dim)%cells(i,j,k)
+                        end do
+                        v_int%pr(dim)%cells(i,j,k) = momentum / rho_new
+                    end do
+                end do
+            end do
+        end do
+        !$omp end do
+        deallocate(partial_density)
+        !$omp end parallel
+        end associate
+    end subroutine calculate_interm_v
+
+
+    subroutine calculate_pressure_work_increment(this, time_step)
+        class(cpm_solver), intent(inout) :: this
+        real(dp), intent(in) :: time_step
+
+        integer :: dimensions, geom_power
+        integer :: i, j, k, dim
+        integer :: il, jl, kl, ir, jr, kr
+        integer, dimension(3,2) :: loop
+        real(dp), dimension(3) :: base_area
+        real(dp) :: base_volume, volume, area_left, area_right
+        real(dp) :: p_left, p_right, u_left, u_right, pressure_flux_divergence
+        real(dp) :: gravity_work
+
+        dimensions = this%domain%get_domain_dimensions()
+        geom_power = this%geometry_power()
+        loop = this%domain%get_local_inner_cells_bounds()
+        base_area = this%mesh%mesh_ptr%get_cell_surface_area()
+        base_volume = this%mesh%mesh_ptr%get_cell_volume()
+
+        call this%mpi_support%exchange_conservative_scalar_field(this%p%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%v_int%v_ptr)
+
+        associate(p => this%p%s_ptr, rho => this%rho%s_ptr, v => this%v%v_ptr, &
+                  v_int => this%v_int%v_ptr, dE => this%E_f_prod_gd%s_ptr, &
+                  bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,dim,il,jl,kl,ir,jr,kr, &
+        !$omp& volume,area_left,area_right,p_left,p_right,u_left,u_right, &
+        !$omp& pressure_flux_divergence,gravity_work)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    if (.not.this%hydrodynamics_flag) then
+                        dE%cells(i,j,k) = 0.0_dp
+                        cycle
+                    end if
+
+                    volume = base_volume * this%cell_metric(i, j, k, geom_power)
+                    pressure_flux_divergence = 0.0_dp
+                    gravity_work = 0.0_dp
+
+                    do dim = 1, dimensions
+                        il = i - I_m(dim,1)
+                        jl = j - I_m(dim,2)
+                        kl = k - I_m(dim,3)
+                        ir = i + I_m(dim,1)
+                        jr = j + I_m(dim,2)
+                        kr = k + I_m(dim,3)
+
+                        area_left = base_area(dim) * &
+                            this%face_metric(dim, i, j, k, geom_power)
+                        area_right = base_area(dim) * &
+                            this%face_metric(dim, ir, jr, kr, geom_power)
+                        p_left = 0.5_dp * (p%cells(il,jl,kl) + p%cells(i,j,k))
+                        p_right = 0.5_dp * (p%cells(i,j,k) + p%cells(ir,jr,kr))
+                        u_left = 0.5_dp * (v_int%pr(dim)%cells(il,jl,kl) + &
+                            v_int%pr(dim)%cells(i,j,k))
+                        u_right = 0.5_dp * (v_int%pr(dim)%cells(i,j,k) + &
+                            v_int%pr(dim)%cells(ir,jr,kr))
+                        pressure_flux_divergence = pressure_flux_divergence + &
+                            p_right * u_right * area_right - p_left * u_left * area_left
+                        gravity_work = gravity_work + 0.5_dp * time_step * this%g(dim) * &
+                            (v%pr(dim)%cells(i,j,k) + v_int%pr(dim)%cells(i,j,k))
+                    end do
+
+                    dE%cells(i,j,k) = -time_step * pressure_flux_divergence / &
+                        (rho%cells(i,j,k) * volume) + gravity_work
+                end do
+            end do
+        end do
+        !$omp end parallel do
+        end associate
+    end subroutine calculate_pressure_work_increment
+
+
+    subroutine calculate_interm_E_Y(this, time_step)
+        class(cpm_solver), intent(inout) :: this
+        real(dp), intent(in) :: time_step
+
+        integer :: i, j, k, phase
+        integer, dimension(3,2) :: loop
+        real(dp) :: energy_density
+
+        loop = this%domain%get_local_inner_cells_bounds()
+
+        associate(rho => this%rho%s_ptr, rho_int => this%rho_int%s_ptr, &
+                  E => this%E_f%s_ptr, E_int => this%E_f_int%s_ptr, &
+                  dE => this%E_f_prod_gd%s_ptr, bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,phase,energy_density)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    energy_density = rho%cells(i,j,k) * (E%cells(i,j,k) + dE%cells(i,j,k))
+                    if (this%viscosity_flag) then
+                        energy_density = energy_density + time_step * &
+                            this%E_f_prod_visc%s_ptr%cells(i,j,k)
+                    end if
+                    if (this%heat_trans_flag) then
+                        energy_density = energy_density + time_step * &
+                            this%E_f_prod_heat%s_ptr%cells(i,j,k)
+                    end if
+                    if (this%diffusion_flag) then
+                        energy_density = energy_density + time_step * &
+                            this%E_f_prod_diff%s_ptr%cells(i,j,k)
+                    end if
+                    if (this%reactive_flag) then
+                        energy_density = energy_density + time_step * &
+                            this%E_f_prod_chem%s_ptr%cells(i,j,k)
+                    end if
+                    do phase = 1, this%additional_particles_phases_number
+                        energy_density = energy_density + time_step * &
+                            this%E_f_prod_particles(phase)%s_ptr%cells(i,j,k)
+                    end do
+                    E_int%cells(i,j,k) = energy_density / rho_int%cells(i,j,k)
+                    if (.not.ieee_is_finite(E_int%cells(i,j,k))) then
+                        error stop 'CPM intermediate state: non-finite total energy'
+                    end if
+                end do
+            end do
+        end do
+        !$omp end parallel do
+        end associate
+    end subroutine calculate_interm_E_Y
+
+
+    subroutine calculate_lagrangian_mass_flux(this, time_step)
+        class(cpm_solver), intent(inout) :: this
+        real(dp), intent(in) :: time_step
+
+        integer :: dimensions, geom_power
+        integer :: i, j, k, dim, il, jl, kl
+        integer, dimension(3,2) :: cell_loop, face_loop
+        real(dp), dimension(3) :: dx, base_area
+        real(dp) :: u_face, jacobian, rho_upwind, area
+
+        dimensions = this%domain%get_domain_dimensions()
+        geom_power = this%geometry_power()
+        cell_loop = this%domain%get_local_inner_cells_bounds()
+        dx = this%mesh%mesh_ptr%get_cell_edges_length()
+        base_area = this%mesh%mesh_ptr%get_cell_surface_area()
+
+        call this%mpi_support%exchange_conservative_scalar_field(this%rho_int%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%v_int%v_ptr)
+
+        associate(rho_int => this%rho_int%s_ptr, v_int => this%v_int%v_ptr, &
+                  m_flux => this%m_flux%s_ptr, bc => this%boundary%bc_ptr)
+        do dim = 1, dimensions
+            face_loop = cell_loop
+            face_loop(dim,2) = cell_loop(dim,2) + 1
+            !$omp parallel do collapse(3) schedule(static) private(i,j,k,il,jl,kl,u_face, &
+            !$omp& jacobian,rho_upwind,area)
+            do k = face_loop(3,1), face_loop(3,2)
+                do j = face_loop(2,1), face_loop(2,2)
+                    do i = face_loop(1,1), face_loop(1,2)
+                        il = i - I_m(dim,1)
+                        jl = j - I_m(dim,2)
+                        kl = k - I_m(dim,3)
+                        if (bc%bc_markers(il,jl,kl) /= 0 .and. bc%bc_markers(i,j,k) /= 0) then
+                            m_flux%cells(dim,i,j,k) = 0.0_dp
+                            cycle
+                        end if
+
+                        u_face = 0.5_dp * (v_int%pr(dim)%cells(il,jl,kl) + &
+                            v_int%pr(dim)%cells(i,j,k))
+                        jacobian = 1.0_dp + time_step * &
+                            (v_int%pr(dim)%cells(i,j,k) - v_int%pr(dim)%cells(il,jl,kl)) / dx(dim)
+                        if (.not.ieee_is_finite(jacobian) .or. jacobian <= 0.0_dp) then
+                            error stop 'CPM Lagrangian step: non-positive deformation Jacobian'
+                        end if
+                        if (u_face >= 0.0_dp) then
+                            rho_upwind = rho_int%cells(il,jl,kl)
+                        else
+                            rho_upwind = rho_int%cells(i,j,k)
+                        end if
+                        area = base_area(dim) * this%face_metric(dim, i, j, k, geom_power)
+                        m_flux%cells(dim,i,j,k) = &
+                            rho_upwind * u_face * area * time_step / jacobian
+                    end do
+                end do
+            end do
+            !$omp end parallel do
+        end do
+        end associate
+    end subroutine calculate_lagrangian_mass_flux
+
+
+    subroutine apply_conservative_transport(this)
+        class(cpm_solver), intent(inout) :: this
+
+        integer :: dimensions, species_number, geom_power
+        integer :: i, j, k, dim, spec
+        integer :: il, jl, kl, ir, jr, kr
+        integer, dimension(3,2) :: loop
+        real(dp), allocatable :: rhoY_new(:)
+        real(dp) :: base_volume, volume, mass_new, rhoE_new
+        real(dp), dimension(3) :: momentum_new
+        real(dp) :: m_left, m_right, q_left, q_right, species_sum, tolerance
+
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chem%chem_ptr%species_number
+        geom_power = this%geometry_power()
+        loop = this%domain%get_local_inner_cells_bounds()
+        base_volume = this%mesh%mesh_ptr%get_cell_volume()
+
+        call this%mpi_support%exchange_conservative_scalar_field(this%rho_int%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%E_f_int%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%v_int%v_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%Y_int%v_ptr)
+        call this%mpi_support%exchange_flow_scalar_field(this%m_flux%s_ptr)
+
+        associate(rho => this%rho%s_ptr, rho_int => this%rho_int%s_ptr, &
+                  E => this%E_f%s_ptr, E_int => this%E_f_int%s_ptr, &
+                  v => this%v%v_ptr, v_int => this%v_int%v_ptr, &
+                  Y => this%Y%v_ptr, Y_int => this%Y_int%v_ptr, &
+                  m_flux => this%m_flux%s_ptr, bc => this%boundary%bc_ptr)
+        !$omp parallel default(shared) private(i,j,k,dim,spec,il,jl,kl,ir,jr,kr,rhoY_new, &
+        !$omp& volume,mass_new,rhoE_new,momentum_new,m_left,m_right,q_left,q_right, &
+        !$omp& species_sum,tolerance)
+        allocate(rhoY_new(species_number))
+        !$omp do collapse(3) schedule(static)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    volume = base_volume * this%cell_metric(i, j, k, geom_power)
+                    mass_new = rho_int%cells(i,j,k)
+                    rhoE_new = rho_int%cells(i,j,k) * E_int%cells(i,j,k)
+                    momentum_new = 0.0_dp
+                    do dim = 1, dimensions
+                        momentum_new(dim) = rho_int%cells(i,j,k) * v_int%pr(dim)%cells(i,j,k)
+                    end do
+                    do spec = 1, species_number
+                        rhoY_new(spec) = rho_int%cells(i,j,k) * Y_int%pr(spec)%cells(i,j,k)
+                    end do
+
+                    do dim = 1, dimensions
+                        il = i - I_m(dim,1)
+                        jl = j - I_m(dim,2)
+                        kl = k - I_m(dim,3)
+                        ir = i + I_m(dim,1)
+                        jr = j + I_m(dim,2)
+                        kr = k + I_m(dim,3)
+                        m_left = m_flux%cells(dim,i,j,k)
+                        m_right = m_flux%cells(dim,ir,jr,kr)
+                        mass_new = mass_new + (m_left - m_right) / volume
+
+                        if (m_left >= 0.0_dp) then
+                            q_left = E_int%cells(il,jl,kl)
+                        else
+                            q_left = E_int%cells(i,j,k)
+                        end if
+                        if (m_right >= 0.0_dp) then
+                            q_right = E_int%cells(i,j,k)
+                        else
+                            q_right = E_int%cells(ir,jr,kr)
+                        end if
+                        rhoE_new = rhoE_new + (m_left * q_left - m_right * q_right) / volume
+
+                        do spec = 1, species_number
+                            if (m_left >= 0.0_dp) then
+                                q_left = Y_int%pr(spec)%cells(il,jl,kl)
+                            else
+                                q_left = Y_int%pr(spec)%cells(i,j,k)
+                            end if
+                            if (m_right >= 0.0_dp) then
+                                q_right = Y_int%pr(spec)%cells(i,j,k)
+                            else
+                                q_right = Y_int%pr(spec)%cells(ir,jr,kr)
+                            end if
+                            rhoY_new(spec) = rhoY_new(spec) + &
+                                (m_left * q_left - m_right * q_right) / volume
+                        end do
+
+                        do spec = 1, dimensions
+                            if (m_left >= 0.0_dp) then
+                                q_left = v_int%pr(spec)%cells(il,jl,kl)
+                            else
+                                q_left = v_int%pr(spec)%cells(i,j,k)
+                            end if
+                            if (m_right >= 0.0_dp) then
+                                q_right = v_int%pr(spec)%cells(i,j,k)
+                            else
+                                q_right = v_int%pr(spec)%cells(ir,jr,kr)
+                            end if
+                            momentum_new(spec) = momentum_new(spec) + &
+                                (m_left * q_left - m_right * q_right) / volume
+                        end do
+                    end do
+
+                    if (.not.ieee_is_finite(mass_new) .or. mass_new <= tiny(1.0_dp)) then
+                        error stop 'CPM remap: non-positive density'
+                    end if
+                    tolerance = 1000.0_dp * epsilon(1.0_dp) * max(mass_new, 1.0_dp)
+                    do spec = 1, species_number
+                        if (rhoY_new(spec) < -tolerance) then
+                            error stop 'CPM remap: negative species partial density'
+                        end if
+                        rhoY_new(spec) = max(rhoY_new(spec), 0.0_dp)
+                    end do
+                    species_sum = sum(rhoY_new)
+                    if (species_sum <= tiny(1.0_dp)) then
+                        error stop 'CPM remap: zero species density sum'
+                    end if
+                    if (abs(species_sum - mass_new) > 1.0e-9_dp * max(mass_new, 1.0_dp)) then
+                        error stop 'CPM remap: mass and species conservation are inconsistent'
+                    end if
+
+                    rho%cells(i,j,k) = mass_new
+                    E%cells(i,j,k) = rhoE_new / mass_new
+                    do dim = 1, dimensions
+                        v%pr(dim)%cells(i,j,k) = momentum_new(dim) / mass_new
+                    end do
+                    do spec = 1, species_number
+                        Y%pr(spec)%cells(i,j,k) = rhoY_new(spec) / species_sum
+                    end do
+                end do
+            end do
+        end do
+        !$omp end do
+        deallocate(rhoY_new)
+        !$omp end parallel
+        end associate
+    end subroutine apply_conservative_transport
+
+
+    subroutine apply_boundary_conditions_main(this)
+        class(cpm_solver), intent(inout) :: this
+
+        integer :: dimensions, species_number
+        integer :: i, j, k, dim, dim1, spec, plus, sign, bound_number
+        integer :: ig, jg, kg
+        integer, dimension(3,2) :: loop
+        character(len=20) :: boundary_name
+        real(dp) :: wall_temperature
+
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chem%chem_ptr%species_number
+        loop = this%domain%get_local_inner_cells_bounds()
+
+        associate(T => this%T%s_ptr, M => this%mix_mol_mass%s_ptr, p => this%p%s_ptr, &
+                  rho => this%rho%s_ptr, v => this%v%v_ptr, Y => this%Y%v_ptr, &
+                  bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,dim,dim1,spec,plus,sign, &
+        !$omp& bound_number,ig,jg,kg,boundary_name,wall_temperature)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    do dim = 1, dimensions
+                        do plus = 1, 2
+                            sign = (-1)**plus
+                            ig = i + sign * I_m(dim,1)
+                            jg = j + sign * I_m(dim,2)
+                            kg = k + sign * I_m(dim,3)
+                            bound_number = bc%bc_markers(ig,jg,kg)
+                            if (bound_number == 0) cycle
+                            boundary_name = bc%boundary_types(bound_number)%get_type_name()
+
+                            select case (boundary_name)
+                            case ('wall', 'symmetry_plane')
+                                p%cells(ig,jg,kg) = p%cells(i,j,k)
+                                M%cells(ig,jg,kg) = M%cells(i,j,k)
+                                do spec = 1, species_number
+                                    Y%pr(spec)%cells(ig,jg,kg) = Y%pr(spec)%cells(i,j,k)
+                                end do
+                                T%cells(ig,jg,kg) = T%cells(i,j,k)
+                                if (boundary_name == 'wall') then
+                                    if (bc%boundary_types(bound_number)%is_conductive()) then
+                                        wall_temperature = &
+                                            bc%boundary_types(bound_number)%get_wall_temperature()
+                                        if (wall_temperature <= 0.0_dp) then
+                                            error stop 'CPM wall boundary: non-positive wall temperature'
+                                        end if
+                                        T%cells(ig,jg,kg) = wall_temperature
+                                    end if
+                                end if
+                                rho%cells(ig,jg,kg) = p%cells(ig,jg,kg) * M%cells(ig,jg,kg) / &
+                                    (r_gase_J * T%cells(ig,jg,kg))
+
+                                do dim1 = 1, dimensions
+                                    if (boundary_name == 'wall' .and. &
+                                        .not.bc%boundary_types(bound_number)%is_slip()) then
+                                        v%pr(dim1)%cells(ig,jg,kg) = -v%pr(dim1)%cells(i,j,k)
+                                    else if (dim1 == dim) then
+                                        v%pr(dim1)%cells(ig,jg,kg) = -v%pr(dim1)%cells(i,j,k)
+                                    else
+                                        v%pr(dim1)%cells(ig,jg,kg) = v%pr(dim1)%cells(i,j,k)
+                                    end if
+                                end do
+
+                            case ('outlet')
+                                p%cells(ig,jg,kg) = p%cells(i,j,k)
+                                rho%cells(ig,jg,kg) = rho%cells(i,j,k)
+                                T%cells(ig,jg,kg) = T%cells(i,j,k)
+                                M%cells(ig,jg,kg) = M%cells(i,j,k)
+                                do spec = 1, species_number
+                                    Y%pr(spec)%cells(ig,jg,kg) = Y%pr(spec)%cells(i,j,k)
+                                end do
+                                do dim1 = 1, dimensions
+                                    v%pr(dim1)%cells(ig,jg,kg) = v%pr(dim1)%cells(i,j,k)
+                                end do
+
+                            case ('inlet')
+                                ! Inlet ghost values are initialized by the boundary/EOS layer and remain fixed.
+                                continue
+                            case default
+                                error stop 'CPM boundary: unsupported boundary type'
+                            end select
+                        end do
+                    end do
+                end do
+            end do
+        end do
+        !$omp end parallel do
+        end associate
+    end subroutine apply_boundary_conditions_main
+
+
+    subroutine apply_boundary_conditions_interm_v(this)
+        class(cpm_solver), intent(inout) :: this
+
+        integer :: dimensions, species_number
+        integer :: i, j, k, dim, dim1, spec, plus, sign, bound_number
+        integer :: ig, jg, kg
+        integer, dimension(3,2) :: loop
+        character(len=20) :: boundary_name
+
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chem%chem_ptr%species_number
+        loop = this%domain%get_local_inner_cells_bounds()
+
+        associate(rho => this%rho%s_ptr, rho_int => this%rho_int%s_ptr, &
+                  v => this%v%v_ptr, v_int => this%v_int%v_ptr, &
+                  Y => this%Y%v_ptr, Y_int => this%Y_int%v_ptr, bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,dim,dim1,spec,plus,sign, &
+        !$omp& bound_number,ig,jg,kg,boundary_name)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    do dim = 1, dimensions
+                        do plus = 1, 2
+                            sign = (-1)**plus
+                            ig = i + sign * I_m(dim,1)
+                            jg = j + sign * I_m(dim,2)
+                            kg = k + sign * I_m(dim,3)
+                            bound_number = bc%bc_markers(ig,jg,kg)
+                            if (bound_number == 0) cycle
+                            boundary_name = bc%boundary_types(bound_number)%get_type_name()
+
+                            select case (boundary_name)
+                            case ('wall', 'symmetry_plane')
+                                rho_int%cells(ig,jg,kg) = rho_int%cells(i,j,k)
+                                do spec = 1, species_number
+                                    Y_int%pr(spec)%cells(ig,jg,kg) = Y_int%pr(spec)%cells(i,j,k)
+                                end do
+                                do dim1 = 1, dimensions
+                                    if (boundary_name == 'wall' .and. &
+                                        .not.bc%boundary_types(bound_number)%is_slip()) then
+                                        v_int%pr(dim1)%cells(ig,jg,kg) = -v_int%pr(dim1)%cells(i,j,k)
+                                    else if (dim1 == dim) then
+                                        v_int%pr(dim1)%cells(ig,jg,kg) = -v_int%pr(dim1)%cells(i,j,k)
+                                    else
+                                        v_int%pr(dim1)%cells(ig,jg,kg) = v_int%pr(dim1)%cells(i,j,k)
+                                    end if
+                                end do
+                            case ('outlet')
+                                rho_int%cells(ig,jg,kg) = rho_int%cells(i,j,k)
+                                do spec = 1, species_number
+                                    Y_int%pr(spec)%cells(ig,jg,kg) = Y_int%pr(spec)%cells(i,j,k)
+                                end do
+                                do dim1 = 1, dimensions
+                                    v_int%pr(dim1)%cells(ig,jg,kg) = v_int%pr(dim1)%cells(i,j,k)
+                                end do
+                            case ('inlet')
+                                rho_int%cells(ig,jg,kg) = rho%cells(ig,jg,kg)
+                                do spec = 1, species_number
+                                    Y_int%pr(spec)%cells(ig,jg,kg) = Y%pr(spec)%cells(ig,jg,kg)
+                                end do
+                                do dim1 = 1, dimensions
+                                    v_int%pr(dim1)%cells(ig,jg,kg) = v%pr(dim1)%cells(ig,jg,kg)
+                                end do
+                            case default
+                                error stop 'CPM intermediate boundary: unsupported boundary type'
+                            end select
+                        end do
+                    end do
+                end do
+            end do
+        end do
+        !$omp end parallel do
+        end associate
+    end subroutine apply_boundary_conditions_interm_v
+
+
+    subroutine apply_boundary_conditions_interm_E_Y(this)
+        class(cpm_solver), intent(inout) :: this
+
+        integer :: dimensions, species_number
+        integer :: i, j, k, dim, spec, plus, sign, bound_number
+        integer :: ig, jg, kg
+        integer, dimension(3,2) :: loop
+        character(len=20) :: boundary_name
+
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chem%chem_ptr%species_number
+        loop = this%domain%get_local_inner_cells_bounds()
+
+        associate(E => this%E_f%s_ptr, E_int => this%E_f_int%s_ptr, &
+                  Y => this%Y%v_ptr, Y_int => this%Y_int%v_ptr, bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,dim,spec,plus,sign, &
+        !$omp& bound_number,ig,jg,kg,boundary_name)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    do dim = 1, dimensions
+                        do plus = 1, 2
+                            sign = (-1)**plus
+                            ig = i + sign * I_m(dim,1)
+                            jg = j + sign * I_m(dim,2)
+                            kg = k + sign * I_m(dim,3)
+                            bound_number = bc%bc_markers(ig,jg,kg)
+                            if (bound_number == 0) cycle
+                            boundary_name = bc%boundary_types(bound_number)%get_type_name()
+                            select case (boundary_name)
+                            case ('wall', 'outlet', 'symmetry_plane')
+                                E_int%cells(ig,jg,kg) = E_int%cells(i,j,k)
+                                do spec = 1, species_number
+                                    Y_int%pr(spec)%cells(ig,jg,kg) = Y_int%pr(spec)%cells(i,j,k)
+                                end do
+                            case ('inlet')
+                                E_int%cells(ig,jg,kg) = E%cells(ig,jg,kg)
+                                do spec = 1, species_number
+                                    Y_int%pr(spec)%cells(ig,jg,kg) = Y%pr(spec)%cells(ig,jg,kg)
+                                end do
+                            case default
+                                error stop 'CPM energy boundary: unsupported boundary type'
+                            end select
+                        end do
+                    end do
+                end do
+            end do
+        end do
+        !$omp end parallel do
+        end associate
+    end subroutine apply_boundary_conditions_interm_E_Y
+
+
+    subroutine update_face_velocity(this)
+        class(cpm_solver), intent(inout) :: this
+
+        integer :: dimensions
+        integer :: i, j, k, dim, component, il, jl, kl
+        integer, dimension(3,2) :: cell_loop, face_loop
+
+        dimensions = this%domain%get_domain_dimensions()
+        cell_loop = this%domain%get_local_inner_cells_bounds()
+        call this%mpi_support%exchange_conservative_vector_field(this%v%v_ptr)
+
+        associate(v => this%v%v_ptr, v_f => this%v_f%v_ptr, bc => this%boundary%bc_ptr)
+        do dim = 1, dimensions
+            face_loop = cell_loop
+            face_loop(dim,2) = cell_loop(dim,2) + 1
+            !$omp parallel do collapse(3) schedule(static) private(i,j,k,component,il,jl,kl)
+            do k = face_loop(3,1), face_loop(3,2)
+                do j = face_loop(2,1), face_loop(2,2)
+                    do i = face_loop(1,1), face_loop(1,2)
+                        il = i - I_m(dim,1)
+                        jl = j - I_m(dim,2)
+                        kl = k - I_m(dim,3)
+                        if (bc%bc_markers(il,jl,kl) /= 0 .and. bc%bc_markers(i,j,k) /= 0) cycle
+                        do component = 1, dimensions
+                            v_f%pr(component)%cells(dim,i,j,k) = 0.5_dp * &
+                                (v%pr(component)%cells(il,jl,kl) + &
+                                 v%pr(component)%cells(i,j,k))
+                        end do
+                    end do
+                end do
+            end do
+            !$omp end parallel do
+        end do
+        end associate
+    end subroutine update_face_velocity
+
+
+    subroutine calculate_time_step(this)
+#ifdef mpi
+        use MPI
+#endif
+        class(cpm_solver), intent(inout) :: this
+
+        integer :: dimensions
+        integer :: i, j, k, dim
+#ifdef mpi
+        integer :: error, communicator
+#endif
+        integer, dimension(3,2) :: loop
+        real(dp), dimension(3) :: dx
+        real(dp) :: local_limit, global_limit, acoustic_rate, compression_rate
+
+        dimensions = this%domain%get_domain_dimensions()
+        loop = this%domain%get_local_inner_cells_bounds()
+        dx = this%mesh%mesh_ptr%get_cell_edges_length()
+        local_limit = huge(1.0_dp)
+
+        associate(v => this%v%v_ptr, c => this%v_s%s_ptr, bc => this%boundary%bc_ptr)
+        !$omp parallel do collapse(3) schedule(static) reduction(min:local_limit) &
+        !$omp& private(i,j,k,dim,acoustic_rate,compression_rate)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    if (bc%bc_markers(i,j,k) /= 0) cycle
+                    acoustic_rate = 0.0_dp
+                    do dim = 1, dimensions
+                        acoustic_rate = acoustic_rate + &
+                            (abs(v%pr(dim)%cells(i,j,k)) + c%cells(i,j,k)) / dx(dim)
+                        compression_rate = &
+                            (v%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) - &
+                             v%pr(dim)%cells(i,j,k)) / dx(dim)
+                        if (compression_rate > 0.0_dp) then
+                            local_limit = min(local_limit, 1.0_dp / compression_rate)
+                        end if
+                        compression_rate = &
+                            (v%pr(dim)%cells(i,j,k) - &
+                             v%pr(dim)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) / dx(dim)
+                        if (compression_rate > 0.0_dp) then
+                            local_limit = min(local_limit, 1.0_dp / compression_rate)
+                        end if
+                    end do
+                    if (acoustic_rate > tiny(1.0_dp)) then
+                        local_limit = min(local_limit, 1.0_dp / acoustic_rate)
+                    end if
+                end do
+            end do
+        end do
+        !$omp end parallel do
         end associate
 
-		!if((this%time <= 1.0E-06_dp).and.(this%sources_flag)) then		
-		!	print *, energy_output
-		!end if				
-
-
-	end subroutine
-
-
-	subroutine apply_boundary_conditions_main(this)
-
-		class(cpm_solver)		,intent(inout)		:: this
-
-		character(len=20)		:: boundary_type_name
-		real(dp)				:: farfield_density, farfield_pressure, farfield_velocity, wall_temperature
-		
-		integer					:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
-
-		integer	:: sign, bound_number
-		integer :: i,j,k,plus,dim,dim1,spec
-						
-		dimensions		= this%domain%get_domain_dimensions()
-		species_number	= this%chem%chem_ptr%species_number
-				
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
-		
-		associate(  T				=> this%T%s_ptr				, &
-					mix_mol_mass	=> this%mix_mol_mass%s_ptr	, &
-					p				=> this%p%s_ptr				, &
-					rho				=> this%rho%s_ptr			, &
-					v				=> this%v%v_ptr				, &
-					Y				=> this%Y%v_ptr				, &
-					bc				=> this%boundary%bc_ptr		, &
-					mesh			=> this%mesh%mesh_ptr)
-
-		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name,farfield_pressure,farfield_density,farfield_velocity,wall_temperature) !, &
-		!!$omp& shared(this,cons_inner_loop,dimensions,species_number)
-
-		!$omp do collapse(3) schedule(guided)
-
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					do dim = 1,dimensions
-						do plus = 1,2
-							sign			= (-1)**plus
-							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-							if( bound_number /= 0 ) then
-		
-								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-								select case(boundary_type_name)
-									case('wall','symmetry_plane')
-									
-										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= p%cells(i,j,k)
-										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= rho%cells(i,j,k)
-										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= T%cells(i,j,k)
-										mix_mol_mass%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= mix_mol_mass%cells(i,j,k)
-								
-										do spec = 1, species_number
-											Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(spec)%cells(i,j,k)
-										end do
-
-										do dim1 = 1, dimensions
-											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v%pr(dim1)%cells(i,j,k)
-											else
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
-											end if
-										end do										
-									
-										if(bc%boundary_types(bound_number)%is_conductive()) then 
-											wall_temperature = bc%boundary_types(bound_number)%get_wall_temperature()
-											T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = wall_temperature
-										end if
-										if(.not.bc%boundary_types(bound_number)%is_slip()) then
-											do dim1 = 1, dimensions
-												if (dim1 /= dim) then	
-													v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp !v%pr(dim1)%cells(i-sign*I_m(dim,1),j-sign*I_m(dim,2),k-sign*I_m(dim,3)) - 6.0_dp * v%pr(dim1)%cells(i,j,k)
-												!	v%pr(dim1)%cells(i,j,k) = 0.0_dp
-												!	v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = 0.0_dp
-												end if
-											end do
-										end if
-									case ('outlet')
-
-										farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-										farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()
-									!	print *, farfield_pressure
-									!	print *, farfield_density
-									
-										p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= p%cells(i,j,k)
-										rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= rho%cells(i,j,k)
-										T%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))				= T%cells(i,j,k)
-										mix_mol_mass%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= mix_mol_mass%cells(i,j,k)									
-									
-										v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
-										do spec = 1, species_number
-											Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(spec)%cells(i,j,k)
-										end do
-
-										do dim1 = 1, dimensions
-											if(dim1 == dim) then
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k) !max(0.0,sign*v%pr(dim1)%cells(i,j,k))
-											else
-												v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim1)%cells(i,j,k)
-											end if
-										end do	
-										
-									case ('inlet')
-
-										!**** Relaxing inlet ****
-								!		farfield_pressure	= 101325.0_dp + (bc%boundary_types(bound_number)%get_farfield_pressure() - 101325.0_dp) * min(this%time/10e-06_dp,1.0_dp)
-								!		farfield_density	= 1.17195723916649_dp + (bc%boundary_types(bound_number)%get_farfield_density() - 1.17195723916649_dp) * min(this%time/10e-06_dp,1.0_dp)
-                                       
-								!		farfield_pressure	= bc%boundary_types(bound_number)%get_farfield_pressure()
-								!		farfield_density	= bc%boundary_types(bound_number)%get_farfield_density()	
-								!		farfield_velocity	= bc%boundary_types(bound_number)%get_farfield_velocity()	
-								!		p%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))			= farfield_pressure
-								!		rho%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_density
-                                !        E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= farfield_energy
-                                        
-								!		v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	= -sign*sqrt(abs((p%cells(i,j,k) - farfield_pressure)*(rho%cells(i,j,k) - farfield_density)/farfield_density/rho%cells(i,j,k)))
-										continue
-								end select
-								
-							end if
-						end do
-					end do
-				end if
-			end do
-			end do
-			end do
-
-		!$omp end do nowait
-		!$omp end parallel
-
-		end associate
-
-	end subroutine
-
-	subroutine apply_boundary_conditions_interm_E_Y(this)
-
-		class(cpm_solver)		,intent(inout)		:: this
-
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
-		
-		character(len=20)		:: boundary_type_name
-		
-		integer	:: sign, bound_number
-		integer :: i,j,k,plus,dim,dim1,spec
-								
-		dimensions		= this%domain%get_domain_dimensions()
-		species_number	= this%chem%chem_ptr%species_number
-				
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
-		
-		associate(  E_f				=> this%E_f%s_ptr		, &
-					E_f_int			=> this%E_f_int%s_ptr	, &
-					Y				=> this%Y%v_ptr			, &
-					Y_int			=> this%Y_int%v_ptr		, &
-					bc				=> this%boundary%bc_ptr	, &
-					mesh			=> this%mesh%mesh_ptr)
-
-		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,spec,sign,bound_number,boundary_type_name) !, &
-		!!$omp& shared(this,cons_inner_loop,species_number,dimensions)
-            
-		!$omp do collapse(3) schedule(guided)
-
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					do dim = 1,dimensions
-						do plus = 1,2
-							sign			= (-1)**plus
-							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-							if( bound_number /= 0 ) then
-								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-								select case(boundary_type_name)
-									case('wall','outlet','symmetry_plane')
-										E_f_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= E_f_int%cells(i,j,k)
-								
-										do spec = 1, species_number
-											Y_int%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y_int%pr(spec)%cells(i,j,k)
-										end do
-									case('inlet')
-										E_f_int%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))		= E_f%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-
-										do spec = 1, species_number
-											Y_int%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=	Y%pr(spec)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-										end do										
-								end select
-							end if
-						end do
-					end do
-				end if
-			end do
-			end do
-			end do
-
-		!$omp end do nowait
-		!$omp end parallel
-
-		end associate
-
-	end subroutine
-
-	subroutine apply_boundary_conditions_interm_v(this)
-
-		class(cpm_solver)		,intent(inout)		:: this
-
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
-		
-		character(len=20)		:: boundary_type_name		
-
-		integer	:: sign, bound_number
-		integer :: i,j,k,plus,dim,dim1,specie_number
-								
-		dimensions		= this%domain%get_domain_dimensions()
-		species_number	= this%chem%chem_ptr%species_number
-				
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()			
-		
-		associate(  v				=> this%v%v_ptr			, &
-					v_int			=> this%v_int%v_ptr		, &
-					bc				=> this%boundary%bc_ptr	, &
-					mesh			=> this%mesh%mesh_ptr)
-
-		!$omp parallel default(shared)  private(i,j,k,plus,dim,dim1,sign,bound_number,boundary_type_name) !, &
-    	!!$omp& shared(this,cons_inner_loop,dimensions)
-        
-		!$omp do collapse(3) schedule(guided)
-
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					do dim = 1,dimensions
-						do plus = 1,2
-							sign			= (-1)**plus
-							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-							if( bound_number /= 0 ) then
-
-								boundary_type_name = bc%boundary_types(bound_number)%get_type_name()
-								select case(boundary_type_name)
-									case ('wall','symmetry_plane')
-										do dim1 = 1, dimensions
-											if(dim1 == dim) then
-												v_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = - v_int%pr(dim1)%cells(i,j,k)
-											else
-												v_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_int%pr(dim1)%cells(i,j,k)
-											end if
-										end do
-									case ('outlet')
-									
-										do dim1 = 1, dimensions
-											if(dim1 == dim) then
-												v_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_int%pr(dim1)%cells(i,j,k)
-											else
-												v_int%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v_int%pr(dim1)%cells(i,j,k)
-											end if
-										end do	
-										
-										!if (sign == 1) then
-										!	v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = max(0.0_dp,v_int%pr(dim)%cells(i,j,k))
-										!else
-										!	v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = min(0.0_dp,v_int%pr(dim)%cells(i,j,k))
-										!end if
-									case ('inlet')
-										v_int%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = v%pr(dim)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-								end select
-
-							end if
-						end do
-					end do
-				end if
-			end do
-			end do
-			end do
-
-		!$omp end do nowait
-		!$omp end parallel
-
-		end associate
-
-	end subroutine
-
-	subroutine calculate_time_step(this)
-
+        global_limit = local_limit
 #ifdef mpi
-	use MPI
+        communicator = this%domain%get_mpi_communicator()
+        call MPI_Allreduce(local_limit, global_limit, 1, MPI_DOUBLE_PRECISION, &
+            MPI_MIN, communicator, error)
+        if (error /= MPI_SUCCESS) error stop 'CPM time step: MPI_Allreduce failed'
 #endif
+        if (.not.ieee_is_finite(global_limit) .or. global_limit <= 0.0_dp) then
+            error stop 'CPM time step: invalid stability limit'
+        end if
+        this%time_step = this%courant_fraction * global_limit
+    end subroutine calculate_time_step
 
-		class(cpm_solver)	,intent(inout)	:: this
-		
-		real(dp)	:: delta_t_interm, time_step(1), velocity_value
-		real(dp)	,dimension(:)	,allocatable	,save	:: time_step_array
 
-		integer						:: dimensions
-		integer						:: processor_rank, processor_number, mpi_communicator
 
-		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dp)	,dimension(3)	:: cell_size
-		integer	:: sign
-		integer :: i,j,k,dim,error
 
-		processor_rank		= this%domain%get_processor_rank()
-		mpi_communicator	= this%domain%get_mpi_communicator()
+    integer function geometry_power(this)
+        class(cpm_solver), intent(in) :: this
+        character(len=20) :: coordinate_system
 
-		if (.not.allocated(time_step_array)) then
-			processor_number = this%domain%get_mpi_communicator_size()
-			allocate(time_step_array(processor_number))
-		end if
+        coordinate_system = this%domain%get_coordinate_system_name()
+        select case (coordinate_system)
+        case ('cartesian')
+            geometry_power = 0
+        case ('cylindrical')
+            geometry_power = 1
+        case ('spherical')
+            geometry_power = 2
+        case default
+            error stop 'CPM geometry: unsupported coordinate system'
+        end select
+    end function geometry_power
 
-		time_step(1)	= 10.0_dp !this%initial_time_step 
 
-		associate(  v				=> this%v%v_ptr		, &
-					v_s				=> this%v_s%s_ptr		, &
-					bc				=> this%boundary%bc_ptr	, &
-					mesh			=> this%mesh%mesh_ptr)
-		
-		dimensions			= this%domain%get_domain_dimensions()
-		cons_inner_loop		= this%domain%get_local_inner_cells_bounds()
-		cell_size			= mesh%get_cell_edges_length()					
-					
-		!!$omp parallel default(shared)  private(i,j,k,dim,delta_t_interm,velocity_value) , &
-		!!$omp& firstprivate(this)	,&
-		!!$omp& shared(v,v_s,mesh,bc,time_step)
-		!!$omp do collapse(3) schedule(static) reduction(min:time_step)
-					
-		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-			if(bc%bc_markers(i,j,k) == 0) then
-				velocity_value		= 0.0_dp
-				do dim = 1,dimensions
-					velocity_value = velocity_value + v%pr(dim)%cells(i,j,k)*v%pr(dim)%cells(i,j,k)
-				end do
-				delta_t_interm = minval(cell_size,cell_size > 0.0_dp) / (sqrt(velocity_value) + v_s%cells(i,j,k)) !
-				if (delta_t_interm < time_step(1)) then
-					time_step(1) = delta_t_interm
-				end if
-			end if
-		end do
-		end do
-		end do
-	
-		!!$omp end do nowait
-		!!$omp end parallel
+    real(dp) function cell_metric(this, i, j, k, power)
+        class(cpm_solver), intent(in) :: this
+        integer, intent(in) :: i, j, k, power
+        real(dp) :: radius
 
-		time_step_array(processor_rank+1) = time_step(1) 
-		
-#ifdef mpi
-		call mpi_gather(time_step,1,MPI_DOUBLE_PRECISION,time_step_array,1,MPI_DOUBLE_PRECISION,0,mpi_communicator,error)
-#endif
-		
-		if (processor_rank == 0) then
-			do i = 0,size(time_step_array) - 1 
-				if (time_step_array(i+1) < time_step(1)) time_step(1) = time_step_array(i+1)
-			end do
-		end if
+        if (power == 0) then
+            cell_metric = 1.0_dp
+        else
+            radius = max(this%mesh%mesh_ptr%mesh(1,i,j,k), 0.0_dp)
+            cell_metric = radius**power
+        end if
+    end function cell_metric
 
-#ifdef mpi	
-		call mpi_bcast(time_step,1,MPI_DOUBLE_PRECISION,0,mpi_communicator,error)
-#endif
 
-		this%time_step = this%courant_fraction * time_step(1)
-		
-		!# Implantation
-		!if(this%time_step < 3.0e-08) then
-		!	this%time_step = 0.025_dp*this%time_step
-		!end if
-  !
-		!if(this%time_step < 6.5e-10) then
-		!	this%time_step = 0.5_dp*this%time_step
-		!end if
-		
+    real(dp) function face_metric(this, dim, i, j, k, power)
+        class(cpm_solver), intent(in) :: this
+        integer, intent(in) :: dim, i, j, k, power
+        integer :: il, jl, kl
+        real(dp) :: radius
 
-		end associate			
-	
-	end subroutine
-		
-	subroutine set_CFL_coefficient(this,coefficient)
-		class(cpm_solver)	,intent(inout)		:: this
-		real(dp)				,intent(in)		:: coefficient
-	
-		this%courant_fraction = coefficient
-		
-	end subroutine
-	
-	pure function get_CFL_coefficient(this)
-		real(dp)						:: get_CFL_coefficient
-		class(cpm_solver)	,intent(in)		:: this
+        if (power == 0) then
+            face_metric = 1.0_dp
+            return
+        end if
+        il = i - I_m(dim,1)
+        jl = j - I_m(dim,2)
+        kl = k - I_m(dim,3)
+        radius = 0.5_dp * (this%mesh%mesh_ptr%mesh(1,il,jl,kl) + &
+            this%mesh%mesh_ptr%mesh(1,i,j,k))
+        face_metric = max(radius, 0.0_dp)**power
+    end function face_metric
 
-		get_CFL_coefficient = this%courant_fraction
-	end function	
-	
-	pure function get_time_step(this)
-		real(dp)						:: get_time_step
-		class(cpm_solver)	,intent(in)		:: this
 
-		get_time_step = this%time_step
-	end function
+    subroutine set_CFL_coefficient(this, coefficient)
+        class(cpm_solver), intent(inout) :: this
+        real(dp), intent(in) :: coefficient
 
-	pure function get_time(this)
-		real(dp)						:: get_time
-		class(cpm_solver)	,intent(in)		:: this
+        if (.not.ieee_is_finite(coefficient) .or. &
+            coefficient <= 0.0_dp .or. coefficient > 1.0_dp) then
+            error stop 'CPM CFL coefficient must be in (0,1]'
+        end if
+        this%courant_fraction = coefficient
+    end subroutine set_CFL_coefficient
 
-		get_time = this%time
-	end function
 
-    subroutine if_stabilized(this,time,stabilized)
-		class(cpm_solver)	,intent(inout)	:: this
-		real(dp)			,intent(in)     :: time    
+    pure real(dp) function get_CFL_coefficient(this)
+        class(cpm_solver), intent(in) :: this
+        get_CFL_coefficient = this%courant_fraction
+    end function get_CFL_coefficient
 
-		logical				,intent(out)	:: stabilized
-		
-        logical						:: boundary 
-		real(dp)	,dimension(3)	:: cell_size		
-		
-		real(dp)					:: max_val, left_val, right_val, flame_velocity, flame_surface_length, surface_factor
-		real(dp)					:: a, b 
-		real(dp)					:: time_diff, time_delay, time_stabilization
-		real(dp), save			:: previous_flame_location = 0.0_dp, current_flame_location = 0.0_dp, farfield_velocity = 0.0_dp
-		real(dp), save			:: previous_time = 0.0_dp, current_time = 0.0_dp
-        real(dp), save			:: av_flame_velocity = 0.0_dp, previous_av_flame_velocity = 0.0_dp
-		real(dp), dimension(20),	save	:: flame_velocity_array = 0.0_dp
-		integer		,save			:: correction = 0, counter = 0
-		integer						:: flame_front_index
-		character(len=200)			:: file_name
-		
-		
-		integer	:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
 
-		real(dp)				:: tip_coord, side_coord_x, side_coord_y, T_flame, lp_dist, x_f, min_dist, min_y, max_x
-		integer					:: lp_number, lp_neighbour, lp_copies, lp_tip, lp_bound, lp_start, lp_number2 
-		
-		integer :: CO_index, H2O2_index, HO2_index
-		integer	:: bound_number,sign
-		integer :: i,j,k,plus,dim,dim1,spec, lp_index,lp_index2,lp_index3
-		
-		
-		character(len=20)		:: boundary_type_name
-		
-		dimensions		= this%domain%get_domain_dimensions()
-		species_number	= this%chem%chem_ptr%species_number
-		
-		cons_inner_loop	= this%domain%get_local_inner_cells_bounds()
-				
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
+    pure real(dp) function get_time_step(this)
+        class(cpm_solver), intent(in) :: this
+        get_time_step = this%time_step
+    end function get_time_step
 
-!		CO_index	= this%chem%chem_ptr%get_chemical_specie_index('CO')
-!		HO2_index	= this%chem%chem_ptr%get_chemical_specie_index('HO2')
-		HO2_index		= this%chem%chem_ptr%get_chemical_specie_index('HO2')
-		
-		stabilized = .false.
-		
-		associate (	v				=> this%v%v_ptr				, &
-					T				=> this%T%s_ptr				, &
-					Y				=> this%Y%v_ptr				, &
-					bc				=> this%boundary%bc_ptr)
 
-	!	time_delay			= 1e-04_dp			
-	!	time_diff			= 5e-05_dp
-	!	time_stabilization	= 5e-04_dp			
-					
-		time_delay			= 1e-05_dp			
-		time_diff			= 1e-04_dp
-		time_stabilization	= 5e-06_dp			
-		
-		if ( time > (correction+1)*(time_diff) + time_delay) then			
-					
-			current_time = time
-		
-			!# 1D front tracer
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-				max_val = 0.0_dp
-				do i = cons_inner_loop(1,1),cons_inner_loop(1,2)-1
-					if(bc%bc_markers(i,j,k) == 0) then	
-					
-						!! Grad temp
-						!if (abs(T%cells(i+1,j,k)-T%cells(i-1,j,k)) > max_val) then
-						!	max_val = abs(T%cells(i+1,j,k)-T%cells(i-1,j,k))
-						!	flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
-						!	flame_front_index = i
-						!end if
-					
-						! max H
-						if (abs(Y%pr(HO2_index)%cells(i,j,k)) > max_val) then
-							max_val = Y%pr(HO2_index)%cells(i,j,k)
-							flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
-							flame_front_index = i
-						end if					
-					
-						! max CO
-						!if (abs(Y%pr(CO_index)%cells(i,j,k)) > max_val) then
-						!	max_val = Y%pr(CO_index)%cells(i,j,k)
-						!	flame_front_coords(j) = (i - 0.5_dp)*cell_size(1) 
-						!	flame_front_index = i
-						!end if
-				
-					end if
-				end do
-			end do
-			end do
-	
-			!left_val	= T%cells(flame_front_index,1,1) - T%cells(flame_front_index-2,1,1)
-			!right_val	= T%cells(flame_front_index+2,1,1) - T%cells(flame_front_index,1,1)
-			
-			!left_val	= Y%pr(CO_index)%cells(flame_front_index-1,1,1)
-			!right_val	= Y%pr(CO_index)%cells(flame_front_index+1,1,1)	
-			 
-			left_val	= Y%pr(HO2_index)%cells(flame_front_index-1,1,1)
-			right_val	= Y%pr(HO2_index)%cells(flame_front_index+1,1,1)				 
-			
-			a = (right_val + left_val - 2.0_dp * max_val)/2.0_dp/cell_size(1)**2
-			b = (max_val - left_val)/cell_size(1) - a*(2.0_dp*flame_front_coords(1) - cell_size(1))
-			
-			current_flame_location = -b/2.0_dp/a
+    pure real(dp) function get_time(this)
+        class(cpm_solver), intent(in) :: this
+        get_time = this%time
+    end function get_time
 
-			if(correction == 0) then
-				previous_flame_location = current_flame_location
-            end if
-			
-            boundary = .false.
-            if(flame_front_index > cons_inner_loop(1,2) - 10) boundary = .true.
-            
-			if( (correction /= 0).and.(current_flame_location /=  previous_flame_location) )then 
-                
-				flame_velocity = (current_flame_location - previous_flame_location)/(current_time - previous_time)
-
-				previous_flame_location = current_flame_location
-				previous_time = current_time
-				
-                previous_av_flame_velocity = sum(flame_velocity_array)
-                
-                do i = 19, 1, -1
-					flame_velocity_array(i+1) = flame_velocity_array(i)  
-                end do
-                flame_velocity_array(1) = flame_velocity
-                
-                av_flame_velocity = sum(flame_velocity_array)
-                
-				if( (correction /= 0).and.(abs(av_flame_velocity - previous_av_flame_velocity) < 1e-03))then 
-					counter = counter + 1
-                end if
-                
-                write (flame_loc_unit,'(5E14.6)') time, current_flame_location, flame_velocity, av_flame_velocity, abs(av_flame_velocity - previous_av_flame_velocity)
-
-			end if
-
-			if ((counter > 10).or.boundary) then
-				stabilized = .true.
-			end if
-			
-			correction = correction + 1
-			
-		end if	
-			
-		end associate
-    end subroutine	    
-    
-end module
+end module cpm_solver_class

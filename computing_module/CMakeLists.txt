@@ -34,7 +34,6 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/current_build/cabaret_solver.f90
 	${SRC_COMPUTE}/src/current_build/cabaret_low_mach_solver.f90
 	${SRC_COMPUTE}/src/current_build/chemical_kinetics_solver.f90
-	${SRC_COMPUTE}/src/current_build/coarse_particles_method.f90
 	${SRC_COMPUTE}/src/current_build/cpm_solver.f90
 	${SRC_COMPUTE}/src/current_build/fds_low_mach_solver.f90
 	${SRC_COMPUTE}/src/current_build/fickean_diffusion_solver.f90
