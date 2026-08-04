@@ -32,6 +32,7 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/third_party/slatec/xgetua.f90
 
 	${SRC_COMPUTE}/src/current_build/cabaret_solver.f90
+	${SRC_COMPUTE}/src/current_build/cabaret_low_mach_solver.f90
 	${SRC_COMPUTE}/src/current_build/chemical_kinetics_solver.f90
 	${SRC_COMPUTE}/src/current_build/coarse_particles_method.f90
 	${SRC_COMPUTE}/src/current_build/cpm_solver.f90
@@ -40,6 +41,7 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/current_build/fourier_heat_transfer_solver.f90
 	${SRC_COMPUTE}/src/current_build/thermal_radiation_solver.f90
 	${SRC_COMPUTE}/src/current_build/lagrangian_particles_solver.f90
+	${SRC_COMPUTE}/src/current_build/elliptic_multigrid_solver.f90
 	${SRC_COMPUTE}/src/current_build/main.f90
 	${SRC_COMPUTE}/src/current_build/continuous_particles_solver.f90
 	${SRC_COMPUTE}/src/current_build/riemann_solver.f90
