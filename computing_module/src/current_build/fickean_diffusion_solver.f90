@@ -1,512 +1,573 @@
 module fickean_diffusion_solver_class
 
-	use kind_parameters
-	use global_data
-	use field_pointers
-	use boundary_conditions_class
-	use data_manager_class
-	use computational_mesh_class
-	use computational_domain_class
-	use thermophysical_properties_class
-	use chemical_properties_class
-	
-    use benchmarking
-	use mpi_communications_class
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
-	implicit none
-	
-#ifdef OMP
-	include "omp_lib.h"
-#endif
-	
-	private
-	public	:: diffusion_solver, diffusion_solver_c
-	
-	type(field_scalar_cons)	,target	:: E_f_prod_diff
-	type(field_vector_cons)	,target	:: Y_prod_diff, D, D_T
-	
-	type	:: diffusion_solver
-		type(field_scalar_cons_pointer)				:: T, p, mix_mol_mass, rho, E_f_prod
-		type(field_vector_cons_pointer)				:: Y, Y_prod, D, D_T
-		type(computational_domain)					:: domain
-		type(mpi_communications)					:: mpi_support
-		type(boundary_conditions_pointer)			:: boundary
-		type(computational_mesh_pointer)			:: mesh
-		type(thermophysical_properties_pointer)		:: thermo
-		type(chemical_properties_pointer)			:: chem
-		
-        integer :: H_index = 0, H2_index = 0
+    use kind_parameters, only: dp
+    use global_data, only: I_m, T_ref
+    use field_pointers
+    use boundary_conditions_class
+    use data_manager_class
+    use computational_mesh_class
+    use computational_domain_class
+    use thermophysical_properties_class
+    use chemical_properties_class
+    use mpi_communications_class
+
+    implicit none
+
+    private
+    public :: diffusion_solver, diffusion_solver_c
+
+    real(dp), parameter :: default_soret_alpha_h = 0.895_dp
+    real(dp), parameter :: default_soret_alpha_h2 = 0.910_dp
+
+    type :: diffusion_solver
+        private
+
+        type(field_scalar_cons_pointer) :: temperature
+        type(field_scalar_cons_pointer) :: pressure
+        type(field_scalar_cons_pointer) :: mixture_molar_mass
+        type(field_scalar_cons_pointer) :: density
+        type(field_scalar_cons_pointer) :: energy_source
+        type(field_vector_cons_pointer) :: mass_fraction
+        type(field_vector_cons_pointer) :: species_source
+        type(field_vector_cons_pointer) :: diffusivity
+        type(field_vector_cons_pointer) :: thermal_diffusion_coefficient
+
+        type(field_scalar_cons), pointer :: energy_source_store => null()
+        type(field_vector_cons), pointer :: species_source_store => null()
+        type(field_vector_cons), pointer :: diffusivity_store => null()
+        type(field_vector_cons), pointer :: thermal_diffusion_store => null()
+
+        type(computational_domain) :: domain
+        type(mpi_communications) :: mpi_support
+        type(boundary_conditions_pointer) :: boundary
+        type(computational_mesh_pointer) :: mesh
+        type(thermophysical_properties_pointer) :: thermophysics
+        type(chemical_properties_pointer) :: chemistry
+
         logical :: soret_enabled = .true.
+        integer, allocatable :: soret_species_indices(:)
+        real(dp), allocatable :: soret_alpha(:)
+    contains
+        procedure :: solve_diffusion
+        procedure :: update_diffusion_coefficients
+        procedure :: set_soret_enabled
+        procedure :: configure_reduced_soret
+        procedure, private :: initialize_default_soret_model
+        procedure, private :: fill_coefficient_boundary_ghosts
+        procedure, private :: calculate_face_flux
+        procedure, private :: geometry_power
+        procedure, private, nopass :: radial_face_ratio
+        procedure, private, nopass :: positive_harmonic_mean
+    end type diffusion_solver
 
-	contains
-		procedure	,private	::	calculate_diffusivity_coeff
-        procedure   ,private    ::  calculate_thermal_diffusion_coeff
-		procedure	,private	::	apply_boundary_conditions
-		procedure				::	solve_diffusion
-	end type
-	
-	interface	diffusion_solver_c
-		module procedure	constructor
-	end interface
-	
+    interface diffusion_solver_c
+        module procedure constructor
+    end interface diffusion_solver_c
+
 contains
 
-	type(diffusion_solver)	function constructor(manager)
-	
-		type(data_manager)	, intent(inout)	:: manager
-	
-		type(field_scalar_cons_pointer)	:: scal_ptr
-		type(field_vector_cons_pointer)	:: vect_ptr
-		type(field_tensor_cons_pointer)	:: tens_ptr	
-	
-		integer	:: species_number
-		integer	:: spec
-		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'pressure')
-		constructor%p%s_ptr					=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'temperature')
-		constructor%T%s_ptr					=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'density')
-		constructor%rho%s_ptr				=> scal_ptr%s_ptr	
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'mixture_molar_mass')
-		constructor%mix_mol_mass%s_ptr		=> scal_ptr%s_ptr
-		
-		call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_mass_fraction')
-		constructor%Y%v_ptr				=> vect_ptr%v_ptr
+    type(diffusion_solver) function constructor(manager, soret_enabled)
+        type(data_manager), intent(inout) :: manager
+        logical, intent(in), optional :: soret_enabled
 
-		call manager%create_scalar_field(E_f_prod_diff	,'energy_production_diffusion'	,'E_f_prod_diff')
-		constructor%E_f_prod%s_ptr		=> E_f_prod_diff		
-		call manager%create_vector_field(Y_prod_diff,'specie_production_diffusion'	,'Y_prod_diff'	,'chemical')
-		constructor%Y_prod%v_ptr		=> Y_prod_diff		
-		call manager%create_vector_field(D			,'diffusivity'					,'D'			,'chemical')
-		constructor%D%v_ptr				=> D		
-        call manager%create_vector_field(D_T         ,'thermal_diffusion_coefficient'  ,'D_T'         ,'chemical')
-        constructor%D_T%v_ptr            => D_T
-		
-		constructor%mesh%mesh_ptr	=> manager%computational_mesh_pointer%mesh_ptr
-		constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr		
-		
-		constructor%domain				= manager%domain
-		constructor%mpi_support			= manager%mpi_communications
+        type(field_scalar_cons_pointer) :: scalar_pointer
+        type(field_vector_cons_pointer) :: vector_pointer
+        type(field_tensor_cons_pointer) :: tensor_pointer
 
-		constructor%thermo%thermo_ptr	=> manager%thermophysics%thermo_ptr
-		constructor%chem%chem_ptr		=> manager%chemistry%chem_ptr
+        constructor%domain = manager%domain
+        constructor%mpi_support = manager%mpi_communications
+        constructor%mesh%mesh_ptr => manager%computational_mesh_pointer%mesh_ptr
+        constructor%boundary%bc_ptr => manager%boundary_conditions_pointer%bc_ptr
+        constructor%thermophysics%thermo_ptr => manager%thermophysics%thermo_ptr
+        constructor%chemistry%chem_ptr => manager%chemistry%chem_ptr
 
-		species_number = constructor%chem%chem_ptr%species_number
-        constructor%H_index  = constructor%chem%chem_ptr%get_chemical_specie_index('H')
-        constructor%H2_index = constructor%chem%chem_ptr%get_chemical_specie_index('H2')
-		
-		constructor%E_f_prod%s_ptr%cells(:,:,:)		= 0.0_dp
-		do spec = 1, species_number
-		constructor%Y_prod%v_ptr%pr(spec)%cells(:,:,:)	= 0.0_dp		
-            constructor%D%v_ptr%pr(spec)%cells(:,:,:)      = 0.0_dp
-            constructor%D_T%v_ptr%pr(spec)%cells(:,:,:)    = 0.0_dp
-		end do
-		
+        call manager%get_cons_field_pointer_by_name( &
+            scalar_pointer, vector_pointer, tensor_pointer, 'temperature')
+        constructor%temperature%s_ptr => scalar_pointer%s_ptr
+        call manager%get_cons_field_pointer_by_name( &
+            scalar_pointer, vector_pointer, tensor_pointer, 'pressure')
+        constructor%pressure%s_ptr => scalar_pointer%s_ptr
+        call manager%get_cons_field_pointer_by_name( &
+            scalar_pointer, vector_pointer, tensor_pointer, 'density')
+        constructor%density%s_ptr => scalar_pointer%s_ptr
+        call manager%get_cons_field_pointer_by_name( &
+            scalar_pointer, vector_pointer, tensor_pointer, 'mixture_molar_mass')
+        constructor%mixture_molar_mass%s_ptr => scalar_pointer%s_ptr
+        call manager%get_cons_field_pointer_by_name( &
+            scalar_pointer, vector_pointer, tensor_pointer, 'specie_mass_fraction')
+        constructor%mass_fraction%v_ptr => vector_pointer%v_ptr
 
-	end function
+        allocate(constructor%energy_source_store)
+        allocate(constructor%species_source_store)
+        allocate(constructor%diffusivity_store)
+        allocate(constructor%thermal_diffusion_store)
 
-	subroutine	solve_diffusion(this,time_step)
-	
-		class(diffusion_solver) ,intent(inout) :: this
-		real(dp)				,intent(in)		:: time_step
+        call manager%create_scalar_field( &
+            constructor%energy_source_store, &
+            'energy_production_diffusion', 'E_f_prod_diff')
+        constructor%energy_source%s_ptr => constructor%energy_source_store
 
-        real(dp) :: div_dif_flux, diffusion_flux1, diffusion_flux2
-        real(dp) :: diff_velocity_corr1, diff_velocity_corr2
-        real(dp) :: soret_flux_corr1, soret_flux_corr2
-        real(dp) :: Y_face_sum1, Y_face_sum2, Y_face1, Y_face2
-        real(dp) :: Y_corr1, Y_corr2, rho_face1, rho_face2
-        real(dp) :: grad_log_T1, grad_log_T2
-        real(dp) :: specie_enthalpy, specie_enthalpy1, specie_enthalpy2, h_s_Tref		
+        call manager%create_vector_field( &
+            constructor%species_source_store, &
+            'specie_production_diffusion', 'Y_prod_diff', 'chemical')
+        constructor%species_source%v_ptr => constructor%species_source_store
 
-		real(dp) ,dimension(this%chem%chem_ptr%species_number) :: diff_velocity1, diff_velocity2
-        real(dp), dimension(this%chem%chem_ptr%species_number) :: soret_raw_flux1, soret_raw_flux2
-		
-		real(dp), dimension (3,3)	:: lame_coeffs	
-		
-		integer						:: dimensions, species_number
-		integer		,dimension(3,2)	:: cons_inner_loop
-		real(dp)	,dimension(3)	:: cell_size			
-		character(len=20)			:: coordinate_system
-		
-        integer :: bound_number1, bound_number2
-        logical :: face1_is_boundary, face2_is_boundary
-        integer :: i,j,k,dim,specie_number
-		
-		call this%calculate_diffusivity_coeff()
-        call this%calculate_thermal_diffusion_coeff()
-		call this%apply_boundary_conditions()
-		
-		dimensions		= this%domain%get_domain_dimensions()
-		species_number	= this%chem%chem_ptr%species_number
-		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-		cell_size		= this%mesh%mesh_ptr%get_cell_edges_length()
-		coordinate_system	= this%domain%get_coordinate_system_name()
-		
-        associate(  rho				=> this%rho%s_ptr		, &
-				    T				=> this%T%s_ptr			, &		
-				    Y				=> this%Y%v_ptr			, &				
-				    D				=> this%D%v_ptr			, &
-                    D_T          	=> this%D_T%v_ptr       , &
-				    mix_mol_mass    => this%mix_mol_mass%s_ptr)
-        
-		    call this%mpi_support%exchange_conservative_scalar_field(mix_mol_mass)
-		    call this%mpi_support%exchange_conservative_scalar_field(rho)
-		    call this%mpi_support%exchange_conservative_scalar_field(T)
-		    call this%mpi_support%exchange_conservative_vector_field(D)
-            call this%mpi_support%exchange_conservative_vector_field(D_T)
-		    call this%mpi_support%exchange_conservative_vector_field(Y)
-        end associate
-    		
-		associate(  rho				=> this%rho%s_ptr		, &
-					T				=> this%T%s_ptr			, &		
-					Y				=> this%Y%v_ptr			, &
-					E_f_prod		=> this%E_f_prod%s_ptr	, &
-					Y_prod			=> this%Y_prod%v_ptr	, &
-					D				=> this%D%v_ptr			, &
-                    D_T          	=> this%D_T%v_ptr       , &
-					molar_masses    => this%thermo%thermo_ptr%molar_masses		, &
-					mesh			=> this%mesh%mesh_ptr	, &
-					bc				=> this%boundary%bc_ptr)
+        call manager%create_vector_field( &
+            constructor%diffusivity_store, 'diffusivity', 'D', 'chemical')
+        constructor%diffusivity%v_ptr => constructor%diffusivity_store
 
-    !$omp parallel default(shared) private(i,j,k,dim,specie_number,div_dif_flux,diff_velocity1,diff_velocity2, &
-    !$omp& diff_velocity_corr1,diff_velocity_corr2,soret_raw_flux1,soret_raw_flux2,soret_flux_corr1,soret_flux_corr2, &
-    !$omp& diffusion_flux1,diffusion_flux2,h_s_Tref,specie_enthalpy,specie_enthalpy1,specie_enthalpy2,lame_coeffs, &
-    !$omp& bound_number1,bound_number2,face1_is_boundary,face2_is_boundary,Y_face_sum1,Y_face_sum2,Y_face1,Y_face2, &
-    !$omp& Y_corr1,Y_corr2,rho_face1,rho_face2,grad_log_T1,grad_log_T2)
-    	    
-    !$omp do collapse(3) schedule(static)
-		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-		do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-		
-			E_f_prod%cells(i,j,k) = 0.0_dp
-			do specie_number = 1,species_number
-				Y_prod%pr(specie_number)%cells(i,j,k) = 0.0_dp
-			end do		
-		
-            if (bc%bc_markers(i,j,k) == 0) then
+        call manager%create_vector_field( &
+            constructor%thermal_diffusion_store, &
+            'thermal_diffusion_coefficient', 'D_T', 'chemical')
+        constructor%thermal_diffusion_coefficient%v_ptr => &
+            constructor%thermal_diffusion_store
 
-				do dim = 1,dimensions
-					lame_coeffs		= 1.0_dp							
-					select case(coordinate_system)
-						case ('cartesian')	
-							lame_coeffs			= 1.0_dp
-						case ('cylindrical')
-							lame_coeffs(1,1)	=  mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1)
-							lame_coeffs(1,2)	=  mesh%mesh(1,i,j,k)
-							lame_coeffs(1,3)	=  mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1)	
-						case ('spherical')
-							lame_coeffs(1,1)	=  (mesh%mesh(1,i,j,k) - 0.5_dp*cell_size(1))**2
-							lame_coeffs(1,2)	=  (mesh%mesh(1,i,j,k))**2
-							lame_coeffs(1,3)	=  (mesh%mesh(1,i,j,k) + 0.5_dp*cell_size(1))**2
-                    end select						
-						
-                    bound_number1 = bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
-                    bound_number2 = bc%bc_markers(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))
-                    face1_is_boundary = (bound_number1 /= 0)
-                    face2_is_boundary = (bound_number2 /= 0)
+        constructor%energy_source%s_ptr%cells = 0.0_dp
+        call zero_vector_field(constructor%species_source%v_ptr)
+        call zero_vector_field(constructor%diffusivity%v_ptr)
+        call zero_vector_field(constructor%thermal_diffusion_coefficient%v_ptr)
 
-                    diff_velocity1 = 0.0_dp
-                    diff_velocity2 = 0.0_dp
-                    soret_raw_flux1   = 0.0_dp
-                    soret_raw_flux2   = 0.0_dp
-                    diff_velocity_corr1 = 0.0_dp
-                    diff_velocity_corr2 = 0.0_dp
-                    soret_flux_corr1    = 0.0_dp
-                    soret_flux_corr2    = 0.0_dp
-                    Y_face_sum1         = 0.0_dp
-                    Y_face_sum2         = 0.0_dp
-                    grad_log_T1         = 0.0_dp
-                    grad_log_T2         = 0.0_dp
+        call constructor%initialize_default_soret_model()
+        if (present(soret_enabled)) constructor%soret_enabled = soret_enabled
+    end function constructor
 
-                    if (.not. face1_is_boundary) then
-                        grad_log_T1 = lame_coeffs(dim,1) * &
-                            (log(max(T%cells(i,j,k),tiny(1.0_dp))) - &
-                             log(max(T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),tiny(1.0_dp)))) / cell_size(dim)
-                    end if
-                    if (.not. face2_is_boundary) then
-                        grad_log_T2 = lame_coeffs(dim,3) * &
-                            (log(max(T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),tiny(1.0_dp))) - &
-                             log(max(T%cells(i,j,k),tiny(1.0_dp)))) / cell_size(dim)
-                    end if
 
-					do specie_number = 1,species_number
-                        if (molar_masses(specie_number) <= 0.0_dp) cycle
-
-                        Y_face1 = 0.5_dp * (Y%pr(specie_number)%cells(i,j,k) + &
-                                           Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
-                        Y_face2 = 0.5_dp * (Y%pr(specie_number)%cells(i,j,k) + &
-                                           Y%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
-                        Y_face_sum1 = Y_face_sum1 + Y_face1
-                        Y_face_sum2 = Y_face_sum2 + Y_face2
-
-                        if (.not. face1_is_boundary) then
-                            diff_velocity1(specie_number) = 0.5_dp * &
-                                (D%pr(specie_number)%cells(i,j,k) + &
-                                 D%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * &
-                                lame_coeffs(dim,1) * &
-                                (Y%pr(specie_number)%cells(i,j,k) - &
-                                 Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) / cell_size(dim)
-
-                            soret_raw_flux1(specie_number) = 0.5_dp * &
-                                (D_T%pr(specie_number)%cells(i,j,k) + &
-                                 D_T%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))) * grad_log_T1
-																		
-							diff_velocity_corr1	= diff_velocity_corr1 + diff_velocity1(specie_number)
-                            soret_flux_corr1    = soret_flux_corr1    + soret_raw_flux1(specie_number)
-                        end if
-
-                        if (.not. face2_is_boundary) then
-                            diff_velocity2(specie_number) = 0.5_dp * &
-                                (D%pr(specie_number)%cells(i,j,k) + &
-                                 D%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * &
-                                lame_coeffs(dim,3) * &
-                                (Y%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) - &
-                                 Y%pr(specie_number)%cells(i,j,k)) / cell_size(dim)
-
-                            soret_raw_flux2(specie_number) = 0.5_dp * &
-                                (D_T%pr(specie_number)%cells(i,j,k) + &
-                                 D_T%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3))) * grad_log_T2
-					
-							diff_velocity_corr2	= diff_velocity_corr2 + diff_velocity2(specie_number)	
-                            soret_flux_corr2    = soret_flux_corr2    + soret_raw_flux2(specie_number)
-						end if
-					end do
-						
-                    rho_face1 = 0.5_dp * (rho%cells(i,j,k) + &
-                                          rho%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
-                    rho_face2 = 0.5_dp * (rho%cells(i,j,k) + &
-                                          rho%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
-
-                    do specie_number = 1,species_number
-                        if (molar_masses(specie_number) <= 0.0_dp) cycle
-
-                        Y_face1 = 0.5_dp * (Y%pr(specie_number)%cells(i,j,k) + &
-                                           Y%pr(specie_number)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
-                        Y_face2 = 0.5_dp * (Y%pr(specie_number)%cells(i,j,k) + &
-                                           Y%pr(specie_number)%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)))
-
-                        Y_corr1 = 0.0_dp
-                        Y_corr2 = 0.0_dp
-                        if (Y_face_sum1 > 1.0e-30_dp) Y_corr1 = Y_face1/Y_face_sum1
-                        if (Y_face_sum2 > 1.0e-30_dp) Y_corr2 = Y_face2/Y_face_sum2
-
-                        diffusion_flux1 = 0.0_dp
-                        diffusion_flux2 = 0.0_dp
-
-                        if (.not. face1_is_boundary) then
-                            diffusion_flux1 = rho_face1 * &
-                                (diff_velocity1(specie_number) - diff_velocity_corr1*Y_corr1) + &
-                                soret_raw_flux1(specie_number) - soret_flux_corr1*Y_corr1
-                        end if
-
-                        if (.not. face2_is_boundary) then
-                            diffusion_flux2 = rho_face2 * &
-                                (diff_velocity2(specie_number) - diff_velocity_corr2*Y_corr2) + &
-                                soret_raw_flux2(specie_number) - soret_flux_corr2*Y_corr2
-                        end if
-
-                        div_dif_flux = (diffusion_flux2-diffusion_flux1) / cell_size(dim) / lame_coeffs(dim,2)
-                        Y_prod%pr(specie_number)%cells(i,j,k) = &
-                            Y_prod%pr(specie_number)%cells(i,j,k) + div_dif_flux
-
-                        h_s_Tref        = this%thermo%thermo_ptr%specie_enthalpy_molar(T_ref,specie_number)
-                        specie_enthalpy = this%thermo%thermo_ptr%specie_enthalpy_molar( &
-                                               T%cells(i,j,k),specie_number) - h_s_Tref
-
-                        specie_enthalpy1 = specie_enthalpy
-                        specie_enthalpy2 = specie_enthalpy
-                        if (.not. face1_is_boundary) then
-                            specie_enthalpy1 = this%thermo%thermo_ptr%specie_enthalpy_molar( &
-                                T%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)),specie_number) - h_s_Tref
-                        end if
-                        if (.not. face2_is_boundary) then
-                            specie_enthalpy2 = this%thermo%thermo_ptr%specie_enthalpy_molar( &
-                                T%cells(i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),specie_number) - h_s_Tref
-                        end if
-
-                        div_dif_flux = (diffusion_flux2*0.5_dp*(specie_enthalpy+specie_enthalpy2) - &
-                                        diffusion_flux1*0.5_dp*(specie_enthalpy+specie_enthalpy1)) / &
-                                        cell_size(dim) / lame_coeffs(dim,2)
-
-                        E_f_prod%cells(i,j,k) = E_f_prod%cells(i,j,k) + div_dif_flux/molar_masses(specie_number)
-                    end do
-					end do
-			end if			
-		end do
-		end do
-		end do
-	!$omp end do
-	!$omp end parallel
-
-        end associate
-
-        associate( E_f_prod		=> this%E_f_prod%s_ptr	, &
-                    Y_prod		=> this%Y_prod%v_ptr)
-        
-		call this%mpi_support%exchange_conservative_scalar_field(E_f_prod)
-		call this%mpi_support%exchange_conservative_vector_field(Y_prod)
-		end associate
-		
-	end subroutine solve_diffusion
-
-	subroutine calculate_diffusivity_coeff(this)
-		class(diffusion_solver), intent(inout) :: this
-
-        real(dp), dimension(this%chem%chem_ptr%species_number) :: Y_cell, D_cell
-        integer, dimension(3,2) :: cons_inner_loop
-        integer :: species_number
-        integer :: i,j,k,specie_number
-
-        species_number = this%chem%chem_ptr%species_number
-        cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-
-        associate( T            => this%T%s_ptr, &
-                   p            => this%p%s_ptr, &
-                   Y            => this%Y%v_ptr, &
-                   D            => this%D%v_ptr, &
-                   mix_mol_mass => this%mix_mol_mass%s_ptr, &
-                   bc           => this%boundary%bc_ptr)
-
-    !$omp parallel default(shared) private(i,j,k,specie_number,Y_cell,D_cell)
-    !$omp do collapse(3) schedule(static)
-        do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-        do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-        do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-            D_cell = 0.0_dp
-            if (bc%bc_markers(i,j,k) == 0) then
-                do specie_number = 1,species_number
-                    Y_cell(specie_number) = Y%pr(specie_number)%cells(i,j,k)
-                end do
-
-                call this%thermo%thermo_ptr%mixture_averaged_diffusion_coefficients( &
-                    T%cells(i,j,k),p%cells(i,j,k),Y_cell, &
-                    mix_mol_mass%cells(i,j,k),D_cell)
-            end if
-
-            do specie_number = 1,species_number
-                D%pr(specie_number)%cells(i,j,k) = D_cell(specie_number)
-            end do
-        end do
-        end do
-        end do
-    !$omp end do
-    !$omp end parallel
-
-        end associate
-	end subroutine calculate_diffusivity_coeff
-
-    subroutine calculate_thermal_diffusion_coeff(this)
+    subroutine initialize_default_soret_model(this)
         class(diffusion_solver), intent(inout) :: this
 
-        real(dp), parameter :: alpha_H  = 0.895_dp
-        real(dp), parameter :: alpha_H2 = 0.910_dp
+        allocate(this%soret_species_indices(2), this%soret_alpha(2))
+        this%soret_species_indices(1) = &
+            this%chemistry%chem_ptr%get_chemical_specie_index('H')
+        this%soret_species_indices(2) = &
+            this%chemistry%chem_ptr%get_chemical_specie_index('H2')
+        this%soret_alpha = (/default_soret_alpha_h, default_soret_alpha_h2/)
+    end subroutine initialize_default_soret_model
 
-        real(dp), dimension(this%chem%chem_ptr%species_number) :: Y_cell, D_T_cell
-        integer, dimension(2) :: target_indices
-        real(dp), dimension(2) :: alpha_soret
-        integer, dimension(3,2) :: cons_inner_loop
-        integer :: species_number
-        integer :: i,j,k,specie_number
 
-        species_number = this%chem%chem_ptr%species_number
-        cons_inner_loop = this%domain%get_local_inner_cells_bounds()
+    subroutine set_soret_enabled(this, enabled)
+        class(diffusion_solver), intent(inout) :: this
+        logical, intent(in) :: enabled
 
-        target_indices = (/this%H_index,this%H2_index/)
-        alpha_soret    = (/alpha_H,alpha_H2/)
-        if (.not. this%soret_enabled) target_indices = 0
+        this%soret_enabled = enabled
+    end subroutine set_soret_enabled
 
-        associate( T            => this%T%s_ptr, &
-                   Y            => this%Y%v_ptr, &
-                   D_T          => this%D_T%v_ptr, &
-                   mix_mol_mass => this%mix_mol_mass%s_ptr, &
-                   bc           => this%boundary%bc_ptr)
 
-    !$omp parallel default(shared) private(i,j,k,specie_number,Y_cell,D_T_cell)
-        !$omp do collapse(3) schedule(static)
-        do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-        do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-        do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-            D_T_cell = 0.0_dp
-            if (bc%bc_markers(i,j,k) == 0 .and. this%soret_enabled) then
-                do specie_number = 1,species_number
-                    Y_cell(specie_number) = Y%pr(specie_number)%cells(i,j,k)
-                end do
+    subroutine configure_reduced_soret(this, species_indices, alpha)
+        class(diffusion_solver), intent(inout) :: this
+        integer, dimension(:), intent(in) :: species_indices
+        real(dp), dimension(:), intent(in) :: alpha
 
-                call this%thermo%thermo_ptr%reduced_thermal_diffusion_coefficients( &
-                    T%cells(i,j,k),Y_cell,mix_mol_mass%cells(i,j,k), &
-                    target_indices,alpha_soret,D_T_cell)
+        integer :: target
+
+        if (size(species_indices) /= size(alpha)) then
+            error stop 'Diffusion solver: Soret configuration size mismatch'
+        end if
+        if (size(species_indices) == 0) then
+            error stop 'Diffusion solver: empty Soret target list'
+        end if
+        do target = 1, size(alpha)
+            if (.not. ieee_is_finite(alpha(target))) then
+                error stop 'Diffusion solver: non-finite Soret coefficient'
             end if
+            if (species_indices(target) < 0 .or. &
+                species_indices(target) > this%chemistry%chem_ptr%species_number) then
+                error stop 'Diffusion solver: invalid Soret species index'
+            end if
+        end do
 
-            do specie_number = 1,species_number
-                D_T%pr(specie_number)%cells(i,j,k) = D_T_cell(specie_number)
+        if (allocated(this%soret_species_indices)) &
+            deallocate(this%soret_species_indices)
+        if (allocated(this%soret_alpha)) deallocate(this%soret_alpha)
+        allocate(this%soret_species_indices(size(species_indices)))
+        allocate(this%soret_alpha(size(alpha)))
+        this%soret_species_indices = species_indices
+        this%soret_alpha = alpha
+    end subroutine configure_reduced_soret
+
+
+    subroutine solve_diffusion(this, time_step)
+        class(diffusion_solver), intent(inout) :: this
+        real(dp), intent(in) :: time_step
+
+        integer :: dimensions, species_number, power
+        integer :: i, j, k, dim, specie
+        integer, dimension(3,2) :: cell_loop
+        real(dp), dimension(3) :: cell_size
+        real(dp), allocatable :: flux_left(:), flux_right(:)
+        real(dp) :: enthalpy_flux_left, enthalpy_flux_right
+        real(dp) :: left_ratio, right_ratio, radius
+
+        if (.not. ieee_is_finite(time_step) .or. time_step <= 0.0_dp) then
+            error stop 'Diffusion solver: time step must be finite and positive'
+        end if
+
+        call this%update_diffusion_coefficients()
+
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chemistry%chem_ptr%species_number
+        power = this%geometry_power()
+        cell_loop = this%domain%get_local_inner_cells_bounds()
+        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
+
+        this%energy_source%s_ptr%cells = 0.0_dp
+        call zero_vector_field(this%species_source%v_ptr)
+
+        associate( &
+            energy_source => this%energy_source%s_ptr, &
+            species_source => this%species_source%v_ptr, &
+            markers => this%boundary%bc_ptr%bc_markers, &
+            mesh => this%mesh%mesh_ptr)
+
+            !$omp parallel default(shared) private(i,j,k,dim,specie,flux_left, &
+            !$omp& flux_right,enthalpy_flux_left,enthalpy_flux_right, &
+            !$omp& left_ratio,right_ratio,radius)
+            allocate(flux_left(species_number), flux_right(species_number))
+            !$omp do collapse(3) schedule(static)
+            do k = cell_loop(3,1), cell_loop(3,2)
+                do j = cell_loop(2,1), cell_loop(2,2)
+                    do i = cell_loop(1,1), cell_loop(1,2)
+                        if (markers(i,j,k) /= 0) cycle
+
+                        radius = mesh%mesh(1,i,j,k)
+                        do dim = 1, dimensions
+                            call this%calculate_face_flux( &
+                                i, j, k, dim, -1, flux_left, enthalpy_flux_left)
+                            call this%calculate_face_flux( &
+                                i, j, k, dim, 1, flux_right, enthalpy_flux_right)
+
+                            left_ratio = this%radial_face_ratio( &
+                                power, dim, radius, cell_size(1), -1)
+                            right_ratio = this%radial_face_ratio( &
+                                power, dim, radius, cell_size(1), 1)
+
+                            do specie = 1, species_number
+                                species_source%pr(specie)%cells(i,j,k) = &
+                                    species_source%pr(specie)%cells(i,j,k) + &
+                                    (right_ratio*flux_right(specie) - &
+                                     left_ratio*flux_left(specie)) / cell_size(dim)
+                            end do
+                            energy_source%cells(i,j,k) = &
+                                energy_source%cells(i,j,k) + &
+                                (right_ratio*enthalpy_flux_right - &
+                                 left_ratio*enthalpy_flux_left) / cell_size(dim)
+                        end do
+                    end do
+                end do
             end do
-        end do
-        end do
-        end do
-    !$omp end do
-    !$omp end parallel
-
+            !$omp end do
+            deallocate(flux_left, flux_right)
+            !$omp end parallel
         end associate
-    end subroutine calculate_thermal_diffusion_coeff
 
-	subroutine apply_boundary_conditions(this)
-
-		class(diffusion_solver) ,intent(inout) :: this
-		
-		integer					:: dimensions, species_number
-		integer	,dimension(3,2)	:: cons_inner_loop
-		
-		
-		integer :: specie_number
-		integer	:: sign, bound_number
-		integer :: i,j,k,plus,dim
-
-		dimensions		= this%domain%get_domain_dimensions()
-
-		species_number = this%chem%chem_ptr%species_number
-
-		cons_inner_loop = this%domain%get_local_inner_cells_bounds()
-
-		associate(  D			=> this%D%v_ptr				, &
-                    D_T         => this%D_T%v_ptr            , &
-					bc			=> this%boundary%bc_ptr		)
-					
-		!$omp parallel default(shared)  private(i,j,k,plus,dim,specie_number,sign,bound_number) !, &
-		!!$omp& shared(this,cons_inner_loop,dimensions,species_number)
-
-		!$omp do collapse(3) schedule(static)
-
-			do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
-			do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
-			do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-				if(bc%bc_markers(i,j,k) == 0) then
-					do dim = 1,dimensions
-						do plus = 1,2
-							sign			= (-1)**plus
-							bound_number	= bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
-							if( bound_number /= 0 ) then
-								do specie_number = 1,species_number
-									D%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))	=  D%pr(specie_number)%cells(i,j,k)
-                                    D_T%pr(specie_number)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) = D_T%pr(specie_number)%cells(i,j,k)
-								end do
-							end if
-						end do
-					end do
-				end if
-			end do
-			end do
-			end do
-
-		!$omp end do nowait
-
-		!$omp end parallel
-
-		end associate
+        call this%mpi_support%exchange_conservative_scalar_field( &
+            this%energy_source%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field( &
+            this%species_source%v_ptr)
+    end subroutine solve_diffusion
 
 
-	end subroutine	
-	
-	
-end module
+    subroutine update_diffusion_coefficients(this)
+        class(diffusion_solver), intent(inout) :: this
+
+        integer :: species_number, i, j, k, specie
+        integer, dimension(3,2) :: cell_loop
+        real(dp), allocatable :: mass_fractions(:), diffusion_values(:)
+        real(dp), allocatable :: thermal_diffusion_values(:)
+
+        species_number = this%chemistry%chem_ptr%species_number
+        cell_loop = this%domain%get_local_inner_cells_bounds()
+
+        call this%mpi_support%exchange_conservative_scalar_field( &
+            this%temperature%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field( &
+            this%pressure%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field( &
+            this%mixture_molar_mass%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field( &
+            this%mass_fraction%v_ptr)
+
+        associate( &
+            temperature => this%temperature%s_ptr, &
+            pressure => this%pressure%s_ptr, &
+            mixture_molar_mass => this%mixture_molar_mass%s_ptr, &
+            mass_fraction => this%mass_fraction%v_ptr, &
+            diffusivity => this%diffusivity%v_ptr, &
+            thermal_diffusion => this%thermal_diffusion_coefficient%v_ptr, &
+            markers => this%boundary%bc_ptr%bc_markers)
+
+            !$omp parallel default(shared) private(i,j,k,specie,mass_fractions, &
+            !$omp& diffusion_values,thermal_diffusion_values)
+            allocate(mass_fractions(species_number))
+            allocate(diffusion_values(species_number))
+            allocate(thermal_diffusion_values(species_number))
+            !$omp do collapse(3) schedule(static)
+            do k = cell_loop(3,1), cell_loop(3,2)
+                do j = cell_loop(2,1), cell_loop(2,2)
+                    do i = cell_loop(1,1), cell_loop(1,2)
+                        if (markers(i,j,k) /= 0) cycle
+
+                        do specie = 1, species_number
+                            mass_fractions(specie) = &
+                                mass_fraction%pr(specie)%cells(i,j,k)
+                        end do
+
+                        call this%thermophysics%thermo_ptr% &
+                            mixture_averaged_diffusion_coefficients( &
+                                temperature%cells(i,j,k), pressure%cells(i,j,k), &
+                                mass_fractions, &
+                                mixture_molar_mass%cells(i,j,k), diffusion_values)
+
+                        thermal_diffusion_values = 0.0_dp
+                        if (this%soret_enabled) then
+                            call this%thermophysics%thermo_ptr% &
+                                reduced_thermal_diffusion_coefficients( &
+                                    temperature%cells(i,j,k), mass_fractions, &
+                                    mixture_molar_mass%cells(i,j,k), &
+                                    this%soret_species_indices, this%soret_alpha, &
+                                    thermal_diffusion_values)
+                        end if
+
+                        do specie = 1, species_number
+                            if (.not. ieee_is_finite(diffusion_values(specie)) .or. &
+                                diffusion_values(specie) < 0.0_dp) then
+                                error stop 'Diffusion solver: invalid diffusivity'
+                            end if
+                            if (.not. ieee_is_finite( &
+                                thermal_diffusion_values(specie))) then
+                                error stop 'Diffusion solver: invalid Soret coefficient'
+                            end if
+                            diffusivity%pr(specie)%cells(i,j,k) = &
+                                diffusion_values(specie)
+                            thermal_diffusion%pr(specie)%cells(i,j,k) = &
+                                thermal_diffusion_values(specie)
+                        end do
+                    end do
+                end do
+            end do
+            !$omp end do
+            deallocate(mass_fractions, diffusion_values, &
+                thermal_diffusion_values)
+            !$omp end parallel
+        end associate
+
+        call this%mpi_support%exchange_conservative_vector_field( &
+            this%diffusivity%v_ptr)
+        call this%mpi_support%exchange_conservative_vector_field( &
+            this%thermal_diffusion_coefficient%v_ptr)
+        call this%fill_coefficient_boundary_ghosts()
+    end subroutine update_diffusion_coefficients
+
+
+    subroutine calculate_face_flux(this, i, j, k, dimension, side, &
+        mass_flux, enthalpy_flux)
+        class(diffusion_solver), intent(in) :: this
+        integer, intent(in) :: i, j, k, dimension, side
+        real(dp), dimension(:), intent(out) :: mass_flux
+        real(dp), intent(out) :: enthalpy_flux
+
+        integer :: neighbour_i, neighbour_j, neighbour_k
+        integer :: species_number, specie
+        real(dp), dimension(3) :: cell_size
+        real(dp) :: spacing, density_face, temperature_gradient
+        real(dp) :: mass_fraction_sum, raw_flux_sum
+        real(dp) :: diffusivity_face, thermal_diffusion_face
+        real(dp) :: gradient_mass_fraction, raw_flux
+        real(dp) :: sensible_enthalpy_cell, sensible_enthalpy_neighbour
+        real(dp), allocatable :: face_mass_fraction(:), raw_mass_flux(:)
+
+        species_number = size(mass_flux)
+        mass_flux = 0.0_dp
+        enthalpy_flux = 0.0_dp
+
+        neighbour_i = i + side*I_m(dimension,1)
+        neighbour_j = j + side*I_m(dimension,2)
+        neighbour_k = k + side*I_m(dimension,3)
+        if (this%boundary%bc_ptr%bc_markers( &
+            neighbour_i,neighbour_j,neighbour_k) /= 0) return
+
+        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
+        spacing = cell_size(dimension)
+        density_face = 0.5_dp*( &
+            this%density%s_ptr%cells(i,j,k) + &
+            this%density%s_ptr%cells(neighbour_i,neighbour_j,neighbour_k))
+        if (.not. ieee_is_finite(density_face) .or. density_face <= 0.0_dp) then
+            error stop 'Diffusion solver: invalid face density'
+        end if
+
+        temperature_gradient = real(side,dp) * &
+            (log(max(this%temperature%s_ptr%cells( &
+                neighbour_i,neighbour_j,neighbour_k), tiny(1.0_dp))) - &
+             log(max(this%temperature%s_ptr%cells(i,j,k), tiny(1.0_dp)))) / &
+            spacing
+
+        allocate(face_mass_fraction(species_number), raw_mass_flux(species_number))
+        mass_fraction_sum = 0.0_dp
+        do specie = 1, species_number
+            face_mass_fraction(specie) = 0.5_dp*( &
+                this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k) + &
+                this%mass_fraction%v_ptr%pr(specie)%cells( &
+                    neighbour_i,neighbour_j,neighbour_k))
+            if (face_mass_fraction(specie) < -1.0e-12_dp) then
+                error stop 'Diffusion solver: negative face mass fraction'
+            end if
+            face_mass_fraction(specie) = max(face_mass_fraction(specie), 0.0_dp)
+            mass_fraction_sum = mass_fraction_sum + face_mass_fraction(specie)
+        end do
+        if (mass_fraction_sum <= tiny(1.0_dp)) then
+            error stop 'Diffusion solver: zero face composition sum'
+        end if
+        face_mass_fraction = face_mass_fraction/mass_fraction_sum
+
+        raw_flux_sum = 0.0_dp
+        do specie = 1, species_number
+            diffusivity_face = this%positive_harmonic_mean( &
+                this%diffusivity%v_ptr%pr(specie)%cells(i,j,k), &
+                this%diffusivity%v_ptr%pr(specie)%cells( &
+                    neighbour_i,neighbour_j,neighbour_k))
+            thermal_diffusion_face = 0.5_dp*( &
+                this%thermal_diffusion_coefficient%v_ptr%pr(specie)% &
+                    cells(i,j,k) + &
+                this%thermal_diffusion_coefficient%v_ptr%pr(specie)% &
+                    cells(neighbour_i,neighbour_j,neighbour_k))
+            gradient_mass_fraction = real(side,dp) * &
+                (this%mass_fraction%v_ptr%pr(specie)%cells( &
+                    neighbour_i,neighbour_j,neighbour_k) - &
+                 this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k)) / spacing
+
+            raw_flux = density_face*diffusivity_face*gradient_mass_fraction + &
+                thermal_diffusion_face*temperature_gradient
+            raw_mass_flux(specie) = raw_flux
+            raw_flux_sum = raw_flux_sum + raw_flux
+        end do
+
+        mass_flux = raw_mass_flux - face_mass_fraction*raw_flux_sum
+        mass_flux(species_number) = mass_flux(species_number) - sum(mass_flux)
+
+        do specie = 1, species_number
+            sensible_enthalpy_cell = &
+                (this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
+                    this%temperature%s_ptr%cells(i,j,k), specie) - &
+                 this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
+                    T_ref, specie)) / &
+                this%thermophysics%thermo_ptr%molar_masses(specie)
+            sensible_enthalpy_neighbour = &
+                (this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
+                    this%temperature%s_ptr%cells( &
+                        neighbour_i,neighbour_j,neighbour_k), specie) - &
+                 this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
+                    T_ref, specie)) / &
+                this%thermophysics%thermo_ptr%molar_masses(specie)
+            enthalpy_flux = enthalpy_flux + mass_flux(specie) * &
+                0.5_dp*(sensible_enthalpy_cell + sensible_enthalpy_neighbour)
+        end do
+
+        deallocate(face_mass_fraction, raw_mass_flux)
+    end subroutine calculate_face_flux
+
+
+    subroutine fill_coefficient_boundary_ghosts(this)
+        class(diffusion_solver), intent(inout) :: this
+
+        integer :: dimensions, species_number
+        integer :: i, j, k, dim, side, sign, specie
+        integer :: ghost_i, ghost_j, ghost_k
+        integer, dimension(3,2) :: cell_loop
+
+        dimensions = this%domain%get_domain_dimensions()
+        species_number = this%chemistry%chem_ptr%species_number
+        cell_loop = this%domain%get_local_inner_cells_bounds()
+
+        associate( &
+            diffusivity => this%diffusivity%v_ptr, &
+            thermal_diffusion => this%thermal_diffusion_coefficient%v_ptr, &
+            markers => this%boundary%bc_ptr%bc_markers)
+            do k = cell_loop(3,1), cell_loop(3,2)
+                do j = cell_loop(2,1), cell_loop(2,2)
+                    do i = cell_loop(1,1), cell_loop(1,2)
+                        if (markers(i,j,k) /= 0) cycle
+                        do dim = 1, dimensions
+                            do side = 1, 2
+                                sign = (-1)**side
+                                ghost_i = i + sign*I_m(dim,1)
+                                ghost_j = j + sign*I_m(dim,2)
+                                ghost_k = k + sign*I_m(dim,3)
+                                if (markers(ghost_i,ghost_j,ghost_k) == 0) cycle
+                                do specie = 1, species_number
+                                    diffusivity%pr(specie)%cells( &
+                                        ghost_i,ghost_j,ghost_k) = &
+                                        diffusivity%pr(specie)%cells(i,j,k)
+                                    thermal_diffusion%pr(specie)%cells( &
+                                        ghost_i,ghost_j,ghost_k) = &
+                                        thermal_diffusion%pr(specie)%cells(i,j,k)
+                                end do
+                            end do
+                        end do
+                    end do
+                end do
+            end do
+        end associate
+    end subroutine fill_coefficient_boundary_ghosts
+
+
+    integer function geometry_power(this) result(power)
+        class(diffusion_solver), intent(in) :: this
+
+        select case(trim(this%domain%get_coordinate_system_name()))
+        case('cylindrical')
+            power = 1
+        case('spherical')
+            power = 2
+        case default
+            power = 0
+        end select
+    end function geometry_power
+
+
+    real(dp) function radial_face_ratio(power, dimension, radius, &
+        radial_spacing, side) result(ratio)
+        integer, intent(in) :: power, dimension, side
+        real(dp), intent(in) :: radius, radial_spacing
+        real(dp) :: face_radius
+
+        ratio = 1.0_dp
+        if (power == 0 .or. dimension /= 1) return
+        if (radius <= 0.0_dp) then
+            error stop 'Diffusion solver: non-positive radial cell metric'
+        end if
+        face_radius = radius + 0.5_dp*real(side,dp)*radial_spacing
+        if (face_radius < 0.0_dp) then
+            error stop 'Diffusion solver: negative radial face coordinate'
+        end if
+        ratio = face_radius**power/radius**power
+    end function radial_face_ratio
+
+
+    real(dp) function positive_harmonic_mean(left_value, &
+        right_value) result(mean_value)
+        real(dp), intent(in) :: left_value, right_value
+
+        if (left_value < 0.0_dp .or. right_value < 0.0_dp) then
+            error stop 'Diffusion solver: negative diffusion coefficient'
+        end if
+        if (left_value <= tiny(1.0_dp) .or. right_value <= tiny(1.0_dp)) then
+            mean_value = 0.0_dp
+        else
+            mean_value = 2.0_dp*left_value*right_value / &
+                (left_value + right_value)
+        end if
+    end function positive_harmonic_mean
+
+
+    subroutine zero_vector_field(field)
+        type(field_vector_cons), pointer, intent(inout) :: field
+
+        integer :: component
+
+        do component = 1, size(field%pr)
+            field%pr(component)%cells = 0.0_dp
+        end do
+    end subroutine zero_vector_field
+
+end module fickean_diffusion_solver_class

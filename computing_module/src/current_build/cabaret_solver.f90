@@ -1053,6 +1053,15 @@ contains
 			call cabaret_chemistry_timer%toc(new_iter=.true.)
 		end if
 
+		! Particle drag and heat transfer require current gas transport coefficients
+		! even when viscous stress and Fourier conduction are disabled.
+		if (this%additional_particles_phases_number > 0) then
+			if (.not. this%heat_trans_flag) &
+				call this%heat_trans_solver%update_thermal_conductivity()
+			if (.not. this%viscosity_flag) &
+				call this%viscosity_solver%update_dynamic_viscosity()
+		end if
+
 		! Advance exactly one runtime-selected dispersed-phase backend per phase.
 		! The facade returns rates in the common gas-coupling contract.
 		call this%advance_particle_phases()

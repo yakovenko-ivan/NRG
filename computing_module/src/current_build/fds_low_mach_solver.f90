@@ -490,7 +490,13 @@ contains
         if (this%radiation_flag)            call this%radiation_solver%solve_radiation(this%time_step)
         call fds_radiation_timer%toc(new_iter=.true.)
 
-        if(this%additional_particles_phases_number /= 0) then
+        if (this%additional_particles_phases_number > 0) then
+            ! Particle drag and heat transfer require current gas transport
+            ! coefficients even when the corresponding gas terms are disabled.
+            if (.not. this%heat_trans_flag) &
+                call this%heat_trans_solver%update_thermal_conductivity()
+            if (.not. this%viscosity_flag) &
+                call this%visc_solver%update_dynamic_viscosity()
             do particles_phase_counter = 1, this%additional_particles_phases_number
                 call this%particles_solver(particles_phase_counter)%advance( &
                     this%time_step, this%time - this%time_step)

@@ -212,7 +212,8 @@ contains
             'velocity_of_sound')
         constructor%v_s%s_ptr => scal_c_ptr%s_ptr
 
-        if (constructor%viscosity_flag) then
+        if (constructor%viscosity_flag .or. &
+            constructor%additional_particles_phases_number > 0) then
             constructor%visc_solver = viscosity_solver_c(manager)
             call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
                 'energy_production_viscosity')
@@ -222,7 +223,8 @@ contains
             constructor%v_prod_visc%v_ptr => vect_c_ptr%v_ptr
         end if
 
-        if (constructor%heat_trans_flag) then
+        if (constructor%heat_trans_flag .or. &
+            constructor%additional_particles_phases_number > 0) then
             constructor%heat_trans_solver = heat_transfer_solver_c(manager)
             call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
                 'energy_production_heat_transfer')
@@ -351,6 +353,13 @@ contains
         call cpm_chemistry_timer%tic()
         if (this%reactive_flag) call this%chem_kin_solver%solve_chemical_kinetics(this%time_step)
         call cpm_chemistry_timer%toc(new_iter=.true.)
+
+        if (this%additional_particles_phases_number > 0) then
+            if (.not. this%heat_trans_flag) &
+                call this%heat_trans_solver%update_thermal_conductivity()
+            if (.not. this%viscosity_flag) &
+                call this%visc_solver%update_dynamic_viscosity()
+        end if
 
         do phase = 1, this%additional_particles_phases_number
             call this%particles_solver(phase)%advance( &
