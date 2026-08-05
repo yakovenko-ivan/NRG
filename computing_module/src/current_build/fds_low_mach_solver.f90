@@ -35,7 +35,8 @@ module fds_low_mach_solver_class
     use viscosity_solver_class
     use fourier_heat_transfer_solver_class
     use fickean_diffusion_solver_class
-    use lagrangian_particles_solver_class
+    use dispersed_phase_solver_class, only: dispersed_phase_solver, &
+        dispersed_phase_solver_c
     use thermal_radiation_solver_class
     use solver_options_class
     use benchmarking
@@ -96,7 +97,7 @@ module fds_low_mach_solver_class
         type(table_approximated_real_gas) :: state_eq
         type(thermal_radiation_solver) :: radiation_solver
         type(elliptic_multigrid_solver) :: pressure_solver
-        type(lagrangian_particles_solver), dimension(:), allocatable :: particles_solver
+        type(dispersed_phase_solver), dimension(:), allocatable :: particles_solver
 
         type(computational_domain) :: domain
         type(thermophysical_properties_pointer) :: thermo
@@ -262,7 +263,8 @@ contains
         call manager%get_cons_field_pointer_by_name(scal_ptr, vect_ptr, tens_ptr, 'mixture_cp')
         constructor%mixture_cp%s_ptr => scal_ptr%s_ptr
 
-         if(constructor%viscosity_flag) then
+        if (constructor%viscosity_flag .or. &
+            constructor%additional_particles_phases_number > 0) then
             constructor%visc_solver            = viscosity_solver_c(manager)
             call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'velocity_production_viscosity')
             constructor%v_prod_visc%v_ptr            => vect_ptr%v_ptr
@@ -270,7 +272,8 @@ contains
             constructor%nu%s_ptr                    => scal_ptr%s_ptr
         end if
 
-        if (constructor%heat_trans_flag) then
+        if (constructor%heat_trans_flag .or. &
+            constructor%additional_particles_phases_number > 0) then
             constructor%heat_trans_solver    = heat_transfer_solver_c(manager)
             call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_heat_transfer')
             constructor%E_f_prod_heat%s_ptr        => scal_ptr%s_ptr
@@ -295,16 +298,14 @@ contains
         end if
         if(constructor%additional_particles_phases_number /= 0) then
             allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
-            call constructor%particles_solver(1)%pre_constructor(constructor%additional_particles_phases_number)
             allocate(constructor%rho_prod_particles(constructor%additional_particles_phases_number))
             allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
             allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
             allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
             do particles_phase_counter = 1, constructor%additional_particles_phases_number
                 particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
-                constructor%particles_solver(particles_phase_counter)    = lagrangian_particles_solver_c(manager, &
-                    particles_params, particles_phase_counter)
-                ! # Lagrangian particles solver
+                constructor%particles_solver(particles_phase_counter) = dispersed_phase_solver_c( &
+                    manager, particles_params, particles_phase_counter)
                 write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
                 call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
                 constructor%E_f_prod_particles(particles_phase_counter)%s_ptr    => scal_ptr%s_ptr
@@ -313,9 +314,7 @@ contains
                 constructor%rho_prod_particles(particles_phase_counter)%s_ptr    => scal_ptr%s_ptr
                 write(var_name,'(A,I2.2)') 'velocity_production_particles', particles_phase_counter
                 call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
-                ! # Lagrangian particles solver
                 constructor%v_prod_particles(particles_phase_counter)%v_ptr        => vect_ptr%v_ptr
-                ! # Lagrangian particles solver
                 write(var_name,'(A,I2.2)') 'concentration_production_particles', particles_phase_counter
                 call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,var_name)
                 constructor%Y_prod_particles(particles_phase_counter)%v_ptr        => vect_ptr%v_ptr
@@ -493,8 +492,8 @@ contains
 
         if(this%additional_particles_phases_number /= 0) then
             do particles_phase_counter = 1, this%additional_particles_phases_number
-                call this%particles_solver(particles_phase_counter)%particles_solve(this%time_step)
-                ! # Lagrangian particles solver
+                call this%particles_solver(particles_phase_counter)%advance( &
+                    this%time_step, this%time - this%time_step)
 
             end do
         end if
@@ -973,6 +972,11 @@ contains
                             div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
                                 species_coefficient*this%Y_prod_chem%v_ptr%pr(spec)%cells(i,j,k)
                         end if
+                        do particles_phase_counter = 1, this%additional_particles_phases_number
+                            div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
+                                species_coefficient * &
+                                this%Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
+                        end do
                     end do
 
                     D_sum = D_sum + div_v_int%cells(i,j,k) * cell_volume
@@ -1421,12 +1425,11 @@ contains
 
                             if (this%additional_particles_phases_number /= 0) then
 							    do particles_phase_counter = 1, this%additional_particles_phases_number
-								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k)  + &
-								        (1.0_dp/(0.5_dp*(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_old%cells(i,j,k))) * &
-								        (0.5_dp*(this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
-								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3) &
-								        ))))
-								    ! [m/s^2]                                         !# Lagrangian particles solver
+								    ! Common contract: particle momentum coupling is gas acceleration.
+								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) - 0.5_dp * ( &
+								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
+								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells( &
+								        i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 							    end do
 						    end if
                         else
@@ -1442,12 +1445,11 @@ contains
 							    this%v_prod_visc%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))))
                             if (this%additional_particles_phases_number /= 0) then
 							    do particles_phase_counter = 1, this%additional_particles_phases_number
-								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k)  + &
-								        (1.0_dp/(0.5_dp*(rho_int%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) + rho_int%cells(i,j,k))) * &
-								        (0.5_dp*(this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
-								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3) &
-								        ))))
-								    ! [m/s^2]                                         !# Lagrangian particles solver
+								    ! Corrector uses the same physical acceleration source.
+								    F_a%cells(dim,i,j,k) = F_a%cells(dim,i,j,k) - 0.5_dp * ( &
+								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells(i,j,k) + &
+								        this%v_prod_particles(particles_phase_counter)%v_ptr%pr(dim)%cells( &
+								        i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
 							    end do
 						    end if
 						end if

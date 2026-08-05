@@ -43,6 +43,7 @@ set(computing_module_src
 	${SRC_COMPUTE}/src/current_build/elliptic_multigrid_solver.f90
 	${SRC_COMPUTE}/src/current_build/main.f90
 	${SRC_COMPUTE}/src/current_build/continuous_particles_solver.f90
+	${SRC_COMPUTE}/src/current_build/dispersed_phase_solver.f90
 	${SRC_COMPUTE}/src/current_build/riemann_solver.f90
 	${SRC_COMPUTE}/src/current_build/table_approximated_real_gas.f90
 	${SRC_COMPUTE}/src/current_build/viscosity_solver.f90

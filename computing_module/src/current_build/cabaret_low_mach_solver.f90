@@ -32,7 +32,8 @@ module cabaret_low_mach_solver_class
 	use thermal_radiation_solver_class
 	use chemical_kinetics_solver_class
 
-	use lagrangian_particles_solver_class
+	use dispersed_phase_solver_class, only: dispersed_phase_solver, &
+		dispersed_phase_solver_c
 
 	use mpi_communications_class
 	use elliptic_multigrid_solver_class
@@ -95,7 +96,7 @@ module cabaret_low_mach_solver_class
 		type(thermal_radiation_solver) :: radiation_solver
 		type(viscosity_solver) :: viscosity_solver
 		type(table_approximated_real_gas) :: state_eq
-		type(lagrangian_particles_solver), dimension(:), allocatable :: particles_solver
+		type(dispersed_phase_solver), dimension(:), allocatable :: particles_solver
 
 		type(computational_domain) :: domain
 		type(mpi_communications) :: mpi_support
@@ -177,7 +178,6 @@ module cabaret_low_mach_solver_class
 		procedure, private :: update_flow_thermodynamics
 		procedure, private :: finalize_gas_dynamics_step
 		procedure, private :: advance_particle_phases
-		procedure, private :: apply_particle_exchange
 		procedure, private :: cache_face_state_for_next_step
 	end type cabaret_low_mach_solver
 
@@ -347,7 +347,8 @@ contains
 			constructor%D%v_ptr => vect_c_ptr%v_ptr
 		end if
 
-		if (constructor%heat_trans_flag) then
+		if (constructor%heat_trans_flag .or. &
+			constructor%additional_particles_phases_number > 0) then
 			constructor%heat_trans_solver	= heat_transfer_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_heat_transfer')
 			constructor%E_f_prod_heat%s_ptr => scal_c_ptr%s_ptr
@@ -362,7 +363,8 @@ contains
 			constructor%E_f_prod_rad%s_ptr => scal_c_ptr%s_ptr
 		end if
 
-		if(constructor%viscosity_flag) then
+		if (constructor%viscosity_flag .or. &
+			constructor%additional_particles_phases_number > 0) then
 			constructor%viscosity_solver			= viscosity_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'velocity_production_viscosity')
 			constructor%v_prod_visc%v_ptr => vect_c_ptr%v_ptr
@@ -378,7 +380,6 @@ contains
 
 		if(constructor%additional_particles_phases_number /= 0) then
 			allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
-			call constructor%particles_solver(1)%pre_constructor(constructor%additional_particles_phases_number)
 			allocate(constructor%rho_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
@@ -386,7 +387,7 @@ contains
 			do particles_phase_counter = 1, constructor%additional_particles_phases_number
 				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
 				constructor%particles_solver(particles_phase_counter) = &
-					lagrangian_particles_solver_c(manager,particles_params,particles_phase_counter)
+					dispersed_phase_solver_c(manager,particles_params,particles_phase_counter)
 				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
 				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr
@@ -865,9 +866,8 @@ subroutine solve_problem(this)
     call this%finalize_gas_dynamics_step()
     call cabaret_gas_dynamics_timer%toc()
 
-    call this%advance_particle_phases()
-    call this%apply_particle_exchange()
-    call this%update_cell_thermodynamics()
+    ! Dispersed-phase rates were included in the predictor/corrector source
+    ! assembly, so no post-step direct state increment is required.
 
     call cabaret_gas_dynamics_timer%tic()
     call this%cache_face_state_for_next_step()
@@ -1697,7 +1697,9 @@ subroutine evaluate_continuum_source_rates(this)
     class(cabaret_low_mach_solver), intent(inout) :: this
 
     integer :: dimensions, species_number
-    integer :: i, j, k, dim, spec
+    integer :: i, j, k, dim, spec, phase
+    real(dp) :: particle_mass_rate, particle_energy_rate
+    real(dp) :: particle_kinetic_energy, particle_momentum_rate
     integer, dimension(3,2) :: loop
 
     dimensions = this%domain%get_domain_dimensions()
@@ -1734,8 +1736,11 @@ subroutine evaluate_continuum_source_rates(this)
         call cabaret_chemistry_timer%toc(new_iter=.true.)
     end if
 
+    call this%advance_particle_phases()
+
     associate(bc => this%boundary%bc_ptr)
-        !$omp parallel do collapse(3) schedule(guided) private(i,j,k,dim,spec)
+        !$omp parallel do collapse(3) schedule(guided) private(i,j,k,dim,spec,phase,particle_mass_rate,particle_energy_rate, &
+        !$omp& particle_kinetic_energy,particle_momentum_rate)
         do k = loop(3,1), loop(3,2)
             do j = loop(2,1), loop(2,2)
                 do i = loop(1,1), loop(1,2)
@@ -1783,6 +1788,35 @@ subroutine evaluate_continuum_source_rates(this)
                         this%momentum_source(dim,i,j,k) = this%momentum_source(dim,i,j,k)+ &
                             (this%buoyancy_reference_density-this%rho_old(i,j,k))*this%gravity(dim)
                     end do
+
+                    ! Convert the common dispersed-phase source contract to the
+                    ! low-Mach conservative momentum and sensible-enthalpy rates.
+                    do phase = 1, this%additional_particles_phases_number
+                        particle_mass_rate = &
+                            this%rho_prod_particles(phase)%s_ptr%cells(i,j,k)
+                        particle_energy_rate = &
+                            this%E_f_prod_particles(phase)%s_ptr%cells(i,j,k)
+                        particle_kinetic_energy = 0.0_dp
+                        do dim = 1, dimensions
+                            particle_momentum_rate = this%rho_old(i,j,k) * &
+                                this%v_prod_particles(phase)%v_ptr%pr(dim)%cells(i,j,k)
+                            this%momentum_source(dim,i,j,k) = &
+                                this%momentum_source(dim,i,j,k) + particle_momentum_rate
+                            particle_energy_rate = particle_energy_rate - &
+                                this%v_old(dim,i,j,k)*particle_momentum_rate
+                            particle_kinetic_energy = particle_kinetic_energy + &
+                                0.5_dp*this%v_old(dim,i,j,k)**2
+                        end do
+                        this%sensible_enthalpy_source(i,j,k) = &
+                            this%sensible_enthalpy_source(i,j,k) + &
+                            particle_energy_rate + &
+                            particle_kinetic_energy*particle_mass_rate
+                        do spec = 1, species_number
+                            this%species_mass_source(spec,i,j,k) = &
+                                this%species_mass_source(spec,i,j,k) + &
+                                this%Y_prod_particles(phase)%v_ptr%pr(spec)%cells(i,j,k)
+                        end do
+                    end do
                 end do
             end do
         end do
@@ -1797,19 +1831,21 @@ end subroutine evaluate_continuum_source_rates
 		real(dp),dimension(:),intent(out)::g_Y
 		real(dp),intent(out)::g_T
 		integer::spec
-		real(dp)::M,cp_molar,cp_mass,sum_hq
+		real(dp)::M,cp_molar,cp_mass,sum_hq,total_mass_source
 		real(dp),dimension(size(Y_state))::X,hsk
 
 		if (rho_state<=tiny(1.0_dp)) &
 			error stop 'CABARET material source shift: non-positive density'
 
 		M=this%thermo%thermo_ptr%mixture_molar_mass_from_mass_fractions(Y_state)
+		total_mass_source=sum(Q_Y)
 		do spec=1,size(Y_state)
 			X(spec)=Y_state(spec)*M/this%thermo%thermo_ptr%molar_masses(spec)
 			hsk(spec)=(this%thermo%thermo_ptr%specie_enthalpy_molar(T_state,spec)- &
 				this%thermo%thermo_ptr%specie_enthalpy_molar(T_ref,spec))/ &
 				this%thermo%thermo_ptr%molar_masses(spec)
-			g_Y(spec)=Q_Y(spec)/rho_state
+			! Exact mass-fraction source for non-zero dispersed-phase mass transfer.
+			g_Y(spec)=(Q_Y(spec)-Y_state(spec)*total_mass_source)/rho_state
 		end do
 
 		cp_molar=this%thermo%thermo_ptr%mixture_cp_molar(T_state,X)
@@ -1986,7 +2022,7 @@ subroutine predict_material_half_step(this)
     real(dp), dimension(3) :: dx
     real(dp) :: r, w_l, w_c, w_r, u_l, u_r
     real(dp) :: rho_l, rho_r, rho_c, flux_l, flux_r
-    real(dp) :: hs_l, hs_r, rhs_h, sum_y, rhs_y, pressure_work_rate
+    real(dp) :: hs_l, hs_r, rhs_h, sum_y, rhs_y, pressure_work_rate, total_mass_source
     real(dp), dimension(:), allocatable :: Y_l, Y_r, Y_new
 
     dimensions=this%domain%get_domain_dimensions()
@@ -2011,7 +2047,7 @@ subroutine predict_material_half_step(this)
         bc => this%boundary%bc_ptr)
         !$omp parallel default(shared) &
             !$omp& private(i,j,k,dim,spec,r,w_l,w_c,w_r,u_l,u_r,rho_l,rho_r,rho_c,flux_l,flux_r, &
-            !$omp& hs_l,hs_r,rhs_h,sum_y,rhs_y,pressure_work_rate,Y_l,Y_r,Y_new)
+            !$omp& hs_l,hs_r,rhs_h,sum_y,rhs_y,pressure_work_rate,total_mass_source,Y_l,Y_r,Y_new)
         allocate(Y_l(species_number),Y_r(species_number),Y_new(species_number))
         !$omp do collapse(3) schedule(guided)
         do k=loop(3,1),loop(3,2)
@@ -2060,10 +2096,12 @@ subroutine predict_material_half_step(this)
                         pressure_work_rate = this%thermodynamic_pressure_rate_old
                     hs%cells(i,j,k)=this%h_s_old(i,j,k)+0.5_dp*this%time_step* &
                         (rhs_h+(this%sensible_enthalpy_source(i,j,k)+pressure_work_rate)/this%rho_old(i,j,k))
+                    total_mass_source=sum(this%species_mass_source(:,i,j,k))
                     sum_y=0.0_dp
                     do spec=1,species_number
                         this%species_advection_old(spec,i,j,k)=Y_new(spec)
-                        rhs_y=Y_new(spec)+this%species_mass_source(spec,i,j,k)/this%rho_old(i,j,k)
+                        rhs_y=Y_new(spec)+(this%species_mass_source(spec,i,j,k)- &
+                            this%Y_old(spec,i,j,k)*total_mass_source)/this%rho_old(i,j,k)
                         Y_new(spec)=max(this%Y_old(spec,i,j,k)+0.5_dp*this%time_step*rhs_y,0.0_dp)
                         sum_y=sum_y+Y_new(spec)
                     end do
@@ -2087,7 +2125,7 @@ subroutine correct_material_full_step(this)
     integer, dimension(3,2) :: loop
     real(dp), dimension(3) :: dx
     real(dp) :: r,w_l,w_c,w_r,u_l,u_r,rho_l,rho_r,rho_c,flux_l,flux_r
-    real(dp) :: hs_l,hs_r,rhs_h,sum_y,rhs_y,Y_raw,pressure_work_rate
+    real(dp) :: hs_l,hs_r,rhs_h,sum_y,rhs_y,Y_raw,pressure_work_rate,total_mass_source
     real(dp), dimension(:), allocatable :: Y_l,Y_r,Y_new
 
     dimensions=this%domain%get_domain_dimensions()
@@ -2109,7 +2147,7 @@ subroutine correct_material_full_step(this)
             velocity_face_old=>this%v_f_new%v_ptr,species_face_old=>this%Y_f_new%v_ptr,bc=>this%boundary%bc_ptr)
         !$omp parallel default(shared) &
             !$omp& private(i,j,k,dim,spec,r,w_l,w_c,w_r,u_l,u_r,rho_l,rho_r,rho_c,flux_l,flux_r, &
-            !$omp& hs_l,hs_r,rhs_h,sum_y,rhs_y,Y_raw,pressure_work_rate,Y_l,Y_r,Y_new)
+            !$omp& hs_l,hs_r,rhs_h,sum_y,rhs_y,Y_raw,pressure_work_rate,total_mass_source,Y_l,Y_r,Y_new)
         allocate(Y_l(species_number),Y_r(species_number),Y_new(species_number))
         !$omp do collapse(3) schedule(guided)
         do k=loop(3,1),loop(3,2)
@@ -2160,9 +2198,11 @@ subroutine correct_material_full_step(this)
                     hs%cells(i,j,k)=this%h_s_old(i,j,k)+0.5_dp*this%time_step* &
                         (this%sensible_enthalpy_advection_old(i,j,k)+rhs_h)+this%time_step* &
                         (this%sensible_enthalpy_source(i,j,k)+pressure_work_rate)/this%rho_old(i,j,k)
+                    total_mass_source=sum(this%species_mass_source(:,i,j,k))
                     sum_y=0.0_dp
                     do spec=1,species_number
-                        rhs_y=this%species_mass_source(spec,i,j,k)/this%rho_old(i,j,k)
+                        rhs_y=(this%species_mass_source(spec,i,j,k)- &
+                            this%Y_old(spec,i,j,k)*total_mass_source)/this%rho_old(i,j,k)
                         Y_raw=this%Y_old(spec,i,j,k)+0.5_dp*this%time_step* &
                             (this%species_advection_old(spec,i,j,k)+Y_new(spec))+this%time_step*rhs_y
                         Y_new(spec)=max(Y_raw,0.0_dp)
@@ -2471,74 +2511,23 @@ end subroutine reconstruct_contact_family_face_state
 	subroutine finalize_gas_dynamics_step(this)
 		class(cabaret_low_mach_solver), intent(inout) :: this
 
-		integer :: particles_phase_counter
-
         associate(	v   => this%v%v_ptr)
 			call this%mpi_support%exchange_conservative_vector_field(v)
         end associate
 
 		call this%apply_cell_boundary_conditions()
-
-		if (this%additional_particles_phases_number /= 0) then
-			do particles_phase_counter = 1, this%additional_particles_phases_number
-    			call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_main(this%time)
-			end do
-		end if
 	end subroutine finalize_gas_dynamics_step
 
 subroutine advance_particle_phases(this)
     class(cabaret_low_mach_solver), intent(inout) :: this
     integer :: phase
-    if (this%additional_particles_phases_number == 0) return
+
     do phase = 1, this%additional_particles_phases_number
-        call this%particles_solver(phase)%particles_solve(this%time_step)
+        call this%particles_solver(phase)%advance(this%time_step, this%time)
     end do
 end subroutine advance_particle_phases
 
-subroutine apply_particle_exchange(this)
-    class(cabaret_low_mach_solver), intent(inout) :: this
-    integer :: dimensions, species_number, i, j, k, dim, spec, phase
-    integer, dimension(3,2) :: loop
-    real(dp) :: sum_y
 
-    if (this%additional_particles_phases_number == 0) return
-    dimensions = this%domain%get_domain_dimensions()
-    species_number = this%chem%chem_ptr%species_number
-    loop = this%domain%get_local_inner_cells_bounds()
-    associate(rho => this%rho%s_ptr,E_f => this%E_f%s_ptr,v => this%v%v_ptr,Y => this%Y%v_ptr, &
-              bc => this%boundary%bc_ptr)
-    !$omp parallel do collapse(3) schedule(guided) private(i,j,k,dim,spec,phase,sum_y)
-    do k = loop(3,1), loop(3,2)
-    do j = loop(2,1), loop(2,2)
-    do i = loop(1,1), loop(1,2)
-        if (bc%bc_markers(i,j,k) /= 0) cycle
-        do phase = 1, this%additional_particles_phases_number
-            E_f%cells(i,j,k) = E_f%cells(i,j,k)+this%E_f_prod_particles(phase)%s_ptr%cells(i,j,k)
-            rho%cells(i,j,k) = rho%cells(i,j,k)+this%rho_prod_particles(phase)%s_ptr%cells(i,j,k)
-            do dim = 1, dimensions
-                v%pr(dim)%cells(i,j,k) = v%pr(dim)%cells(i,j,k)+ &
-                    this%v_prod_particles(phase)%v_ptr%pr(dim)%cells(i,j,k)
-            end do
-            do spec = 1, species_number
-                Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k)+ &
-                    this%Y_prod_particles(phase)%v_ptr%pr(spec)%cells(i,j,k)
-            end do
-        end do
-        sum_y = 0.0_dp
-        do spec = 1, species_number
-            Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k),0.0_dp)
-            sum_y = sum_y+Y%pr(spec)%cells(i,j,k)
-        end do
-        if (sum_y <= 0.0_dp) error stop 'CABARET projection: invalid particle species source'
-        do spec = 1, species_number
-            Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k)/sum_y
-        end do
-    end do
-    end do
-    end do
-    !$omp end parallel do
-    end associate
-end subroutine apply_particle_exchange
 
 	subroutine cache_face_state_for_next_step(this)
 		class(cabaret_low_mach_solver), intent(inout) :: this

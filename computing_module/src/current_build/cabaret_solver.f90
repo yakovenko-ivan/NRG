@@ -36,8 +36,8 @@ module cabaret_solver_class
 	use thermal_radiation_solver_class
 	use chemical_kinetics_solver_class
 
-	use lagrangian_particles_solver_class
-	use continuous_particles_solver_class
+	use dispersed_phase_solver_class, only: dispersed_phase_solver, &
+		dispersed_phase_solver_c
     
 	use mpi_communications_class
 
@@ -119,8 +119,7 @@ module cabaret_solver_class
 		type(viscosity_solver)				:: viscosity_solver	
 		type(table_approximated_real_gas)	:: state_eq
 
-		type(lagrangian_particles_solver), dimension(:)	    ,allocatable	:: particles_solver			!# Lagrangian particles solver
-		!type(continuous_particles_solver)   , dimension(:)	    ,allocatable	:: particles_solver			!# Continuum particles solver
+		type(dispersed_phase_solver), dimension(:), allocatable :: particles_solver
 		
         type(computational_domain)				:: domain
 		type(mpi_communications)				:: mpi_support
@@ -141,7 +140,7 @@ module cabaret_solver_class
 
 		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: rho_prod_particles, E_f_prod_particles
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: Y_prod_particles
-		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: v_prod_particles		        !# Lagrangian particles solver    
+		type(field_vector_cons_pointer), dimension(:), allocatable :: v_prod_particles
         
 		! Beginning-of-step conservative and thermodynamic state.
 		real(dp), dimension(:,:,:), allocatable :: rho_old, p_old, E_f_old, v_s_old
@@ -202,8 +201,7 @@ module cabaret_solver_class
 		procedure	,private	:: update_flow_thermodynamics
 		procedure	,private	:: correct_conservative_full_step
 		procedure	,private	:: finalize_gas_dynamics_step
-		procedure	,private	:: solve_split_physics
-		procedure	,private	:: apply_split_sources
+		procedure	,private	:: advance_particle_phases
 		procedure	,private	:: cache_flow_state_for_next_step
 	end type
 
@@ -386,7 +384,8 @@ contains
 			constructor%Y_prod_diff%v_ptr			=> vect_c_ptr%v_ptr
 		end if
 
-		if (constructor%heat_trans_flag) then
+		if (constructor%heat_trans_flag .or. &
+			constructor%additional_particles_phases_number > 0) then
 			constructor%heat_trans_solver	= heat_transfer_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_heat_transfer')
 			constructor%E_f_prod_heat%s_ptr			=> scal_c_ptr%s_ptr
@@ -398,7 +397,8 @@ contains
 				'energy_production_radiation')
 			constructor%E_f_prod_rad%s_ptr => scal_c_ptr%s_ptr
 		end if
-		if(constructor%viscosity_flag) then
+		if (constructor%viscosity_flag .or. &
+			constructor%additional_particles_phases_number > 0) then
 			constructor%viscosity_solver			= viscosity_solver_c(manager)
 			call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,'energy_production_viscosity')
 			constructor%E_f_prod_visc%s_ptr			=> scal_c_ptr%s_ptr
@@ -411,15 +411,14 @@ contains
         
 		if(constructor%additional_particles_phases_number /= 0) then
 			allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
-			call constructor%particles_solver(1)%pre_constructor(constructor%additional_particles_phases_number)
 			allocate(constructor%rho_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
 			allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
 			do particles_phase_counter = 1, constructor%additional_particles_phases_number
 				particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
-				constructor%particles_solver(particles_phase_counter)	= lagrangian_particles_solver_c(manager, particles_params, particles_phase_counter)		!# Lagrangian particles solver
-!				constructor%particles_solver(particles_phase_counter)	= particles_solver_c(manager, particles_params, particles_phase_counter)                !# Continuum particles solver
+				constructor%particles_solver(particles_phase_counter) = dispersed_phase_solver_c( &
+					manager, particles_params, particles_phase_counter)
 				write(var_name,'(A,I2.2)') 'energy_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
 				constructor%E_f_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr
@@ -427,8 +426,9 @@ contains
 				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
 				constructor%rho_prod_particles(particles_phase_counter)%s_ptr	=> scal_c_ptr%s_ptr                
 				write(var_name,'(A,I2.2)') 'velocity_production_particles', particles_phase_counter						
-				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)						!# Continuum particles solver								
-				constructor%v_prod_particles(particles_phase_counter)%v_ptr		=> vect_c_ptr%v_ptr						!# Continuum particles solver
+				call manager%get_cons_field_pointer_by_name( &
+					scal_c_ptr, vect_c_ptr, tens_c_ptr, var_name)
+				constructor%v_prod_particles(particles_phase_counter)%v_ptr => vect_c_ptr%v_ptr
 				write(var_name,'(A,I2.2)') 'concentration_production_particles', particles_phase_counter
 				call manager%get_cons_field_pointer_by_name(scal_c_ptr,vect_c_ptr,tens_c_ptr,var_name)
 				constructor%Y_prod_particles(particles_phase_counter)%v_ptr		=> vect_c_ptr%v_ptr                
@@ -962,12 +962,8 @@ contains
 		call this%finalize_gas_dynamics_step()
 		call cabaret_gas_dynamics_timer%toc()
 
-		! Particle dynamics remains operator split; continuum sources are already coupled.
-		call this%solve_split_physics()
-
-		call cabaret_gas_dynamics_timer%tic()
-		call this%apply_split_sources()
-		call cabaret_gas_dynamics_timer%toc()
+		! Dispersed-phase source rates are advanced and assembled together with
+		! the other physical sources before the CABARET predictor.
 
 		call this%update_cell_thermodynamics()
 		call cabaret_gas_dynamics_timer%tic()
@@ -1002,7 +998,7 @@ contains
 		class(cabaret_solver), intent(inout) :: this
 
 		integer :: dimensions, species_number
-		integer :: i, j, k, dim, spec
+		integer :: i, j, k, dim, spec, phase
 		integer, dimension(3,2) :: cons_inner_loop
 
 		dimensions      = this%domain%get_domain_dimensions()
@@ -1057,6 +1053,10 @@ contains
 			call cabaret_chemistry_timer%toc(new_iter=.true.)
 		end if
 
+		! Advance exactly one runtime-selected dispersed-phase backend per phase.
+		! The facade returns rates in the common gas-coupling contract.
+		call this%advance_particle_phases()
+
 		associate(  E_f_prod_chem  => this%E_f_prod_chem%s_ptr	, &
 					E_f_prod_heat  => this%E_f_prod_heat%s_ptr	, &
 					E_f_prod_visc  => this%E_f_prod_visc%s_ptr	, &
@@ -1066,7 +1066,7 @@ contains
 					v_prod_visc    => this%v_prod_visc%v_ptr		, &
 					bc             => this%boundary%bc_ptr)
 
-		!$omp parallel default(shared) private(i,j,k,dim,spec)
+		!$omp parallel default(shared) private(i,j,k,dim,spec,phase)
 		!$omp do collapse(3) schedule(guided)
 		do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 		do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
@@ -1108,6 +1108,24 @@ contains
 						(this%rho_0-this%rho_old(i,j,k))*this%g(dim)
 					rhoE_src(i,j,k) = rhoE_src(i,j,k)+ &
 						(this%rho_0-this%rho_old(i,j,k))*this%v_old(dim,i,j,k)*this%g(dim)
+				end do
+
+				! Dispersed-phase source fields are rates.  The momentum field is
+				! acceleration, so convert it to conservative momentum production.
+				do phase = 1, this%additional_particles_phases_number
+					rho_src(i,j,k) = rho_src(i,j,k) + &
+						this%rho_prod_particles(phase)%s_ptr%cells(i,j,k)
+					rhoE_src(i,j,k) = rhoE_src(i,j,k) + &
+						this%E_f_prod_particles(phase)%s_ptr%cells(i,j,k)
+					do dim = 1, dimensions
+						mom_src(dim,i,j,k) = mom_src(dim,i,j,k) + &
+							this%rho_old(i,j,k) * &
+							this%v_prod_particles(phase)%v_ptr%pr(dim)%cells(i,j,k)
+					end do
+					do spec = 1, species_number
+						rhoY_src(spec,i,j,k) = rhoY_src(spec,i,j,k) + &
+							this%Y_prod_particles(phase)%v_ptr%pr(spec)%cells(i,j,k)
+					end do
 				end do
 			end if
 		end do
@@ -2545,92 +2563,21 @@ contains
 	subroutine finalize_gas_dynamics_step(this)
 		class(cabaret_solver), intent(inout) :: this
 
-		integer :: particles_phase_counter
-
         associate(	v   => this%v%v_ptr)
-			call this%mpi_support%exchange_conservative_vector_field(v)	
+			call this%mpi_support%exchange_conservative_vector_field(v)
         end associate
 
 		call this%apply_boundary_conditions_main()
-
-		if (this%additional_particles_phases_number /= 0) then
-			do particles_phase_counter = 1, this%additional_particles_phases_number
-    			call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_main(this%time)
-			end do
-		end if
 	end subroutine finalize_gas_dynamics_step
-	!> Advance particle phases after the source-aware CABARET gas step.
-	!!
-	!! Chemistry, diffusion, heat conduction, radiation and viscosity are
-	!! evaluated before the predictor and already included in the conservative
-	!! CABARET update.  Particle coupling remains operator split because the
-	!! particle solver owns its own integration sequence.
-	subroutine solve_split_physics(this)
+	!> Advance the configured dispersed-phase backend and refresh its source rates.
+	subroutine advance_particle_phases(this)
 		class(cabaret_solver), intent(inout) :: this
 		integer :: phase
 
-		if (this%additional_particles_phases_number == 0) return
 		do phase = 1, this%additional_particles_phases_number
-                call this%particles_solver(phase)%particles_solve(this%time_step)				                !# Lagrangian particles solver
-!				call this%particles_solver(particles_phase_counter)%particles_euler_step_v_E(this%time_step)	!# Continuum particles solver
-!				call this%particles_solver(particles_phase_counter)%apply_boundary_conditions_interm_v_d()		!# Continuum particles solver
-!				call this%particles_solver(particles_phase_counter)%particles_lagrange_step(this%time_step)		!# Continuum particles solver
-!				call this%particles_solver(particles_phase_counter)%particles_final_step(this%time_step)		!# Continuum particles solver		
+			call this%particles_solver(phase)%advance(this%time_step, this%time)
 		end do
-	end subroutine solve_split_physics
-	!> Apply particle production fields to the gas state.
-	subroutine apply_split_sources(this)
-		class(cabaret_solver), intent(inout) :: this
-
-		integer :: dimensions, species_number
-		integer :: i, j, k, dim, spec, phase
-		integer, dimension(3,2) :: inner
-		real(dp) :: mass_fraction_sum
-
-		if (this%additional_particles_phases_number == 0) return
-
-		dimensions = this%domain%get_domain_dimensions()
-		species_number = this%chem%chem_ptr%species_number
-		inner = this%domain%get_local_inner_cells_bounds()
-
-		associate(rho => this%rho%s_ptr, E => this%E_f%s_ptr, v => this%v%v_ptr, &
-			Y => this%Y%v_ptr, bc => this%boundary%bc_ptr)
-		!$omp parallel do collapse(3) schedule(guided) default(shared) &
-		!$omp& private(i,j,k,dim,spec,phase,mass_fraction_sum)
-		do k = inner(3,1), inner(3,2)
-		do j = inner(2,1), inner(2,2)
-		do i = inner(1,1), inner(1,2)
-			if (bc%bc_markers(i,j,k) /= 0) cycle
-
-			do phase = 1, this%additional_particles_phases_number
-				E%cells(i,j,k) = E%cells(i,j,k) + &
-					this%E_f_prod_particles(phase)%s_ptr%cells(i,j,k)
-				rho%cells(i,j,k) = rho%cells(i,j,k) + &
-					this%rho_prod_particles(phase)%s_ptr%cells(i,j,k)
-				do dim = 1, dimensions
-					v%pr(dim)%cells(i,j,k) = v%pr(dim)%cells(i,j,k) + &
-						this%v_prod_particles(phase)%v_ptr%pr(dim)%cells(i,j,k)
-				end do
-				do spec = 1, species_number
-					Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k) + &
-						this%Y_prod_particles(phase)%v_ptr%pr(spec)%cells(i,j,k)
-				end do
-			end do
-
-			mass_fraction_sum = 0.0_dp
-			do spec = 1, species_number
-				Y%pr(spec)%cells(i,j,k) = max(Y%pr(spec)%cells(i,j,k), 0.0_dp)
-				mass_fraction_sum = mass_fraction_sum + Y%pr(spec)%cells(i,j,k)
-			end do
-			do spec = 1, species_number
-				Y%pr(spec)%cells(i,j,k) = Y%pr(spec)%cells(i,j,k)/mass_fraction_sum
-			end do
-		end do
-		end do
-		end do
-		!$omp end parallel do
-		end associate
-	end subroutine apply_split_sources
+	end subroutine advance_particle_phases
 
 	!> Store reconstructed face variables as the old flow state for the next step.
 

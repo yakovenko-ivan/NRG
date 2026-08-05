@@ -16,8 +16,8 @@ module cpm_solver_class
     use viscosity_solver_class
     use fourier_heat_transfer_solver_class
     use fickean_diffusion_solver_class
-    use continuous_particles_solver_class, only: continuous_particles_solver, &
-        continuous_particles_solver_c
+    use dispersed_phase_solver_class, only: dispersed_phase_solver, &
+        dispersed_phase_solver_c
     use mpi_communications_class
     use benchmarking
     use solver_options_class
@@ -66,7 +66,7 @@ module cpm_solver_class
         type(diffusion_solver) :: diff_solver
         type(chemical_kinetics_solver) :: chem_kin_solver
         type(table_approximated_real_gas) :: state_eq
-        type(continuous_particles_solver), dimension(:), allocatable :: particles_solver
+        type(dispersed_phase_solver), dimension(:), allocatable :: particles_solver
 
         type(computational_domain) :: domain
         type(mpi_communications) :: mpi_support
@@ -251,15 +251,13 @@ contains
 
         if (constructor%additional_particles_phases_number > 0) then
             allocate(constructor%particles_solver(constructor%additional_particles_phases_number))
-            call constructor%particles_solver(1)%pre_constructor( &
-                constructor%additional_particles_phases_number)
             allocate(constructor%E_f_prod_particles(constructor%additional_particles_phases_number))
             allocate(constructor%v_prod_particles(constructor%additional_particles_phases_number))
             allocate(constructor%Y_prod_particles(constructor%additional_particles_phases_number))
 
             do particles_phase_counter = 1, constructor%additional_particles_phases_number
                 particles_params = manager%solver_options%get_particles_params(particles_phase_counter)
-                constructor%particles_solver(particles_phase_counter) = continuous_particles_solver_c( &
+                constructor%particles_solver(particles_phase_counter) = dispersed_phase_solver_c( &
                     manager, particles_params, particles_phase_counter)
 
                 write(var_name, '(A,I2.2)') 'energy_production_particles', particles_phase_counter
@@ -338,10 +336,6 @@ contains
         call this%mpi_support%exchange_conservative_vector_field(this%Y%v_ptr)
         call this%mpi_support%exchange_conservative_vector_field(this%v%v_ptr)
 
-        do phase = 1, this%additional_particles_phases_number
-            call this%particles_solver(phase)%apply_boundary_conditions_main(this%time)
-        end do
-
         call cpm_viscosity_timer%tic()
         if (this%viscosity_flag) call this%visc_solver%solve_viscosity(this%time_step)
         call cpm_viscosity_timer%toc(new_iter=.true.)
@@ -359,10 +353,8 @@ contains
         call cpm_chemistry_timer%toc(new_iter=.true.)
 
         do phase = 1, this%additional_particles_phases_number
-            call this%particles_solver(phase)%particles_euler_step_v_E(this%time_step)
-            call this%particles_solver(phase)%apply_boundary_conditions_interm_v_p()
-            call this%particles_solver(phase)%particles_lagrange_step(this%time_step)
-            call this%particles_solver(phase)%particles_final_step(this%time_step)
+            call this%particles_solver(phase)%advance( &
+                this%time_step, this%time - this%time_step)
         end do
 
         call cpm_gas_dynamics_timer%tic()
