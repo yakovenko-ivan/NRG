@@ -1,184 +1,523 @@
-# NRG: Complete Installation Guide
+# NRG Installation and Build Guide
 
-This guide provides step-by-step instructions to build the NRG software from source on **Windows**, **Linux**, and **macOS**. Multiple compiler and toolchain options are provided for each platform.
+This guide describes how to configure and build NRG from source on **Windows**, **Linux**, and **macOS**. It matches the options and directory layout defined by the current root `CMakeLists.txt`.
 
-**Choose your operating system:**
-- [Installation on Windows](#installation-on-windows)
-- [Installation on Linux](#installation-on-linux)
-- [Installation on macOS](#installation-on-macos)
+## Supported build configuration
 
----
+NRG currently supports:
+
+- **CMake 3.13 or newer**
+- **GNU Fortran** (`gfortran`)
+- **Intel oneAPI Fortran** (`ifx`)
+- **Intel classic Fortran** (`ifort`) for compatibility
+- Optional **OpenMP**, enabled by default
+- Single-configuration generators such as Unix Makefiles and Ninja
+- Multi-configuration generators such as Visual Studio
+
+Other Fortran compiler families are rejected by the root CMake configuration.
 
 ## Prerequisites
 
-All installations require:
-*   **Git**: To clone the repository. [Download Git](https://git-scm.com/downloads)
-*   **CMake 3.12 or higher**: The build system generator. [Download CMake](https://cmake.org/download/)
+All platforms require:
 
----
+- [Git](https://git-scm.com/downloads)
+- [CMake](https://cmake.org/download/) 3.13 or newer
+- A supported Fortran compiler
+- A build backend appropriate for the selected CMake generator, such as Visual Studio/MSBuild, Make, or Ninja
+
+Check the installed tools before configuring:
+
+```bash
+git --version
+cmake --version
+gfortran --version
+```
+
+For Intel oneAPI:
+
+```bash
+ifx --version
+```
+
+## Important CMake behavior
+
+### Build type
+
+For a **single-configuration generator**, select the build type during configuration:
+
+```bash
+-DCMAKE_BUILD_TYPE=Release
+```
+
+Supported values are:
+
+- `Debug`
+- `Release`
+- `RelWithDebInfo`
+- `MinSizeRel`
+
+When `CMAKE_BUILD_TYPE` is omitted for a single-configuration generator, NRG defaults to **Debug**.
+
+For a **multi-configuration generator**, such as Visual Studio, select the configuration during the build:
+
+```bash
+cmake --build build --config Release
+```
+
+`CMAKE_BUILD_TYPE` is not used by multi-configuration generators.
+
+### OpenMP
+
+OpenMP is enabled by default:
+
+```bash
+-DNRG_ENABLE_OPENMP=ON
+```
+
+When enabled, CMake must find the Fortran OpenMP package. To build without OpenMP:
+
+```bash
+-DNRG_ENABLE_OPENMP=OFF
+```
+
+The build system defines the `OMP` preprocessing symbol only when OpenMP is enabled.
 
 ## Installation on Windows
 
-### **Option A: Native Windows with Visual Studio & Intel oneAPI (Recommended for Performance)**
+### Option A: Visual Studio 2022 and Intel oneAPI `ifx`
 
-This method uses the native Microsoft toolchain (`MSBuild`) with the Intel `ifx` compiler from the command line.
+This is the recommended native Windows configuration for production calculations.
 
-1.  **Install Prerequisites:**
-    *   **Visual Studio 2022**: Install the free **Community Edition**. During setup, select the **"Desktop development with C++"** workload. This provides the necessary build tools (`MSBuild`).
-    *   **Intel oneAPI**: Download and install both the **Base Toolkit** and **HPC Toolkit** (free). This provides the `ifx` Fortran compiler.
+Install:
 
-2.  **Build from the Developer Command Prompt:**
-    Open the **"x64 Native Tools Command Prompt for VS 2022"** from the Start Menu. This is crucial as it sets the correct environment variables.
-    ```cmd
-    git clone https://github.com/yakovenko-ivan/NRG.git
-    cd NRG
-    mkdir build && cd build
-    cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_Fortran_COMPILER=ifx
-    cmake --build . --target computing_module --config Release
-    ```
+1. **Visual Studio 2022** with the **Desktop development with C++** workload.
+2. **Intel oneAPI Base Toolkit**.
+3. **Intel oneAPI HPC Toolkit**, which provides `ifx`.
+4. CMake and Git.
 
-### **Option B: GNU Toolchain with gfortran (Recommended for Simplicity)**
+Open a terminal in which the Visual Studio and oneAPI environments are initialized, then run:
 
-This method uses GNU tools (`gfortran`, `make`) via the Equation.com installer and can be used from a standard terminal or Visual Studio Code.
+```cmd
+git clone https://github.com/yakovenko-ivan/NRG.git
+cd NRG
 
-1.  **Install Prerequisites:**
-    *   **gfortran for Windows**: Download and run the latest 64-bit installer from [Equation.com](https://www.equation.com/servlet/equation.cmd?fa=fortran).
-    *   **(Optional) Visual Studio Code**: A lightweight editor with excellent terminal integration.
+cmake -S . -B build ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -DCMAKE_Fortran_COMPILER=ifx
 
-2.  **Build from the Command Prompt or VS Code Terminal:**
-    Open a standard **Command Prompt** or the terminal in VS Code.
-    ```cmd
-    git clone https://github.com/yakovenko-ivan/NRG.git
-    cd NRG
-    mkdir build && cd build
-    cmake .. -G "Unix Makefiles" -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=Release
-    cmake --build . --target computing_module
-    ```
+cmake --build build --target computing_module --config Release --parallel
+```
 
----
+The Visual Studio generator is multi-configuration, so `Release` is selected with `--config Release`.
+
+To build all configured targets:
+
+```cmd
+cmake --build build --config Release --parallel
+```
+
+### Option B: GNU `gfortran`
+
+Install a 64-bit GNU Fortran distribution together with a compatible build backend such as Make or Ninja.
+
+Example using a single-configuration generator:
+
+```cmd
+git clone https://github.com/yakovenko-ivan/NRG.git
+cd NRG
+
+cmake -S . -B build ^
+  -G "Unix Makefiles" ^
+  -DCMAKE_Fortran_COMPILER=gfortran ^
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --target computing_module --parallel
+```
+
+Use a generator that matches the build tool installed on the system. For example, use `Ninja` only when the `ninja` executable is available.
 
 ## Installation on Linux
 
-### **Option A: Using Intel oneAPI `ifx` (Recommended for Performance)**
+### Option A: Intel oneAPI `ifx`
 
-1.  **Install Prerequisites:**
-    *   **Intel oneAPI HPC Toolkit**: Follow the [official instructions](https://www.intel.com/content/www/us/en/developer/tools/oneapi/hpc-toolkit.html) for your distribution (e.g., using the APT or YUM repository).
-    *   **CMake & `make`**:
-        ```bash
-        # Ubuntu/Debian
-        sudo apt install cmake make
-        # Fedora/RHEL
-        sudo dnf install cmake make
-        ```
+Install the Intel oneAPI HPC Toolkit and initialize its environment:
 
-2.  **Set Up the Compiler Environment & Build:**
-    Before building, source the oneAPI environment variables. You can add this line to your `~/.bashrc`.
-    ```bash
-    source /opt/intel/oneapi/setvars.sh
-    ```
-    Then, clone and build NRG:
-    ```bash
-    git clone https://github.com/yakovenko-ivan/NRG.git
-    cd NRG
-    mkdir build && cd build
-    cmake .. -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_BUILD_TYPE=Release
-    cmake --build . --target computing_module
-    ```
+```bash
+source /opt/intel/oneapi/setvars.sh
+```
 
-### **Option B: Using GNU `gfortran` (Common Default)**
+Install CMake, Git, and a build backend if they are not already present.
 
-1.  **Install Prerequisites:**
-    ```bash
-    # Ubuntu/Debian
-    sudo apt install gfortran cmake make
-    # Fedora/RHEL
-    sudo dnf install gcc-gfortran cmake make
-    ```
+Ubuntu/Debian:
 
-2.  **Build NRG:**
-    ```bash
-    git clone https://github.com/yakovenko-ivan/NRG.git
-    cd NRG
-    mkdir build && cd build
-    cmake .. -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=Release 
-    cmake --build . --target computing_module
-    ```
+```bash
+sudo apt update
+sudo apt install git cmake make
+```
 
-**Visual Studio Code** can be installed via Snap or your distribution's package manager for a convenient development environment.
+Fedora/RHEL:
 
----
+```bash
+sudo dnf install git cmake make
+```
+
+Configure and build:
+
+```bash
+git clone https://github.com/yakovenko-ivan/NRG.git
+cd NRG
+
+cmake -S . -B build \
+  -DCMAKE_Fortran_COMPILER=ifx \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --target computing_module --parallel
+```
+
+### Option B: GNU `gfortran`
+
+Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install git gfortran cmake make
+```
+
+Fedora/RHEL:
+
+```bash
+sudo dnf install git gcc-gfortran cmake make
+```
+
+Configure and build:
+
+```bash
+git clone https://github.com/yakovenko-ivan/NRG.git
+cd NRG
+
+cmake -S . -B build \
+  -DCMAKE_Fortran_COMPILER=gfortran \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --target computing_module --parallel
+```
 
 ## Installation on macOS
 
-**Primary Recommended Path: Using GNU `gfortran`**
+The supported compiler path on macOS is GNU `gfortran`. Intel `ifx` is not available for macOS.
 
-The Intel `ifx` compiler is **not available** for macOS. The classic `ifort` compiler is deprecated and not recommended for new projects.
+Install the required tools with Homebrew:
 
-1.  **Install Prerequisites:**
-    The easiest method is via **Homebrew**. Install [Homebrew](https://brew.sh/) if you don't have it, then run:
-    ```bash
-    brew install gcc cmake
-    # Ensure Xcode Command Line Tools are installed for 'make':
-    xcode-select --install
-    ```
-    This installs `gfortran` (as part of the `gcc` formula) and CMake.
-
-2.  **Build NRG:**
-    ```bash
-    git clone https://github.com/yakovenko-ivan/NRG.git
-    cd NRG
-    mkdir build && cd build
-    cmake .. -DCMAKE_Fortran_COMPILER=gfortran -DCMAKE_BUILD_TYPE=Release
-    cmake --build . --target computing_module
-    ```
-
-**Visual Studio Code** can be installed via Homebrew (`brew install --cask visual-studio-code`) or downloaded from its website.
-
-## Understanding Build Outputs
-
-The location of compiled executables depends on your **CMake generator**:
-
-| Generator Type | Examples | Build Type Specified Via | Executable Location |
-| :--- | :--- | :--- | :--- |
-| **Multi-Config** | `Visual Studio` | `--config <Debug/Release>` flag **during build** (`cmake --build`). | `build/bin/<Debug or Release>/` |
-| **Single-Config** | `Unix Makefiles` | `-DCMAKE_BUILD_TYPE=<Debug/Release>` flag **during configuration** (`cmake ..`). | `build/bin/` |
-
-**Example Paths:**
-*   Visual Studio (Release): `build/bin/Release/computing_module.exe`
-*   Unix Makefiles (Release): `build/bin/computing_module`
-*   Package Interface: `build/bin/package_interface_1D_laminar_velocity` (or similar descriptive name)
-
----
-
-## Building Different Problem Setups (Package Interface)
-
-The `package_interface` executable is used to generate initial conditions for specific problems. You can build it from different source files located in `package_interface/src/`.
-
-### Steps to Build a Specific Interface:
-1.  **Re-configure CMake** with the `-DPACKAGE_INTERFACE_SOURCE` flag set to your desired `.f90` file (path relative to `package_interface/`).
-2.  **Build** the `package_interface` target.
-
-**Example: Building the '1D_laminar_velocity' interface**
 ```bash
-cd build
-cmake .. -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/1D_laminar_velocity.f90
-cmake --build . --target package_interface
+brew install git cmake gcc
+xcode-select --install
 ```
+
+Configure and build:
+
+```bash
+git clone https://github.com/yakovenko-ivan/NRG.git
+cd NRG
+
+cmake -S . -B build \
+  -DCMAKE_Fortran_COMPILER=gfortran \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --target computing_module --parallel
+```
+
+Homebrew may install a version-suffixed compiler executable. When `gfortran` is not found, use the name reported by:
+
+```bash
+brew list gcc | grep '/gfortran'
+```
+
+and pass that executable to `CMAKE_Fortran_COMPILER`.
+
+## Building without OpenMP
+
+OpenMP is enabled by default and is required during configuration unless explicitly disabled.
+
+Example:
+
+```bash
+cmake -S . -B build-serial \
+  -DCMAKE_Fortran_COMPILER=gfortran \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNRG_ENABLE_OPENMP=OFF
+
+cmake --build build-serial --target computing_module --parallel
+```
+
+Using separate build directories such as `build` and `build-serial` prevents incompatible configurations from sharing one CMake cache.
+
+## Available targets
+
+The root project adds the following NRG components:
+
+- `package_library`
+- `package_interface`
+- `package_utilities`
+- `computing_module`
+
+Build a specific target with:
+
+```bash
+cmake --build build --target computing_module
+```
+
+For a multi-configuration generator:
+
+```bash
+cmake --build build --target computing_module --config Release
+```
+
+Build all targets by omitting `--target`:
+
+```bash
+cmake --build build --parallel
+```
+
+## Selecting a package-interface problem
+
+The root CMake configuration exposes the cache variable:
+
+```text
+PACKAGE_INTERFACE_SOURCE
+```
+
+Its value is a source path **relative to `package_interface/`**.
+
+The default is:
+
+```text
+src/tests/classic_tests/1D_laminar_velocity.f90
+```
+
+To select another problem interface:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/1D_laminar_velocity.f90
+
+cmake --build build --target package_interface --parallel
+```
+
+With Visual Studio:
+
+```cmd
+cmake -S . -B build ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -DCMAKE_Fortran_COMPILER=ifx ^
+  -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/1D_laminar_velocity.f90
+
+cmake --build build --target package_interface --config Release --parallel
+```
+
+Changing `PACKAGE_INTERFACE_SOURCE` requires re-running the CMake configuration step, but normally does not require deleting the build directory.
+
+## Selecting a package utility
+
+The corresponding cache variable for the utilities target is:
+
+```text
+PACKAGE_UTILITY_SOURCE
+```
+
+Its value is a source path **relative to `package_utilities/`**.
+
+The default is:
+
+```text
+src/leading_point_velocity.f90
+```
+
+Example:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPACKAGE_UTILITY_SOURCE=src/leading_point_velocity.f90
+
+cmake --build build --target package_utilities --parallel
+```
+
+Both selectable sources can be configured at once:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/1D_laminar_velocity.f90 \
+  -DPACKAGE_UTILITY_SOURCE=src/leading_point_velocity.f90
+```
+
+## Build output directories
+
+The root CMake project keeps generated files outside the source tree:
+
+| Output | Single-configuration generator | Multi-configuration generator |
+|---|---|---|
+| Executables | `build/bin/` | normally `build/bin/<Config>/` |
+| Libraries | `build/lib/` | normally `build/lib/<Config>/` |
+| Fortran module files | `build/mod_files/` | `build/mod_files/` |
+
+Examples:
+
+```text
+build/bin/computing_module
+build/bin/computing_module.exe
+build/bin/Release/computing_module.exe
+```
+
+The exact executable names are defined by the component-level CMake files.
+
+## Inspecting the configuration
+
+During configuration, CMake reports:
+
+- generator type;
+- build type for single-configuration generators;
+- operating system;
+- Fortran compiler path;
+- compiler family and version;
+- OpenMP status;
+- selected package-interface source;
+- selected package-utility source.
+
+To display cached options:
+
+```bash
+cmake -S . -B build -LA
+```
+
+## Reconfiguration and clean builds
+
+CMake caches the compiler, generator, build type, and selected source files.
+
+A new build directory is strongly recommended when changing:
+
+- Fortran compiler;
+- compiler family;
+- CMake generator;
+- 32-bit/64-bit architecture;
+- OpenMP toolchain.
+
+Example:
+
+```bash
+rm -rf build
+cmake -S . -B build \
+  -DCMAKE_Fortran_COMPILER=gfortran \
+  -DCMAKE_BUILD_TYPE=Release
+```
+
+On Windows:
+
+```cmd
+rmdir /S /Q build
+```
+
+For a normal rebuild with the same configuration:
+
+```bash
+cmake --build build --target clean
+cmake --build build --parallel
+```
+
+## Compiler behavior configured by NRG
+
+The root CMake file supplies the required preprocessing and diagnostic options.
+
+For GNU Fortran it enables:
+
+- preprocessing with `-cpp`;
+- free-form lines up to 512 characters;
+- runtime checks, traceback, and floating-point traps in `Debug`.
+
+For Intel Fortran it enables:
+
+- preprocessing with `/fpp` on Windows or `-fpp` on Unix-like systems;
+- traceback information;
+- runtime checks in `Debug`;
+- floating-point exception handling in all configurations.
+
+These options are propagated through the `package_library` target to NRG executables.
 
 ## Troubleshooting
 
-| Issue | Solution |
-| :--- | :--- |
-| **CMake Error: "No CMAKE_Fortran_COMPILER could be found."** | **Windows (Option A)**: Use the **"x64 Native Tools Command Prompt"**. <br> **Linux (Option A)**: Run `source /opt/intel/oneapi/setvars.sh`. <br> **General**: Verify compiler with `ifx --version` or `gfortran --version`. |
-| **CMake Error: "CMake was unable to find a build program corresponding to 'Unix Makefiles'."** (Windows) | The `make` command is missing from your PATH. The Equation.com installer places it in `C:\gfortran\bin`. [Add this directory to your system's PATH](https://www.architectryan.com/2018/03/17/add-to-the-path-on-windows-10/). |
-| **Build fails with compilation errors** | Try a `Debug` build first for better error messages. **For Makefiles:** `cmake .. -DCMAKE_BUILD_TYPE=Debug`. **For Visual Studio:** `cmake --build . --config Debug`. |
-| **`--config` flag has no effect (Makefiles)** | This is expected. With `Unix Makefiles`, the build type is set during `cmake ..` with `-DCMAKE_BUILD_TYPE`. |
+### CMake cannot find a Fortran compiler
 
----
+Verify that the compiler is available in the active terminal:
 
-## Next Steps
+```bash
+gfortran --version
+```
 
-After a successful build, proceed to the [Tutorial: Running Your First Simulation](https://github.com/yakovenko-ivan/NRG/wiki/Tutorial-1:-First-Simulation) to learn how to use the `package_interface` and `computing_module` executables.
+or:
 
-**Need Help?**  
-Please search for your error message in the [GitHub Issues](https://github.com/yakovenko-ivan/NRG/issues) or open a new one if your problem isn't documented.
+```bash
+ifx --version
+```
+
+For Intel oneAPI on Linux, initialize the environment:
+
+```bash
+source /opt/intel/oneapi/setvars.sh
+```
+
+On Windows, use a terminal initialized for both Visual Studio and Intel oneAPI.
+
+### OpenMP is not found
+
+OpenMP is enabled by default. Either install/configure the compiler's OpenMP runtime or configure a serial build:
+
+```bash
+cmake -S . -B build -DNRG_ENABLE_OPENMP=OFF
+```
+
+### CMake reports an unsupported compiler
+
+The root project currently accepts only GNU, IntelLLVM, and Intel compiler IDs. Use `gfortran`, `ifx`, or the compatibility `ifort` path.
+
+### The build unexpectedly runs slowly
+
+A single-configuration build defaults to `Debug` when `CMAKE_BUILD_TYPE` is omitted. Reconfigure explicitly:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+```
+
+### `--config Release` has no effect
+
+`--config` applies only to multi-configuration generators. For Unix Makefiles or Ninja, set:
+
+```bash
+-DCMAKE_BUILD_TYPE=Release
+```
+
+during configuration.
+
+### `CMAKE_BUILD_TYPE` has no effect with Visual Studio
+
+Visual Studio is multi-configuration. Select the build configuration with:
+
+```cmd
+cmake --build build --config Release
+```
+
+### CMake keeps using the previous compiler
+
+The compiler is stored in the CMake cache. Delete the build directory and configure again.
+
+### The requested build program is missing
+
+Select a generator whose backend is installed. For example, Unix Makefiles require `make`, Ninja requires `ninja`, and Visual Studio generators require the corresponding Visual Studio/MSBuild installation.
+
+## Next steps
+
+After a successful build, continue with the project tutorial for generating a problem setup with `package_interface` and running the resulting case with `computing_module`.
+
+For build problems, search the [NRG issue tracker](https://github.com/yakovenko-ivan/NRG/issues) before opening a new issue.
