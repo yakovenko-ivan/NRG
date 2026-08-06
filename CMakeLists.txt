@@ -117,12 +117,29 @@ set(SRC_LIB ${SRC}/package_library)
 set(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/mod_files)
 file(MAKE_DIRECTORY ${CMAKE_Fortran_MODULE_DIRECTORY})
 
-# Keep build products out of the source tree.
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-file(MAKE_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-file(MAKE_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+# Keep build products out of the source tree and separate configurations.
+#
+# The $<CONFIG> generator expression works for both generator families:
+#   * single-config: CMAKE_BUILD_TYPE (Debug, Release, ...)
+#   * multi-config:  configuration selected with --config
+#
+# Using the expression also prevents multi-config generators from appending a
+# second configuration directory automatically.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY
+    "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY
+    "${CMAKE_BINARY_DIR}/lib/$<CONFIG>")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY
+    "${CMAKE_BINARY_DIR}/lib/$<CONFIG>")
+
+# CMake creates the configuration-specific subdirectories during generation
+# and build. Create only their common parents at configure time; otherwise a
+# literal directory named '$<CONFIG>' would be created.
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+message(STATUS
+    "Runtime output directory: ${CMAKE_BINARY_DIR}/bin/<CONFIG>")
 
 # -----------------------------------------------------------------------------
 # User-selectable package interface and utility sources
