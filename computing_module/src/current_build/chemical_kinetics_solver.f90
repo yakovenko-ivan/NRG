@@ -52,13 +52,19 @@ module chemical_kinetics_solver_class
 
     type(kinetics_thread_workspace), save :: thread_workspace
 !$omp threadprivate(thread_workspace)
-
+   
     interface
         subroutine ddriv3(n, t, y, f, nstate, tout, ntask, nroot, eps, &
             ewt, ierror, mint, miter, impl, ml, mu, mxord, hmax, work, &
             lenw, iwork, leniw, jacobn, fa, nde, mxstep, g, users, ierflg)
-            external :: f, jacobn, fa, g, users
+
+            implicit none
+
+            external :: f, jacobn, fa, users
+            double precision, external :: g
+
             double precision :: eps, ewt(*), hmax, t, tout, work(*), y(*)
+
             integer :: ierror, ierflg, impl, iwork(*), leniw, lenw
             integer :: mint, miter, ml, mu, mxord, mxstep, n, nde
             integer :: nroot, nstate, ntask
