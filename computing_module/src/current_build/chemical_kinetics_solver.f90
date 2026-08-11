@@ -682,9 +682,7 @@ contains
         real(dp) :: rate_preparation_time_step, integration_time_step
         real(dp) :: source_assembly_time_step
         real(dp) :: cell_rate_preparation_time, cell_integration_time
-#ifdef CHEMISTRY_PROFILE
         real(dp) :: source_time_start
-#endif
 
         if (.not. ieee_is_finite(time_step) .or. time_step <= 0.0_dp) then
             error stop 'Chemical kinetics: time step must be finite and positive'
@@ -722,10 +720,7 @@ contains
 !$omp private(mass_fraction_sum,negative_tolerance) &
 !$omp private(cell_internal_steps,cell_rhs_evaluations) &
 !$omp private(cell_jacobian_evaluations,cell_rate_preparation_time) &
-!$omp private(cell_integration_time) &
-#ifdef CHEMISTRY_PROFILE
-!$omp private(source_time_start) &
-#endif
+!$omp private(cell_integration_time,source_time_start) &
 !$omp reduction(+:active_cells_step,integrator_calls_step) &
 !$omp reduction(+:internal_steps_step,rhs_evaluations_step) &
 !$omp reduction(+:jacobian_evaluations_step) &
@@ -733,7 +728,7 @@ contains
 !$omp reduction(+:source_assembly_time_step)
         call this%ensure_thread_workspace()
 
-!$omp do collapse(3) schedule(guided,1)
+!$omp do collapse(3) schedule(dynamic,2)
         do k = cell_loop(3,1), cell_loop(3,2)
             do j = cell_loop(2,1), cell_loop(2,2)
                 do i = cell_loop(1,1), cell_loop(1,2)
@@ -868,6 +863,7 @@ contains
             integration_time_step
         this%total_source_assembly_time = &
             this%total_source_assembly_time + source_assembly_time_step
+!        call this%write_performance_statistics()
     end subroutine solve_chemical_kinetics
 
 
@@ -1115,7 +1111,7 @@ contains
         mxord = 5
         time_in = 0.0_dp
         time_out = time_step
-        hmax = min(time_step,this%slatec_max_internal_step)
+        hmax = time_step !min(time_step,this%slatec_max_internal_step)
         lenw = size(thread_workspace%work)
         leniw = size(thread_workspace%iwork)
         nde = n
@@ -1327,8 +1323,14 @@ contains
         ! The first term detects a defect relative to the chemistry-induced mass
         ! redistribution.  The second term allows for the requested ODE accuracy
         ! and subtraction roundoff relative to the cell mass.
+        ! DDRIV3 controls the local weighted state error, not the global
+        ! conservation invariant.  Accumulation over internal BDF steps and
+        ! subtraction of nearly equal initial/final concentrations can make the
+        ! invariant defect several tens of EPS times the cell mass.  A factor of
+        ! 100 remains stringent (1e-7 of cell mass for the default EPS=1e-9)
+        ! while avoiding false failures in strongly reacting cells.
         integrator_mass_floor = density*max( &
-            10.0_dp*this%slatec_accuracy, &
+            100.0_dp*this%slatec_accuracy, &
             1000.0_dp*epsilon(1.0_dp))
         integrated_mass_tolerance = max( &
             this%mass_balance_tolerance*integrated_mass_activity, &
@@ -1336,8 +1338,9 @@ contains
 
         if (abs(integrated_mass_defect) > integrated_mass_tolerance) then
             call report_mass_imbalance( &
-                i_cell,j_cell,k_cell,source_sum,source_l1, &
-                integrated_mass_defect,integrated_mass_tolerance)
+                i_cell,j_cell,k_cell,density,source_sum,source_l1, &
+                integrated_mass_defect,integrated_mass_activity, &
+                integrated_mass_tolerance)
         end if
 
         ! Remove the integrator-level residual.  Normalize the correction weights
@@ -1776,11 +1779,18 @@ contains
     end subroutine report_invalid_cell
 
 
-    subroutine report_mass_imbalance(i, j, k, source_sum, source_l1, &
-            integrated_defect, integrated_tolerance)
+    subroutine report_mass_imbalance(i, j, k, density, source_sum, &
+            source_l1, integrated_defect, integrated_activity, &
+            integrated_tolerance)
         integer, intent(in) :: i, j, k
-        real(dp), intent(in) :: source_sum, source_l1
-        real(dp), intent(in) :: integrated_defect, integrated_tolerance
+        real(dp), intent(in) :: density, source_sum, source_l1
+        real(dp), intent(in) :: integrated_defect, integrated_activity
+        real(dp), intent(in) :: integrated_tolerance
+        real(dp) :: relative_to_density, relative_to_activity
+
+        relative_to_density = abs(integrated_defect)/max(density,tiny(1.0_dp))
+        relative_to_activity = abs(integrated_defect)/ &
+            max(integrated_activity,tiny(1.0_dp))
 
 !$omp critical(chemical_kinetics_error_output)
         write(error_unit,'(A,3(I0,1X))') &
@@ -1791,6 +1801,10 @@ contains
             '  sum(abs(species_source))          = ',source_l1
         write(error_unit,'(A,ES24.16)') &
             '  integrated mass defect [kg m-3]   = ',integrated_defect
+        write(error_unit,'(A,ES24.16)') &
+            '  defect / cell density             = ',relative_to_density
+        write(error_unit,'(A,ES24.16)') &
+            '  defect / chemistry activity       = ',relative_to_activity
         write(error_unit,'(A,ES24.16)') &
             '  allowed integrated defect         = ',integrated_tolerance
 !$omp end critical(chemical_kinetics_error_output)

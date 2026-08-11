@@ -76,6 +76,7 @@ module data_io_class
 		procedure	:: get_data_output_folder
 
 		procedure				:: output_all_data
+		procedure				:: write_restart_checkpoint
 		! Sequential data output	
 		procedure	,private	:: output_fields
 		procedure	,private	:: output_mesh
@@ -475,6 +476,26 @@ contains
 		close(io_unit)
 	end subroutine
 	
+	subroutine write_restart_checkpoint(this,time)
+		class(data_io), intent(inout) :: this
+		real(dp), intent(in) :: time
+
+		logical :: ignored_stop
+		integer :: processor_rank
+
+		! Forced output writes the complete restart state into the directory
+		! identified by the current load_counter.  In the legacy routine the
+		! forced-output path deliberately returns stop_flag=.false., therefore
+		! it does not update data_io_load_counter itself.
+		call this%output_all_data(time,ignored_stop,make_output=.true.)
+
+		! Register the checkpoint only after all restart files have been written.
+		! The next computing-module invocation then reads this load_counter and
+		! calculation_time, loads that directory, and continues from it.
+		processor_rank = this%domain%get_processor_rank()
+		if (processor_rank == 0) call this%write_load_counter(time)
+	end subroutine write_restart_checkpoint
+	
 	subroutine output_all_data(this,time,stop_flag,make_output)
 		class(data_io)	,intent(inout)				:: this
 		real(dp)		,intent(in)					:: time
@@ -494,7 +515,7 @@ contains
 
 		processor_rank = this%domain%get_processor_rank()
 
-!		stop_flag = .false.
+		stop_flag = .false.
 		make_flag = .false.
 		if(present(make_output)) make_flag = make_output
 
@@ -556,15 +577,9 @@ contains
 					print *, 'Output lasts ', output_time ,' min'
 				end if	
 		
-				stop_flag = .true.
-			
-				if(present(make_output)) then
-					if(make_output) stop_flag = .false.
-				end if
 			end if
 		end if
 
-		if(stop_flag.and.(processor_rank == 0)) call this%write_load_counter(time)
 	end subroutine
 	
 	subroutine output_fields(this)

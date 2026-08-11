@@ -62,6 +62,7 @@ module solver_options_class
         logical :: hydrodynamics_flag = .false.
         logical :: heat_transfer_flag = .false.
         logical :: molecular_diffusion_flag = .false.
+        logical :: soret_diffusion_flag = .false.
         logical :: viscosity_flag = .false.
         logical :: thermal_radiation_flag = .false.
         logical :: chemical_reaction_flag = .false.
@@ -87,6 +88,7 @@ module solver_options_class
         procedure :: get_heat_transfer_flag
         procedure :: get_thermal_radiation_flag
         procedure :: get_molecular_diffusion_flag
+        procedure :: get_soret_diffusion_flag
         procedure :: get_viscosity_flag
         procedure :: get_chemical_reaction_flag
         procedure :: get_grav_acc
@@ -106,7 +108,7 @@ contains
         solver_name, hydrodynamics_flag, heat_transfer_flag, &
         molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, &
         chemical_reaction_flag, grav_acc, additional_particles_phases, &
-        CFL_flag, CFL_coefficient, initial_time_step)
+        CFL_flag, CFL_coefficient, initial_time_step, soret_diffusion_flag)
 
         character(len=*), intent(in) :: solver_name
         logical, intent(in) :: hydrodynamics_flag
@@ -120,13 +122,17 @@ contains
         logical, intent(in) :: CFL_flag
         real(dp), intent(in) :: CFL_coefficient
         real(dp), intent(in) :: initial_time_step
+        logical, intent(in), optional :: soret_diffusion_flag
 
         integer :: number_of_phases
         integer :: io_unit
-        logical :: radiation_enabled
+        logical :: radiation_enabled, soret_enabled
 
         radiation_enabled = .false.
         if (present(thermal_radiation_flag)) radiation_enabled = thermal_radiation_flag
+
+        soret_enabled = .false.
+        if (present(soret_diffusion_flag)) soret_enabled = soret_diffusion_flag
 
         number_of_phases = 0
         if (present(additional_particles_phases)) then
@@ -135,9 +141,9 @@ contains
 
         call constructor%set_properties( &
             solver_name, hydrodynamics_flag, heat_transfer_flag, &
-            molecular_diffusion_flag, viscosity_flag, radiation_enabled, &
-            chemical_reaction_flag, grav_acc, number_of_phases, CFL_flag, &
-            CFL_coefficient, initial_time_step)
+            molecular_diffusion_flag, soret_enabled, viscosity_flag, &
+            radiation_enabled, chemical_reaction_flag, grav_acc, &
+            number_of_phases, CFL_flag, CFL_coefficient, initial_time_step)
 
         open(newunit=io_unit, file=solver_data_file_name, status='replace', &
             form='formatted', delim='quote')
@@ -272,15 +278,16 @@ contains
 
         character(len=20) :: solver_name
         logical :: hydrodynamics_flag, heat_transfer_flag
-        logical :: molecular_diffusion_flag, viscosity_flag
+        logical :: molecular_diffusion_flag, soret_diffusion_flag
+        logical :: viscosity_flag
         logical :: thermal_radiation_flag, chemical_reaction_flag, CFL_flag
         real(dp), dimension(3) :: grav_acc
         integer :: additional_particles_phases
         real(dp) :: CFL_coefficient, initial_time_step
 
         namelist /solver_properties/ solver_name, hydrodynamics_flag, &
-            heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, &
-            thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
+            heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
+            viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
             additional_particles_phases, CFL_flag, CFL_coefficient, &
             initial_time_step
 
@@ -288,6 +295,7 @@ contains
         hydrodynamics_flag = this%hydrodynamics_flag
         heat_transfer_flag = this%heat_transfer_flag
         molecular_diffusion_flag = this%molecular_diffusion_flag
+        soret_diffusion_flag = this%soret_diffusion_flag
         viscosity_flag = this%viscosity_flag
         thermal_radiation_flag = this%thermal_radiation_flag
         chemical_reaction_flag = this%chemical_reaction_flag
@@ -307,29 +315,36 @@ contains
 
         character(len=20) :: solver_name
         logical :: hydrodynamics_flag, heat_transfer_flag
-        logical :: molecular_diffusion_flag, viscosity_flag
+        logical :: molecular_diffusion_flag, soret_diffusion_flag
+        logical :: viscosity_flag
         logical :: thermal_radiation_flag, chemical_reaction_flag, CFL_flag
         real(dp), dimension(3) :: grav_acc
         integer :: additional_particles_phases
         real(dp) :: CFL_coefficient, initial_time_step
 
         namelist /solver_properties/ solver_name, hydrodynamics_flag, &
-            heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, &
-            thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
+            heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
+            viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
             additional_particles_phases, CFL_flag, CFL_coefficient, &
             initial_time_step
+
+        ! Preserve compatibility with solver-data files written before the
+        ! Soret option was introduced.
+        soret_diffusion_flag = .false.
 
         read(unit=solver_data_unit, nml=solver_properties)
         call this%set_properties( &
             solver_name, hydrodynamics_flag, heat_transfer_flag, &
-            molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, &
+            molecular_diffusion_flag, soret_diffusion_flag, viscosity_flag, &
+            thermal_radiation_flag, &
             chemical_reaction_flag, grav_acc, additional_particles_phases, &
             CFL_flag, CFL_coefficient, initial_time_step)
     end subroutine read_properties
 
 
     subroutine set_properties(this, solver_name, hydrodynamics_flag, &
-        heat_transfer_flag, molecular_diffusion_flag, viscosity_flag, &
+        heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
+        viscosity_flag, &
         thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
         additional_particles_phases, CFL_flag, CFL_coefficient, &
         initial_time_step)
@@ -337,7 +352,8 @@ contains
         class(solver_options), intent(inout) :: this
         character(len=*), intent(in) :: solver_name
         logical, intent(in) :: hydrodynamics_flag, heat_transfer_flag
-        logical, intent(in) :: molecular_diffusion_flag, viscosity_flag
+        logical, intent(in) :: molecular_diffusion_flag, soret_diffusion_flag
+        logical, intent(in) :: viscosity_flag
         logical, intent(in) :: thermal_radiation_flag, chemical_reaction_flag
         real(dp), dimension(3), intent(in) :: grav_acc
         integer, intent(in) :: additional_particles_phases
@@ -353,11 +369,15 @@ contains
         if (initial_time_step <= 0.0_dp) then
             error stop 'solver_options: initial time step must be positive'
         end if
+        if (soret_diffusion_flag .and. .not. molecular_diffusion_flag) then
+            error stop 'solver_options: Soret diffusion requires molecular diffusion'
+        end if
 
         this%solver_name = solver_name
         this%hydrodynamics_flag = hydrodynamics_flag
         this%heat_transfer_flag = heat_transfer_flag
         this%molecular_diffusion_flag = molecular_diffusion_flag
+        this%soret_diffusion_flag = soret_diffusion_flag
         this%viscosity_flag = viscosity_flag
         this%thermal_radiation_flag = thermal_radiation_flag
         this%chemical_reaction_flag = chemical_reaction_flag
@@ -567,6 +587,8 @@ contains
         write(log_unit, '(A,L1)') ' Heat transfer               : ', this%heat_transfer_flag
         write(log_unit, '(A,L1)') ' Molecular diffusion         : ', &
             this%molecular_diffusion_flag
+        write(log_unit, '(A,L1)') ' Soret diffusion             : ', &
+            this%soret_diffusion_flag
         write(log_unit, '(A,L1)') ' Viscosity                   : ', this%viscosity_flag
         write(log_unit, '(A,L1)') ' Thermal radiation           : ', &
             this%thermal_radiation_flag
@@ -613,6 +635,12 @@ contains
         logical :: value
         value = this%molecular_diffusion_flag
     end function get_molecular_diffusion_flag
+
+    pure function get_soret_diffusion_flag(this) result(value)
+        class(solver_options), intent(in) :: this
+        logical :: value
+        value = this%soret_diffusion_flag
+    end function get_soret_diffusion_flag
 
     pure function get_viscosity_flag(this) result(value)
         class(solver_options), intent(in) :: this

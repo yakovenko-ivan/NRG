@@ -17,6 +17,7 @@ module global_data
 	character(len=100)	,parameter	:: chemical_data_file_name					= trim(task_setup_folder) // trim(fold_sep) // 'chemical_data.inf'
 	character(len=100)	,parameter	:: thermophysical_data_file_name			= trim(task_setup_folder) // trim(fold_sep) // 'thermophysical_setup.inf'
 	character(len=100)	,parameter	:: solver_data_file_name					= trim(task_setup_folder) // trim(fold_sep)	// 'solver_setup.inf'
+    character(len=100)	,parameter	:: run_control_data_file_name				= trim(task_setup_folder) // trim(fold_sep)	// 'run_control.inf'
     character(len=100)  ,parameter  :: post_processor_manager_data_file_name	= trim(task_setup_folder) // trim(fold_sep) // 'post_processors_manager_setup.inf'
 	character(len=100)	,parameter	:: post_processor_data_file_name			= trim(task_setup_folder) // trim(fold_sep) // 'post_processor#.inf'
 	character(len=100)	,parameter	:: post_processor_data_format				= '.dat'
