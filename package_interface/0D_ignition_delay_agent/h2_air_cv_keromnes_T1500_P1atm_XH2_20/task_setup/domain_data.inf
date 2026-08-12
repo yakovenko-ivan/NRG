@@ -1,0 +1,9 @@
+&DOMAIN_PROPERTIES_1
+ DIMENSIONS=1          ,
+ CELLS_NUMBER=2          , 2*1          ,
+ COORDINATE_SYSTEM="cartesian           ",
+ /
+&DOMAIN_PROPERTIES_2
+ LENGTHS= 3*0.0000000000000000       ,  2.0000000000000001E-004, 2*1.0000000000000000E-004  ,
+ AXIS_NAMES="x    ","y    ","z    ",
+ /

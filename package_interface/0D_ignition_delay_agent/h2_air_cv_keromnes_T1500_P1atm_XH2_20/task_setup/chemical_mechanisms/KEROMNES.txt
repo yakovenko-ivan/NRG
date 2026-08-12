@@ -1,0 +1,82 @@
+! ============================================================================
+! |          NUI Galway - Combustion Chemistry Centre H2/CO mechanism        |
+! |            A. KEROMNES, W. K. METCALFE, S. BURKE, H. J. CURRAN           |
+! |                             September 2012                               |
+! ============================================================================
+! H2+O2<=>OH+OH                         2.5E+13       0.44        69200.0
+! ---------------------------    How to cite   -------------------------------
+!        An experimental and detailed chemical kinetic modeling study         
+!       of hydrogen and syngas mixture oxidation at elevated pressures        
+! A. Keromnes, W.K. Metcalfe, K.A. Heufer, N. Donohoe, A.K. Das,              
+! C-J Sung, J. Herzler, C. Naumann, P. Griebel, O. Mathieu, M.C. Krejci,      
+! E.L. Petersen, W.J. Pitz, H.J. Curran                                       
+! Combust. Flame (2013), http://dx.doi.org/10.1016/j.combustflame.2013.01.001 
+! Combustion and Flame 160 (2013) 995–1011                                    
+!-----------------------------------------------------------------------------
+
+
+ELEMENTS
+O  H  N
+END
+
+SPECIES
+H2    O2      N2      O       H       OH      H2O     HO2     H2O2
+END
+H2    O2      AR      HE      H       O       OH      H2O     HO2     H2O2 
+H2    O2      N2      O       H      OH      H2O     HO2     H2O2
+REACTIONS
+
+H+O2<=>O+OH                            1.04E+14      0.00         15286.0
+O+H2<=>H+OH                            5.080E+04     2.67         6.292E+03
+OH+H2<=>H+H2O                          4.38E+13      0.0          6990.0
+O+H2O<=>OH+OH                          2.97E+06      2.02         1.340E+04 
+H2+M<=>H+H+M                           4.577E+19    -1.400        1.044E+05
+'H2/2.5/ H2O/12/ CO/1.9/ CO2/3.8/ HE/.83/' 
+O+O+M<=>O2+M                           6.165E+15    -0.500        0.000E+00
+'H2/2.5/ H2O/12/ AR/.83/ CO/1.9/ CO2/3.8/ HE/.83/' 
+O+H+M<=>OH+M                           4.714E+18    -1.000        0.000E+00
+'H2/2.5/ H2O/12/ AR/.75/ CO/1.5/ CO2/2/ HE/.75/' 
+H+OH+M<=>H2O+M                         3.5E+22      -2.000        0.000E+00 
+'H2/ .73/ H2O/3.65/ AR/ .38/' 
+H+O2(+M)<=>HO2(+M)                     4.650E+12     0.440        0.000E+00
+	LOW  1.737E+19  -1.23       0.0E+00
+	TROE  0.67 1.0E-30 1.0E30 1.0E30 
+	'H2/1.3/ CO/1.9/ CO2/3.8/ HE/0.0/ H2O/10.0/ AR/0.0/' 
+H+O2(+M)<=>HO2(+M)                     4.650E+12     0.440        0.000E+00
+	LOW  9.192E+18  -1.20       0.0E+00
+	TROE  0.70 1.0E-30 1.0E30 1.0E30
+	'H2O/0.0/ H2/0.0/ O2/0.0/ N2/0.0/ AR/1.0/ H/0.0/ O/0.0/ OH/0.0/ HO2/0.0/ H2O2/0.0/ HE/0.0/'
+H+O2(+M)<=>HO2(+M)                     4.650E+12     0.440        0.000E+00
+	LOW  6.810E+18  -1.20       0.0E+00
+	TROE 0.59 1.0E-30 1.0E+30 1.0E+30
+	'H2O/0.0/ H2/0.0/ O2/0.0/ N2/0.0/ AR/0.0/ H/0.0/ O/0.0/ OH/0.0/ HO2/0.0/ H2O2/0.0/ HE/1.0/'
+HO2+H<=>OH+OH                          7.079E+13     0.00          2.950E+02
+H2+O2<=>H+HO2                          5.176E+05     2.433         53502.0
+HO2+O<=>OH+O2                          3.250E+13     0.000         0.000E+00
+HO2+OH<=>H2O+O2                        2.456E+13     0.000        -4.970E+02
+HO2+HO2<=>O2+H2O2                      1.300E+11     0.000        -1630.00
+DUPLICATE                                            
+HO2+HO2<=>O2+H2O2                      3.658E+14     0.000         12000.00
+DUPLICATE                                            
+                                                     
+H2O2(+M)<=>OH+OH(+M)                   2.00E+12      0.90          4.8749+04
+	LOW 2.49E+24   -2.30  4.8749+04
+	TROE 0.43 1.0E-30 1.0E+30 1.0E+30
+	'H2O/0.0/ CO2/1.6/ N2/1.5/ O2/1.2/ HE/0.65/ H2O2/7.7/ H2/3.7/ CO/2.8/'
+
+DUPLICATE
+H2O2(+M)<=>OH+OH(+M)                   2.00E+12      0.90          4.8749+04
+	LOW 1.865E+25   -2.30  4.8749+04 
+	TROE 0.51 1.0E-30 1.0E+30 1.0E+30
+	'H2O/1.0/ H2/0.0/ O2/0.0/ N2/0.0/ AR/0.0/ H/0.0/ O/0.0/ OH/0.0/ HO2/0.0/ H2O2/0.0/' 
+DUPLICATE
+
+H2O2+H<=>H2O+OH                         2.410E+13   0.000          3.970E+03
+H2O2+H<=>H2+HO2                         2.150E+10   1.000          6.000E+03 
+H2O2+O<=>OH+HO2                         9.550E+06   2.000          3.970E+03
+H2O2+OH<=>H2O+HO2                       1.74E+12    0.000          3.18E+02
+DUPLICATE
+H2O2+OH<=>H2O+HO2                       7.59E+13    0.000          7.269E+03
+DUPLICATE
+
+END

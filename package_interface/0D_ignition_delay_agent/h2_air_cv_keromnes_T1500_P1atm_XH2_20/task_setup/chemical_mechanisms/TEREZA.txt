@@ -1,0 +1,61 @@
+!VERSION: ChemphysMech_v.2   04.feb.2020
+!AUTHORS: Tereza A.M. tereza@chph.ras.ru
+!WEBSITE: http://center.chph.ras.ru
+!Changes:
+ELEMENTS
+ H O N HE AR 
+END
+
+SPECIES
+H2      O2      N2      H       O       
+OH*     H2O     H2O2    OH      HO2
+END
+
+REACTIONS
+!++++++++++++++++++++++             H2 - O2 reactions=======================================
+H2+O2 = HO2+H                                5.916E+05    2.433  53502.00 !00MIC/SUT * 0.80   Wang 2007
+H2+O2 = OH+OH          3.0E+11   0.00  40000.     ! P. A. Vlasov, V. N. Smirnov, A. M. Tereza // Russian Journal of Physical Chemistry B. May 2016,V.10, Issue 3, pp 456–46 
+H+O2=O+OH                1.04E+14       .0   15286.0   !  hanson 2011 = AramcoMech_1.3_C4
+H+O2(+M) = HO2(+M)          5.116E+12    0.440      0.00 !   Wang 2007=2010    00 TROE - Based on M=N2 * 1.10
+    LOW / 6.328E+19   -1.400      0.00 /
+    TROE/ 0.5  1E-30  1E+30            /
+    O2/0.85/  H2O/11.89/ AR/0.40/ HE/0.46/ 
+HO2+O=OH+O2              1.74E+13       .00   -400.0   !    tsang86      
+HO2+H=OH+OH              1.70E+14       .00    870.0   !     tsang86     
+HO2+H=H2O+O              3.02E+13       .00   1720.0   ! baulch92        
+HO2 + OH = O2 + H2O                      2.890E+13    0.000    -500.00 !  Hanson 2011
+H2+O=H+OH                5.13E+04      2.67   6280.0   ! baulch92    
+OH+OH=H2O+O              5.36E+12     0.     2106.0       !  Sutherland, J.W.; Patterson, P.M.; Klemm, R.B. 23  Symp. Int. Combust. Proc.,1991, p. 51
+H2+OH=H2O+H                            2.17E+08     1.52        3457.    ! B05
+OH+OH(+M) = H2O2(+M)                         1.110E+14   -0.370      0.00 !88ZEL/EWI * 1.50    Wang 2007
+          LOW  /  2.010E+17   -0.584  -2293.00 /!Fit 88ZEL/EWI and 92BAU/COB   wang 2007
+          TROE / 0.7346   94.  1756.00  5182.0 /!H2O=6xN2 88ZEL/EWI           wang 2007
+          H2/2.0/ H2O/6.00/ AR/0.7/ HE/0.7/ 
+
+H2O2+O2=HO2+HO2          5.37E+13       .00  39740.0   !    tsang86      
+H2O2+OH=H2O+HO2          1.74E+12       .00    320.0   !    tsang86         
+H2O2+H=HO2+H2            1.70E+12       .00   3750.0   !    baulch92     
+H2O2+H=H2O+OH            2.40E+13       .00   4000.0   !    tsang86      
+H2O2+O=HO2+OH            9.55E+06      2.00   4000.0   !    tsang86 
+H2O+M=H+OH+M             3.47E+15       .00 105200.0   !       baulch92  
+O2+M=O+O+M               1.82E+18     -1.00 118100.0   !        tsang86     
+H2+M=H+H+M               2.24E+14       .00  96080.0   !        baulch92    
+O+H+M=OH+M               4.68E+18     -1.00       .0   !        tsang86
+!+++++++++++++++++++++++ Exited spiecies !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+!---------------- OH*
+
+                  !REF:oh* kathrotia et al. comb & flame 2010
+H+O+M=M+OH*                                     1.500E+013     0.000    5975.0
+H2/ 1.00/ H2O/ 6.50/ O2/ 0.40/ N2/ 0.40/ AR/ 0.35/
+OH*+H2O=OH+H2O            5.93E+012      0.5    -860.0
+OH*+H2=OH+H2              2.95E+012      0.5    -444.0
+OH*+N2=OH+N2              1.08E+011      0.5   -1242.0
+OH*+OH=OH+OH              6.01E+012      0.5    -764.0
+OH*+H=OH+H                1.31E+012      0.5    -167.0
+OH*+AR=OH+AR              1.69E+012      0.0    4135.0
+OH*=OH                    1.45E+006      0.0       0.0
+OH*+O2=OH+O2              2.10E+012      0.5    -478.0
+
+END
+
