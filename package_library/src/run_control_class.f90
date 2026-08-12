@@ -42,6 +42,7 @@ module run_control_class
         procedure :: cap_time_step
         procedure :: write_log
         procedure :: write_termination_log
+        procedure :: write_termination_status
     end type run_control
 
     interface run_control_c
@@ -237,12 +238,14 @@ contains
         real(dp) :: elapsed_wall_time, wall_trigger_time
         real(dp) :: time_tolerance
         logical :: simulation_limit_reached, wall_limit_reached
+        logical :: external_stop_requested
         character(len=reason_length) :: local_reason
 
         if (.not. this%clock_started) call this%start()
 
         simulation_limit_reached = .false.
         wall_limit_reached = .false.
+        external_stop_requested = .false.
 
         if (this%limits_simulation_time()) then
             time_tolerance = 100.0_dp*epsilon(1.0_dp)* &
@@ -257,12 +260,18 @@ contains
             wall_limit_reached = elapsed_wall_time >= wall_trigger_time
         end if
 
-        terminate = simulation_limit_reached .or. wall_limit_reached
+        inquire(file=run_control_stop_request_file_name, &
+            exist=external_stop_requested)
+
+        terminate = simulation_limit_reached .or. wall_limit_reached .or. &
+            external_stop_requested
 
         if (simulation_limit_reached) then
             local_reason = 'final_simulation_time'
         else if (wall_limit_reached) then
             local_reason = 'wall_time_limit'
+        else if (external_stop_requested) then
+            local_reason = 'external_stop_request'
         else
             local_reason = 'none'
         end if
@@ -389,6 +398,9 @@ contains
             write(log_unit, '(A)') ' Wall-time limit             : disabled'
         end if
 
+        write(log_unit, '(A,A)') ' External stop request file  : ', &
+            trim(run_control_stop_request_file_name)
+
         write(log_unit, '(A)') repeat('*', 84)
     end subroutine write_log
 
@@ -408,6 +420,34 @@ contains
             this%get_elapsed_wall_time(), ' s'
         write(log_unit, '(A)') repeat('*', 84)
     end subroutine write_termination_log
+
+
+    subroutine write_termination_status(this, simulation_time, reason, &
+            restart_required)
+        class(run_control), intent(in) :: this
+        real(dp), intent(in) :: simulation_time
+        character(len=*), intent(in) :: reason
+        logical, intent(in) :: restart_required
+
+        integer :: io_unit
+        character(len=reason_length) :: termination_reason
+        real(dp) :: final_simulation_time, elapsed_wall_time
+        logical :: restart_checkpoint_required
+
+        namelist /run_control_status/ termination_reason, &
+            final_simulation_time, elapsed_wall_time, &
+            restart_checkpoint_required
+
+        termination_reason = trim(reason)
+        final_simulation_time = simulation_time
+        elapsed_wall_time = this%get_elapsed_wall_time()
+        restart_checkpoint_required = restart_required
+
+        open(newunit=io_unit, file=run_control_status_file_name, &
+            status='replace', form='formatted', delim='quote')
+        write(unit=io_unit, nml=run_control_status)
+        close(io_unit)
+    end subroutine write_termination_status
 
 
     pure function normalize_mode(mode) result(value)

@@ -182,12 +182,10 @@ program computing_module
 
 	problem_solver_options	= solver_options_c()
 
-	! Run-level termination policy.  Missing run_control.dat means mode='none',
+	! Run-level termination policy.  Missing run_control.inf means mode='none',
 	! which preserves the legacy data_io wall-time termination path.
 	
 	problem_run_control = run_control_c()
-	call problem_run_control%start()
-	problem_run_control		= run_control_c()
 	call problem_run_control%start()
 	
 	problem_manager			= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics,problem_solver_options)
@@ -339,6 +337,8 @@ program computing_module
 		if (run_control_stop .and. processor_rank == 0) then
 			call problem_run_control%write_termination_log( &
 				log_unit,calculation_time,termination_reason)
+			call problem_run_control%write_termination_status( &
+				calculation_time,termination_reason,restart_required)
 		end if
 
         call main_clock%toc(new_iter=.true.)
