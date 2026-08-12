@@ -1,0 +1,55 @@
+&PPROC_PARAMETERS
+ POST_PROCESSOR_OUTPUT_FILE="reactor_history.dat           ",
+ OPERATIONS_NUMBER=7          ,
+ SAVE_TIME= 0.10000000149011612     ,
+ SAVE_TIME_UNITS="microseconds        ",
+ /
+&PPROC_OPERATION
+ FIELD_NAME="temperature                             ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
+&PPROC_OPERATION
+ FIELD_NAME="pressure                                ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
+&PPROC_OPERATION
+ FIELD_NAME="specie_mass_fraction(H2)                ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
+&PPROC_OPERATION
+ FIELD_NAME="specie_mass_fraction(O2)                ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
+&PPROC_OPERATION
+ FIELD_NAME="specie_mass_fraction(H2O)               ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
+&PPROC_OPERATION
+ FIELD_NAME="specie_mass_fraction(OH)                ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
+&PPROC_OPERATION
+ FIELD_NAME="specie_mass_fraction(H2O2)              ",
+ OPERATION_TYPE="transducer          ",
+ OPERATION_AREA=0          , 2*1          ,0          , 2*1          ,
+ OPERATION_AREA_DISTANCE= 3*0          ,
+ GRAD_PROJECTION=0          ,
+ /
