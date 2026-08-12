@@ -20,6 +20,7 @@ package_library/debug_seq
 package_library/release_seq
 package_library/x64
 package_interface/x64
+package_interface/0D_ignition_delay_agent
 NRG_GIT_stable_1/
 package_utilities/package_utilities
 package_utilities/debug_MPI
