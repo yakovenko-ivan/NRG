@@ -21,6 +21,7 @@ set(LIBRARY_SRC
 	${SRC_LIB}/src/supplementary_routines.f90
 	${SRC_LIB}/src/benchmarking_module.f90
 	${SRC_LIB}/src/thermophysical_properties_class.f90
+	${SRC_LIB}/src/run_control_class.f90
 )
 
 add_library(${LIBRARY_NAME} STATIC ${LIBRARY_SRC})

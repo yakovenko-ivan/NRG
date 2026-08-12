@@ -2,6 +2,25 @@
 # Use the PACKAGE_INTERFACE_SOURCE variable defined in the parent scope.
 set(package_interface_src ${PACKAGE_INTERFACE_SOURCE})
 
+# Optional companion sources for interfaces that are split into small modules
+# (for example ignition_geometry_module.f90 + one package-interface program).
+# Paths are relative to package_interface/, like PACKAGE_INTERFACE_SOURCE.
+set(PACKAGE_INTERFACE_EXTRA_SOURCES "" CACHE STRING
+    "Semicolon-separated extra Fortran sources relative to package_interface/")
+
+foreach(EXTRA_SOURCE IN LISTS PACKAGE_INTERFACE_EXTRA_SOURCES)
+    if(EXTRA_SOURCE STREQUAL "")
+        continue()
+    endif()
+    set(EXTRA_FULL_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/${EXTRA_SOURCE}")
+    if(NOT EXISTS "${EXTRA_FULL_SOURCE_PATH}")
+        message(FATAL_ERROR
+            "[NRG Configuration Error] PACKAGE_INTERFACE_EXTRA_SOURCES entry "
+            "'${EXTRA_SOURCE}' was not found at '${EXTRA_FULL_SOURCE_PATH}'.")
+    endif()
+    list(APPEND package_interface_src ${EXTRA_SOURCE})
+endforeach()
+
 # --- Extract base filename for output naming (e.g., "hydrogen_fill" from full path) ---
 get_filename_component(PACKAGE_INTERFACE_BASENAME ${PACKAGE_INTERFACE_SOURCE} NAME_WE)
 
@@ -27,6 +46,9 @@ if(NOT EXISTS "${FULL_SOURCE_PATH}")
     ")
 endif()
 message(STATUS "Building package_interface from: ${PACKAGE_INTERFACE_SOURCE}")
+if(PACKAGE_INTERFACE_EXTRA_SOURCES)
+    message(STATUS "Package-interface extra sources: ${PACKAGE_INTERFACE_EXTRA_SOURCES}")
+endif()
 
 # Define the executable in terms of the source files
 add_executable(${INTERFACE} ${package_interface_src})

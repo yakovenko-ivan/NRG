@@ -17,6 +17,7 @@ program computing_module
 	use field_tensor_class
 	use data_save_class
 	use data_io_class
+	use run_control_class
 	use post_processor_manager_class
 
 	use cpm_solver_class	
@@ -55,13 +56,15 @@ program computing_module
 
 	type(data_io)								:: problem_data_io
 	type(data_save)								:: problem_data_save
-
+	type(run_control)                           :: problem_run_control
+	
 	type(post_processor_manager)				:: problem_post_proc_manager
 
     type(timer)     :: main_clock
  
 	integer	:: c(8)
-	integer	:: day, h, m , s
+	integer	:: elapsed_days, elapsed_hours, elapsed_minutes, elapsed_seconds
+	real(dp)	:: elapsed_wall_time
 
 	integer		:: log_unit, mpi_io_unit
 
@@ -70,6 +73,9 @@ program computing_module
 	integer		:: iter, num_iterations, test
 	real(dp)	:: calculation_time, time_step
 	logical		:: stop_flag, precision_flag, benchmarking, there
+	logical		:: solver_stop_flag, data_io_stop_flag
+	logical		:: run_control_stop, restart_required
+	character(len=32) :: termination_reason
 	
 	integer		:: error
 
@@ -176,6 +182,12 @@ program computing_module
 
 	problem_solver_options	= solver_options_c()
 
+	! Run-level termination policy.  Missing run_control.inf means mode='none',
+	! which preserves the legacy data_io wall-time termination path.
+	
+	problem_run_control = run_control_c()
+	call problem_run_control%start()
+	
 	problem_manager			= data_manager_c(problem_domain,problem_mpi_support,problem_chemistry,problem_thermophysics,problem_solver_options)
     
 	call problem_manager%create_boundary_conditions(problem_boundaries)
@@ -219,6 +231,7 @@ program computing_module
 		call problem_data_io			%write_log(log_unit)
 		call problem_boundaries			%write_log(log_unit)
 		call problem_solver_options		%write_log(log_unit)
+		call problem_run_control		%write_log(log_unit)
 	end if
 	
     call problem_manager%create_timer(main_clock,'Main cycle time', 'MAIN')
@@ -239,6 +252,11 @@ program computing_module
         
 		iter = iter + 1
 
+		solver_stop_flag = .false.
+		data_io_stop_flag = .false.
+		run_control_stop = .false.
+		restart_required = .false.
+
 		select case(problem_solver_options%get_solver_name())
 			case('cpm')
 				call problem_cpm_solver%solve_problem()		
@@ -253,7 +271,7 @@ program computing_module
 				calculation_time	= problem_cabaret_low_mach_solver%get_time()		
 				time_step			= problem_cabaret_low_mach_solver%get_time_step()
 			case('fds_low_mach')											
-				call problem_fds_solver%solve_problem(iter,stop_flag)		
+				call problem_fds_solver%solve_problem(iter,solver_stop_flag)		
 				calculation_time	= problem_fds_solver%get_time()		
 				time_step			= problem_fds_solver%get_time_step()					
 		end select
@@ -264,11 +282,16 @@ program computing_module
 			print *, ' Amount of iterations : ', iter
   
 			call date_and_time(values=c)
-			day=c(3)
-			h=c(5)
-			m=c(6)
-			s=c(7)
-			print *, ' Current time = ', day,'  ',h,':',m,':',s
+			write(*,'(A,I4.4,"-",I2.2,"-",I2.2,1X,I2.2,":",I2.2,":",I2.2)') &
+				' Current date/time : ', c(1), c(2), c(3), c(5), c(6), c(7)
+
+			elapsed_wall_time = problem_run_control%get_elapsed_wall_time()
+			call split_elapsed_time(elapsed_wall_time, elapsed_days, &
+				elapsed_hours, elapsed_minutes, elapsed_seconds)
+
+			write(*,'(A,I0,A,I2.2,":",I2.2,":",I2.2)') &
+				' Elapsed wall time : ', elapsed_days, ' d ', elapsed_hours, &
+				elapsed_minutes, elapsed_seconds
         end if
 		
 !		if ((precision_flag).and.(calculation_time > 165.0e-09_dp)) then
@@ -284,9 +307,39 @@ program computing_module
 !            exit
 !        end if    
             
-        call problem_data_io%output_all_data(calculation_time			,stop_flag)	
-		call problem_post_proc_manager%process_data(calculation_time	,stop_flag)
-		call problem_data_save%save_all_data(calculation_time			,stop_flag)
+		! Legacy compatibility only.  When run_control is active, it owns all
+		! wall-clock termination and data_io is no longer polled each CFD step.
+		if (trim(problem_run_control%get_termination_mode()) == 'none') then
+			call problem_data_io%output_all_data( &
+				calculation_time,data_io_stop_flag)
+		end if
+
+		call problem_run_control%check_termination( &
+			calculation_time,run_control_stop,termination_reason, &
+			restart_required)
+
+		stop_flag = solver_stop_flag .or. data_io_stop_flag .or. &
+			run_control_stop
+
+		! Post-processing counters and the regular/final visible-field save see
+		! the already-combined stop state.  save_all_data therefore performs the
+		! final save exactly once when any termination condition is reached.
+		call problem_post_proc_manager%process_data(calculation_time,stop_flag)
+
+		! Only an unfinished calculation stopped by its wall-clock budget needs
+		! restart data.  Physical-final-time termination needs no restart dump.
+		if (run_control_stop .and. restart_required) then
+			call problem_data_io%write_restart_checkpoint(calculation_time)
+		end if
+
+		call problem_data_save%save_all_data(calculation_time,stop_flag)
+
+		if (run_control_stop .and. processor_rank == 0) then
+			call problem_run_control%write_termination_log( &
+				log_unit,calculation_time,termination_reason)
+			call problem_run_control%write_termination_status( &
+				calculation_time,termination_reason,restart_required)
+		end if
 
         call main_clock%toc(new_iter=.true.)
 
@@ -305,6 +358,24 @@ program computing_module
 
 contains
     
+	subroutine split_elapsed_time(elapsed_seconds_real, days, hours, minutes, seconds)
+		real(dp), intent(in) :: elapsed_seconds_real
+		integer, intent(out) :: days, hours, minutes, seconds
+
+		integer :: total_seconds
+
+		total_seconds = max(int(elapsed_seconds_real), 0)
+
+		days = total_seconds / 86400
+		total_seconds = mod(total_seconds, 86400)
+
+		hours = total_seconds / 3600
+		total_seconds = mod(total_seconds, 3600)
+
+		minutes = total_seconds / 60
+		seconds = mod(total_seconds, 60)
+	end subroutine split_elapsed_time
+	
     subroutine print_help()
         print '(a, /)', 'command-line options:'
         print '(a)',    '  -v, --version     print version information and exit'
