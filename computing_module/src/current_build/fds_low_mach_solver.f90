@@ -89,6 +89,18 @@ module fds_low_mach_solver_class
         integer :: additional_particles_phases_number = 0
         integer :: load_counter = 0
 
+        ! Lightweight pressure-solver profiling.  One CSV row is emitted for
+        ! each predictor/corrector projection call when enabled.
+        logical :: pressure_profiling_enabled = .true.
+        integer :: pressure_profile_unit = 0
+
+        ! FDS-only defect-correction smoothing around the shared multigrid solve.
+        ! The proper MG-only experiment sets both counts to zero.  Residual
+        ! construction/scaling and MG correction accumulation remain unconditional.
+        ! settings do not affect the generic elliptic solver used by CABARET.
+        integer :: pressure_legacy_pre_smoothing_sweeps = 0
+        integer :: pressure_legacy_post_smoothing_sweeps = 0
+
         ! Coupled physical models and the shared geometric multigrid backend.
         type(viscosity_solver) :: visc_solver
         type(heat_transfer_solver) :: heat_trans_solver
@@ -133,12 +145,26 @@ module fds_low_mach_solver_class
         ! multigrid adapter.  The obsolete in-class hierarchy has been removed.
         real(dp), dimension(:,:,:), allocatable :: pressure_residual
         real(dp), dimension(:,:,:), allocatable :: pressure_correction
+        ! Compact work arrays for repeated prepared elliptic solves.  The
+        ! operator hierarchy itself is owned by pressure_solver.
+        real(dp), dimension(:,:,:), allocatable :: pressure_adapter_rhs
+        real(dp), dimension(:,:,:), allocatable :: pressure_adapter_correction
+        logical :: pressure_operator_prepared = .false.
+        integer :: pressure_operator_preparations = 0
+        integer :: pressure_operator_dimensions = 0
+        integer :: pressure_operator_geometry_power = -1
+        integer, dimension(3,2) :: pressure_operator_loop = 0
+        real(dp), dimension(3) :: pressure_operator_dx = 0.0_dp
+        real(dp) :: pressure_operator_base_volume = 0.0_dp
 
     contains
         procedure, private :: calculate_interm_Y_predictor
         procedure, private :: calculate_divergence_v
         procedure, private :: calculate_pressure_poisson
         procedure, private :: solve_shared_elliptic_correction
+        procedure, private :: prepare_shared_elliptic_operator
+        procedure, private :: invalidate_pressure_operator_cache
+        procedure, private :: write_pressure_profile
         procedure, private :: calculate_dynamic_pressure
         procedure, private :: calculate_velocity
         procedure, private :: calculate_interm_Y_corrector
@@ -744,13 +770,13 @@ contains
 
         real(dp) :: flux_left, flux_right, specie_enthalpy, mixture_cp
         real(dp) :: D_sum, P_sum, U_sum
-        real(dp), dimension(this%chem%chem_ptr%species_number) :: mole_fractions
         real(dp), dimension(this%chem%chem_ptr%species_number) :: species_flux_left
         real(dp), dimension(this%chem%chem_ptr%species_number) :: species_flux_right
-        real(dp) :: species_coefficient
+        real(dp), dimension(this%chem%chem_ptr%species_number) :: species_coefficient
+        real(dp), dimension(this%chem%chem_ptr%species_number) :: species_reference_enthalpy
 
-        real(dp)                    :: cell_volume
-        real(dp)    ,dimension(3)    :: cell_size, cell_surface_area
+        real(dp)                    :: cell_volume, base_cell_volume
+        real(dp)    ,dimension(3)    :: cell_size, cell_surface_area, base_cell_surface_area
 
         real(dp), dimension (3,3)    :: lame_coeffs
         character(len=20)            :: coordinate_system
@@ -768,9 +794,18 @@ contains
 
         cons_inner_loop    = this%domain%get_local_inner_cells_bounds()
 
-        cell_size        = this%mesh%mesh_ptr%get_cell_edges_length()
-        cell_volume        = this%mesh%mesh_ptr%get_cell_volume()
+        cell_size             = this%mesh%mesh_ptr%get_cell_edges_length()
+        base_cell_volume      = this%mesh%mesh_ptr%get_cell_volume()
+        base_cell_surface_area = this%mesh%mesh_ptr%get_cell_surface_area()
         if (time_step <= 0.0_dp) error stop 'FDS divergence: non-positive time step'
+
+        ! Species reference enthalpies depend only on the thermodynamic database
+        ! and T_ref.  Evaluate them once per divergence assembly rather than once
+        ! per cell and per spatial direction.
+        do spec = 1, species_number
+            species_reference_enthalpy(spec) = &
+                this%thermo%thermo_ptr%specie_enthalpy_molar(T_ref,spec)
+        end do
 
         D_sum = 0.0_dp
         P_sum = 0.0_dp
@@ -786,13 +821,14 @@ contains
                     v_f                    => this%v_f%v_ptr            , &
                     Y                    => this%Y%v_ptr                , &
                     mix_mol_mass        => this%mix_mol_mass%s_ptr  , &
+                    mixture_cp_field    => this%mixture_cp%s_ptr    , &
                     thermo                => this%thermo%thermo_ptr    , &
                     mesh                => this%mesh%mesh_ptr        , &
                     bc                    => this%boundary%bc_ptr)
 
             !$omp parallel default(shared) &
             !$omp& private(flux_right,flux_left,i,j,k,dim,spec,mixture_cp,specie_enthalpy,plus,sign,bound_number,cell_volume, &
-            !$omp& cell_surface_area,lame_coeffs,mole_fractions,species_flux_left,species_flux_right,species_coefficient)
+            !$omp& cell_surface_area,lame_coeffs,species_flux_left,species_flux_right,species_coefficient)
 
             !$omp do collapse(3) schedule(static)    reduction(+:D_sum,P_sum)
             do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -800,7 +836,7 @@ contains
             do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
                 if(bc%bc_markers(i,j,k) == 0) then
 
-                    cell_volume    = mesh%get_cell_volume()
+                    cell_volume    = base_cell_volume
                     lame_coeffs    = 1.0_dp
 
                     select case(coordinate_system)
@@ -833,12 +869,6 @@ contains
                     ! [J/m^3/s]
                     if (this%radiation_flag)    div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
                         this%E_f_prod_rad%s_ptr%cells(i,j,k)
-
-                    mole_fractions = 0.0_dp
-                    do spec = 1,species_number
-                        mole_fractions(spec)                = Y%pr(spec)%cells(i,j,k) *  mix_mol_mass%cells(i,j,k) / &
-                            thermo%molar_masses(spec)
-                    end do
 
                     if (this%additional_particles_phases_number /= 0) then
                         do particles_phase_counter = 1, this%additional_particles_phases_number
@@ -892,14 +922,31 @@ contains
                                                                                   cell_size(dim)) / lame_coeffs(dim,2)
                     end do
 
-                    mixture_cp                = thermo%mixture_cp_molar(T%cells(i,j,k), mole_fractions)
+                    ! The EOS is called immediately before this routine and has
+                    ! already evaluated the molar mixture heat capacity for the
+                    ! current T,Y state.  Reuse that field instead of rebuilding
+                    ! mole fractions and evaluating mixture_cp_molar again.
+                    mixture_cp = mixture_cp_field%cells(i,j,k)
 
-                    div_v_int%cells(i,j,k)    = div_v_int%cells(i,j,k) / (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / &
-                        mix_mol_mass%cells(i,j,k))
+                    div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) / &
+                        (rho%cells(i,j,k) * mixture_cp * T%cells(i,j,k) / mix_mol_mass%cells(i,j,k))
+
                     ! Composition changes alter density through both the mixture
-                    ! molar mass and the sensible-enthalpy equation.  Reconstruct
-                    ! all conservative species densities once per face, then use
-                    ! the EOS derivative coefficient for each species.
+                    ! molar mass and the sensible-enthalpy equation.  The
+                    ! thermodynamic coefficient is a cell/species quantity, not a
+                    ! face-direction quantity, so form it once and reuse it for
+                    ! convective, diffusive, reactive and particle source terms.
+                    do spec = 1, species_number
+                        specie_enthalpy = (thermo%specie_enthalpy_molar(T%cells(i,j,k),spec) - &
+                            species_reference_enthalpy(spec)) / thermo%molar_masses(spec)
+                        species_coefficient(spec) = mix_mol_mass%cells(i,j,k) / &
+                            (thermo%molar_masses(spec)*rho%cells(i,j,k)) - &
+                            specie_enthalpy / (rho%cells(i,j,k)*mixture_cp*T%cells(i,j,k)/ &
+                            mix_mol_mass%cells(i,j,k))
+                    end do
+
+                    ! Reconstruct all conservative species densities once per face
+                    ! and apply the already-assembled cell/species coefficients.
                     do dim = 1, dimensions
                         if ((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) < &
                             cons_inner_loop(dim,2)) then
@@ -942,15 +989,8 @@ contains
                         end if
 
                         do spec = 1, species_number
-                            specie_enthalpy = (thermo%specie_enthalpy_molar( &
-                                T%cells(i,j,k),spec) - thermo%specie_enthalpy_molar( &
-                                T_ref,spec)) / thermo%molar_masses(spec)
-                            species_coefficient = mix_mol_mass%cells(i,j,k) / &
-                                (thermo%molar_masses(spec)*rho%cells(i,j,k)) - &
-                                specie_enthalpy / (rho%cells(i,j,k)*mixture_cp* &
-                                T%cells(i,j,k)/mix_mol_mass%cells(i,j,k))
                             div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
-                                species_coefficient * (-( &
+                                species_coefficient(spec) * (-( &
                                 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2), &
                                 k+I_m(dim,3))*lame_coeffs(dim,3) * &
                                 (species_flux_right(spec)-rho%cells(i,j,k)* &
@@ -963,24 +1003,17 @@ contains
                     end do
 
                     do spec = 1, species_number
-                        specie_enthalpy = (thermo%specie_enthalpy_molar( &
-                            T%cells(i,j,k),spec) - thermo%specie_enthalpy_molar( &
-                            T_ref,spec)) / thermo%molar_masses(spec)
-                        species_coefficient = mix_mol_mass%cells(i,j,k) / &
-                            (thermo%molar_masses(spec)*rho%cells(i,j,k)) - &
-                            specie_enthalpy / (rho%cells(i,j,k)*mixture_cp* &
-                            T%cells(i,j,k)/mix_mol_mass%cells(i,j,k))
                         if (this%diffusion_flag) then
                             div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
-                                species_coefficient*this%Y_prod_diff%v_ptr%pr(spec)%cells(i,j,k)
+                                species_coefficient(spec)*this%Y_prod_diff%v_ptr%pr(spec)%cells(i,j,k)
                         end if
                         if (this%reactive_flag) then
                             div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
-                                species_coefficient*this%Y_prod_chem%v_ptr%pr(spec)%cells(i,j,k)
+                                species_coefficient(spec)*this%Y_prod_chem%v_ptr%pr(spec)%cells(i,j,k)
                         end if
                         do particles_phase_counter = 1, this%additional_particles_phases_number
                             div_v_int%cells(i,j,k) = div_v_int%cells(i,j,k) + &
-                                species_coefficient * &
+                                species_coefficient(spec) * &
                                 this%Y_prod_particles(particles_phase_counter)%v_ptr%pr(spec)%cells(i,j,k)
                         end do
                     end do
@@ -1004,7 +1037,7 @@ contains
                             sign            = (-1)**plus
                             bound_number    = bc%bc_markers(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3))
                             if( bound_number /= 0 ) then
-                                cell_surface_area    = mesh%get_cell_surface_area()
+                                cell_surface_area    = base_cell_surface_area
                                 select case(coordinate_system)
                                     case ('cartesian')
                                         cell_surface_area    = cell_surface_area
@@ -1036,13 +1069,7 @@ contains
             do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
                 if(bc%bc_markers(i,j,k) == 0) then
 
-                    mole_fractions = 0.0_dp
-                    do spec = 1,species_number
-                        mole_fractions(spec)                = Y%pr(spec)%cells(i,j,k) *  mix_mol_mass%cells(i,j,k) / &
-                            thermo%molar_masses(spec)
-                    end do
-
-                    mixture_cp        = thermo%mixture_cp_molar(T%cells(i,j,k), mole_fractions)
+                    mixture_cp = mixture_cp_field%cells(i,j,k)
                     if (this%all_Neumann_flag) then
                         if (abs(P_sum) <= tiny(1.0_dp)) then
                             error stop 'FDS divergence constraint: singular pressure compatibility denominator'
@@ -1106,14 +1133,40 @@ contains
 		integer	:: sign, bound_number, bound_number1, bound_number2, bound_number3
 		integer :: i, j, k, dim, dim1, dim2, plus
 
-		integer :: poisson_iteration, pressure_iteration, v_cycle_iteration
-		integer			:: nu_0, nu_1, nu_2
+		integer :: legacy_smoothing_iteration, pressure_iteration, v_cycle_iteration
+		integer			:: nu_0
 		real(dp)		:: tolerance
+
+        type(elliptic_solver_statistics) :: multigrid_statistics
+        integer :: profile_legacy_smoothing_sweeps, profile_multigrid_calls
+        integer :: profile_multigrid_cycles, profile_multigrid_smoothing_iterations
+        integer :: profile_multigrid_parallel_smoothing, profile_multigrid_serial_smoothing
+        integer :: profile_multigrid_residual_evaluations, profile_max_hierarchy_levels
+        real(dp) :: profile_multigrid_initial_residual_max
+        real(dp) :: profile_multigrid_final_residual_max
+        real(dp) :: profile_multigrid_relative_residual_max
 
 		logical :: v_cycle_converged = .false.
 		logical			:: pressure_converged = .false.
 
 		dimensions		= this%domain%get_domain_dimensions()
+
+        if (this%pressure_legacy_pre_smoothing_sweeps < 0 .or. &
+            this%pressure_legacy_post_smoothing_sweeps < 0) then
+            error stop 'FDS pressure legacy smoothing sweep counts must be non-negative.'
+        end if
+
+        profile_legacy_smoothing_sweeps = 0
+        profile_multigrid_calls = 0
+        profile_multigrid_cycles = 0
+        profile_multigrid_smoothing_iterations = 0
+        profile_multigrid_parallel_smoothing = 0
+        profile_multigrid_serial_smoothing = 0
+        profile_multigrid_residual_evaluations = 0
+        profile_max_hierarchy_levels = 1
+        profile_multigrid_initial_residual_max = 0.0_dp
+        profile_multigrid_final_residual_max = 0.0_dp
+        profile_multigrid_relative_residual_max = 0.0_dp
 
 		coordinate_system	= this%domain%get_coordinate_system_name()
 
@@ -1840,13 +1893,10 @@ contains
 
                 end associate
 
-				poisson_iteration	= 0
 				beta				= 2.0_dp/3.0_dp
 				v_cycle_converged	= .false.
 
 				nu_0 = 5
-				nu_1 = 2
-				nu_2 = 2
 
 				tolerance = 1e-03_dp
 
@@ -1854,9 +1904,6 @@ contains
 
 				v_cycle_iteration = 0
 				do while (((v_cycle_iteration <= 0).or.(.not.v_cycle_converged)).and.(v_cycle_iteration <= nu_0))
-
-					nu_1 = 2!(v_cycle_iteration+2) * 2
-					nu_2 = 1!(v_cycle_iteration+2) * 2
 
 					associate (     ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
                                     F_a				=> this%F_a%s_ptr			, &
@@ -1871,7 +1918,7 @@ contains
                                     v_f_old			=> this%v_f_old%v_ptr		, &
                                     mesh			=> this%mesh%mesh_ptr		, &
                                     bc				=> this%boundary%bc_ptr)
-					do while (poisson_iteration <= nu_1)
+					do legacy_smoothing_iteration = 1, this%pressure_legacy_pre_smoothing_sweeps
 
 						a_norm	= 0.0_dp
 
@@ -2012,7 +2059,8 @@ contains
 						do k = cons_utter_loop(3,1),cons_utter_loop(3,2)
 						do j = cons_utter_loop(2,1),cons_utter_loop(2,2)
 						do i = cons_utter_loop(1,1),cons_utter_loop(1,2)
-							R%cells(i,j,k)	= R%cells(i,j,k) / cell_size(1) / cell_size(1)
+							! Keep R in the dimensionless FDS stencil form.  The conversion
+							! to the shared elliptic RHS is performed unconditionally below.
 							H_old%cells(i,j,k) = H%cells(i,j,k)
 						end do
 						end do
@@ -2021,7 +2069,7 @@ contains
                         !$omp end parallel
 
 
-						poisson_iteration	= poisson_iteration + 1
+	                    profile_legacy_smoothing_sweeps = profile_legacy_smoothing_sweeps + 1
 					end do
 
 					a_norm		= 0.0_dp
@@ -2036,7 +2084,9 @@ contains
 					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
                         if(bc%bc_markers(i,j,k) == 0) then
-							this%pressure_residual(i,j,k)	= R%cells(i,j,k)
+							! R is dx**2 times the dimensional elliptic residual.  Scale it here
+							! regardless of whether legacy pre-smoothing is enabled.
+							this%pressure_residual(i,j,k) = R%cells(i,j,k) / cell_size(1) / cell_size(1)
 
 							select case(coordinate_system)
 								case ('cartesian')
@@ -2076,7 +2126,25 @@ contains
                     end associate
 
 					this%pressure_correction = 0.0_dp
-					call this%solve_shared_elliptic_correction()
+                    call this%solve_shared_elliptic_correction(multigrid_statistics)
+                    profile_multigrid_calls = profile_multigrid_calls + 1
+                    profile_multigrid_cycles = profile_multigrid_cycles + multigrid_statistics%cycles
+                    profile_multigrid_smoothing_iterations = profile_multigrid_smoothing_iterations + &
+                        multigrid_statistics%smoothing_iterations
+                    profile_multigrid_parallel_smoothing = profile_multigrid_parallel_smoothing + &
+                        multigrid_statistics%parallel_smoothing_iterations
+                    profile_multigrid_serial_smoothing = profile_multigrid_serial_smoothing + &
+                        multigrid_statistics%serial_smoothing_iterations
+                    profile_multigrid_residual_evaluations = profile_multigrid_residual_evaluations + &
+                        multigrid_statistics%residual_evaluations
+                    profile_max_hierarchy_levels = max(profile_max_hierarchy_levels, &
+                        multigrid_statistics%hierarchy_levels)
+                    profile_multigrid_initial_residual_max = max(profile_multigrid_initial_residual_max, &
+                        multigrid_statistics%initial_residual)
+                    profile_multigrid_final_residual_max = max(profile_multigrid_final_residual_max, &
+                        multigrid_statistics%final_residual)
+                    profile_multigrid_relative_residual_max = max(profile_multigrid_relative_residual_max, &
+                        multigrid_statistics%relative_residual)
 
 					associate (     ddiv_v_dt		=> this%ddiv_v_dt%s_ptr		, &
                                     F_a				=> this%F_a%s_ptr			, &
@@ -2098,7 +2166,11 @@ contains
 					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
 					do j = cons_inner_loop(2,1),cons_inner_loop(2,2)
 					do i = cons_inner_loop(1,1),cons_inner_loop(1,2)
-						H_old%cells(i,j,k) = H%cells(i,j,k) + this%pressure_correction(i,j,k)
+						! Apply the MG correction cumulatively and keep H/H_old synchronized.
+						! With legacy pre-smoothing enabled H==H_old here, so this is
+						! algebraically equivalent to the previous H_old = H + correction.
+						H%cells(i,j,k) = H_old%cells(i,j,k) + this%pressure_correction(i,j,k)
+						H_old%cells(i,j,k) = H%cells(i,j,k)
 					end do
 					end do
 					end do
@@ -2228,9 +2300,7 @@ contains
 					!$omp end do
                     !$omp end parallel
 
-					poisson_iteration = 0
-
-					do while (poisson_iteration <= nu_2)
+					do legacy_smoothing_iteration = 1, this%pressure_legacy_post_smoothing_sweeps
 
 						a_norm	= 0.0_dp
 
@@ -2356,7 +2426,6 @@ contains
 
 								a_norm = a_norm + abs(R%cells(i,j,k)*lame_coeffs(1,2))
 
-								R%cells(i,j,k)	= R%cells(i,j,k) / cell_size(1) / cell_size(1)
 
 							end if
 						end do
@@ -2377,7 +2446,7 @@ contains
 
 					!$omp end parallel
 
-                        poisson_iteration	= poisson_iteration + 1
+                        profile_legacy_smoothing_sweeps = profile_legacy_smoothing_sweeps + 1
 
                     end do
                     end associate
@@ -2586,6 +2655,13 @@ contains
 
 			end do
 
+            call this%write_pressure_profile(predictor, pressure_converged, pressure_iteration, &
+                profile_legacy_smoothing_sweeps, profile_multigrid_calls, profile_multigrid_cycles, &
+                profile_multigrid_smoothing_iterations, profile_multigrid_parallel_smoothing, &
+                profile_multigrid_serial_smoothing, profile_multigrid_residual_evaluations, &
+                profile_max_hierarchy_levels, profile_multigrid_initial_residual_max, &
+                profile_multigrid_final_residual_max, profile_multigrid_relative_residual_max)
+
 			if (.not.pressure_converged) then
 				print *, 'WARNING: F_b pressure iteration did not converge within the configured iteration limit.'
 			end if
@@ -2596,30 +2672,23 @@ contains
     ! face-conductance contract of elliptic_multigrid_solver_class, solve the
     ! homogeneous correction problem, and return the finest-grid correction.
     !--------------------------------------------------------------------------
-    subroutine solve_shared_elliptic_correction(this)
+    subroutine solve_shared_elliptic_correction(this, statistics)
         class(fds_solver), intent(inout) :: this
+        type(elliptic_solver_statistics), intent(out) :: statistics
 
-        type(elliptic_solver_statistics) :: statistics
-        type(elliptic_boundary_data) :: elliptic_boundary
         integer, dimension(3,2) :: loop
         real(dp), dimension(3) :: dx
-        real(dp), allocatable :: correction(:,:,:), rhs(:,:,:), cell_volume(:,:,:)
-        real(dp), allocatable :: conductance_x(:,:,:), conductance_y(:,:,:)
-        real(dp), allocatable :: conductance_z(:,:,:)
-        logical, allocatable :: active(:,:,:)
         integer :: dimensions, geometry_power
         integer :: i, j, k, ii, jj, kk
-        integer :: left_marker, right_marker, boundary_marker
-        real(dp) :: base_volume, radius, radius_face
-        real(dp) :: metric_center, metric_face
-        character(len=20) :: boundary_name
+        real(dp) :: base_volume
+        character(len=20) :: coordinate_system
 
         dimensions = this%domain%get_domain_dimensions()
         loop = this%domain%get_local_inner_cells_bounds()
         dx = this%mesh%mesh_ptr%get_cell_edges_length()
         base_volume = this%mesh%mesh_ptr%get_cell_volume()
-
-        select case (this%domain%get_coordinate_system_name())
+        coordinate_system = this%domain%get_coordinate_system_name()
+        select case (coordinate_system)
         case ('cartesian')
             geometry_power = 0
         case ('cylindrical')
@@ -2630,32 +2699,117 @@ contains
             error stop 'FDS multigrid adapter: unsupported coordinate system'
         end select
 
-        allocate(correction(loop(1,2)-loop(1,1)+1, &
+        ! Cheap scalar/shape guards catch mesh or geometry changes.  Boundary
+        ! topology in FDS is assumed static after setup; any future run-time BC
+        ! topology mutation must call invalidate_pressure_operator_cache().
+        if (this%pressure_operator_prepared) then
+            if (dimensions /= this%pressure_operator_dimensions .or. &
+                geometry_power /= this%pressure_operator_geometry_power .or. &
+                any(loop /= this%pressure_operator_loop) .or. &
+                any(dx /= this%pressure_operator_dx) .or. &
+                base_volume /= this%pressure_operator_base_volume) then
+                call this%invalidate_pressure_operator_cache()
+            end if
+        end if
+        if (.not. this%pressure_operator_prepared) call this%prepare_shared_elliptic_operator()
+
+        ! Only the finest RHS changes between homogeneous pressure corrections.
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,ii,jj,kk)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    ii = i-loop(1,1)+1
+                    jj = j-loop(2,1)+1
+                    kk = k-loop(3,1)+1
+                    this%pressure_adapter_rhs(ii,jj,kk) = this%pressure_residual(i,j,k)
+                end do
+            end do
+        end do
+        !$omp end parallel do
+
+        this%pressure_solver%relative_tolerance = 1.0e-3_dp
+        this%pressure_solver%absolute_tolerance = 1.0e-10_dp
+        call this%pressure_solver%solve_prepared(this%pressure_adapter_correction, &
+            this%pressure_adapter_rhs, use_initial_guess=.false., statistics=statistics)
+        if (.not. statistics%converged) then
+            error stop 'FDS shared prepared multigrid correction did not converge'
+        end if
+
+        !$omp parallel do collapse(3) schedule(static) private(i,j,k,ii,jj,kk)
+        do k = loop(3,1), loop(3,2)
+            do j = loop(2,1), loop(2,2)
+                do i = loop(1,1), loop(1,2)
+                    ii = i-loop(1,1)+1
+                    jj = j-loop(2,1)+1
+                    kk = k-loop(3,1)+1
+                    this%pressure_correction(i,j,k) = this%pressure_adapter_correction(ii,jj,kk)
+                end do
+            end do
+        end do
+        !$omp end parallel do
+    end subroutine solve_shared_elliptic_correction
+
+
+    !--------------------------------------------------------------------------
+    ! Build the FDS pressure-correction operator once and ask the shared solver
+    ! to retain its fully coarsened/preassembled hierarchy.  Conductances,
+    ! volumes, active masks and boundary topology are static for an ordinary FDS
+    ! run, while the correction RHS changes hundreds of times.
+    !--------------------------------------------------------------------------
+    subroutine prepare_shared_elliptic_operator(this)
+        class(fds_solver), intent(inout) :: this
+
+        type(elliptic_boundary_data) :: elliptic_boundary
+        integer, dimension(3,2) :: loop
+        real(dp), dimension(3) :: dx
+        real(dp), allocatable :: cell_volume(:,:,:)
+        real(dp), allocatable :: conductance_x(:,:,:), conductance_y(:,:,:)
+        real(dp), allocatable :: conductance_z(:,:,:)
+        logical, allocatable :: active(:,:,:)
+        integer :: dimensions, geometry_power
+        integer :: i, j, k, ii, jj, kk
+        integer :: left_marker, right_marker, boundary_marker
+        real(dp) :: base_volume, radius, radius_face
+        real(dp) :: metric_center, metric_face
+        character(len=20) :: boundary_name, coordinate_system
+
+        dimensions = this%domain%get_domain_dimensions()
+        loop = this%domain%get_local_inner_cells_bounds()
+        dx = this%mesh%mesh_ptr%get_cell_edges_length()
+        base_volume = this%mesh%mesh_ptr%get_cell_volume()
+        coordinate_system = this%domain%get_coordinate_system_name()
+        select case (coordinate_system)
+        case ('cartesian')
+            geometry_power = 0
+        case ('cylindrical')
+            geometry_power = 1
+        case ('spherical')
+            geometry_power = 2
+        case default
+            error stop 'FDS multigrid adapter: unsupported coordinate system'
+        end select
+
+        if (allocated(this%pressure_adapter_rhs)) deallocate(this%pressure_adapter_rhs)
+        if (allocated(this%pressure_adapter_correction)) deallocate(this%pressure_adapter_correction)
+        allocate(this%pressure_adapter_rhs(loop(1,2)-loop(1,1)+1, &
             loop(2,2)-loop(2,1)+1, loop(3,2)-loop(3,1)+1))
-        allocate(rhs, source=correction)
-        allocate(cell_volume, source=correction)
-        allocate(active(size(correction,1),size(correction,2),size(correction,3)))
-        allocate(conductance_x(size(correction,1)+1,size(correction,2),size(correction,3)))
-        allocate(conductance_y(size(correction,1),size(correction,2)+1,size(correction,3)))
-        allocate(conductance_z(size(correction,1),size(correction,2),size(correction,3)+1))
+        allocate(this%pressure_adapter_correction, mold=this%pressure_adapter_rhs)
+        this%pressure_adapter_rhs = 0.0_dp
+        this%pressure_adapter_correction = 0.0_dp
 
-        allocate(elliptic_boundary%type_x( &
-            size(conductance_x,1), size(conductance_x,2), size(conductance_x,3)))
-        allocate(elliptic_boundary%value_x( &
-            size(conductance_x,1), size(conductance_x,2), size(conductance_x,3)))
+        allocate(cell_volume, mold=this%pressure_adapter_rhs)
+        allocate(active(size(this%pressure_adapter_rhs,1), size(this%pressure_adapter_rhs,2), &
+            size(this%pressure_adapter_rhs,3)))
+        allocate(conductance_x(size(active,1)+1,size(active,2),size(active,3)))
+        allocate(conductance_y(size(active,1),size(active,2)+1,size(active,3)))
+        allocate(conductance_z(size(active,1),size(active,2),size(active,3)+1))
+        allocate(elliptic_boundary%type_x(size(conductance_x,1),size(conductance_x,2),size(conductance_x,3)))
+        allocate(elliptic_boundary%value_x(size(conductance_x,1),size(conductance_x,2),size(conductance_x,3)))
+        allocate(elliptic_boundary%type_y(size(conductance_y,1),size(conductance_y,2),size(conductance_y,3)))
+        allocate(elliptic_boundary%value_y(size(conductance_y,1),size(conductance_y,2),size(conductance_y,3)))
+        allocate(elliptic_boundary%type_z(size(conductance_z,1),size(conductance_z,2),size(conductance_z,3)))
+        allocate(elliptic_boundary%value_z(size(conductance_z,1),size(conductance_z,2),size(conductance_z,3)))
 
-        allocate(elliptic_boundary%type_y( &
-            size(conductance_y,1), size(conductance_y,2), size(conductance_y,3)))
-        allocate(elliptic_boundary%value_y( &
-            size(conductance_y,1), size(conductance_y,2), size(conductance_y,3)))
-
-        allocate(elliptic_boundary%type_z( &
-            size(conductance_z,1), size(conductance_z,2), size(conductance_z,3)))
-        allocate(elliptic_boundary%value_z( &
-            size(conductance_z,1), size(conductance_z,2), size(conductance_z,3)))
-
-        correction = 0.0_dp
-        rhs = 0.0_dp
         cell_volume = base_volume
         active = .false.
         conductance_x = 0.0_dp
@@ -2669,7 +2823,6 @@ contains
         elliptic_boundary%value_z = 0.0_dp
 
         associate (bc => this%boundary%bc_ptr, mesh => this%mesh%mesh_ptr)
-
         do k = loop(3,1), loop(3,2)
             do j = loop(2,1), loop(2,2)
                 do i = loop(1,1), loop(1,2)
@@ -2678,57 +2831,46 @@ contains
                     kk = k-loop(3,1)+1
                     if (bc%bc_markers(i,j,k) /= 0) cycle
                     active(ii,jj,kk) = .true.
-                    rhs(ii,jj,kk) = this%pressure_residual(i,j,k)
                     radius = mesh%mesh(1,i,j,k)
                     metric_center = 1.0_dp
-                    if (geometry_power > 0) then
-                        metric_center = max(radius,0.0_dp)**geometry_power
-                    end if
+                    if (geometry_power > 0) metric_center = max(radius,0.0_dp)**geometry_power
                     cell_volume(ii,jj,kk) = base_volume*metric_center
                 end do
             end do
         end do
 
-        ! Face conductances represent A_f/d_f.  Multiplication by the metric
-        ! factor gives the Cartesian, axisymmetric, or spherical finite-volume
-        ! Laplacian used by the pressure-potential correction.
-        do kk = 1, size(correction,3)
-            do jj = 1, size(correction,2)
-                do ii = 1, size(correction,1)+1
+        do kk = 1, size(active,3)
+            do jj = 1, size(active,2)
+                do ii = 1, size(active,1)+1
                     i = loop(1,1)+ii-1
                     j = loop(2,1)+jj-1
                     k = loop(3,1)+kk-1
-                    radius_face = mesh%mesh(1,loop(1,1),j,k) - 0.5_dp*dx(1) + &
-                        real(ii-1,dp)*dx(1)
+                    radius_face = mesh%mesh(1,loop(1,1),j,k) - 0.5_dp*dx(1) + real(ii-1,dp)*dx(1)
                     metric_face = 1.0_dp
-                    if (geometry_power > 0) then
-                        metric_face = max(radius_face,0.0_dp)**geometry_power
-                    end if
+                    if (geometry_power > 0) metric_face = max(radius_face,0.0_dp)**geometry_power
                     conductance_x(ii,jj,kk) = base_volume*metric_face/dx(1)**2
                     left_marker = bc%bc_markers(i-1,j,k)
                     right_marker = bc%bc_markers(i,j,k)
-                    call classify_correction_boundary(left_marker,right_marker, &
+                    call classify_correction_boundary(left_marker, right_marker, &
                         elliptic_boundary%type_x(ii,jj,kk))
                 end do
             end do
         end do
 
         if (dimensions >= 2) then
-            do kk = 1, size(correction,3)
-                do jj = 1, size(correction,2)+1
-                    do ii = 1, size(correction,1)
+            do kk = 1, size(active,3)
+                do jj = 1, size(active,2)+1
+                    do ii = 1, size(active,1)
                         i = loop(1,1)+ii-1
                         j = loop(2,1)+jj-1
                         k = loop(3,1)+kk-1
                         radius = mesh%mesh(1,i,loop(2,1),k)
                         metric_center = 1.0_dp
-                        if (geometry_power > 0) then
-                            metric_center = max(radius,0.0_dp)**geometry_power
-                        end if
+                        if (geometry_power > 0) metric_center = max(radius,0.0_dp)**geometry_power
                         conductance_y(ii,jj,kk) = base_volume*metric_center/dx(2)**2
                         left_marker = bc%bc_markers(i,j-1,k)
                         right_marker = bc%bc_markers(i,j,k)
-                        call classify_correction_boundary(left_marker,right_marker, &
+                        call classify_correction_boundary(left_marker, right_marker, &
                             elliptic_boundary%type_y(ii,jj,kk))
                     end do
                 end do
@@ -2736,74 +2878,122 @@ contains
         end if
 
         if (dimensions >= 3) then
-            do kk = 1, size(correction,3)+1
-                do jj = 1, size(correction,2)
-                    do ii = 1, size(correction,1)
+            do kk = 1, size(active,3)+1
+                do jj = 1, size(active,2)
+                    do ii = 1, size(active,1)
                         i = loop(1,1)+ii-1
                         j = loop(2,1)+jj-1
                         k = loop(3,1)+kk-1
                         radius = mesh%mesh(1,i,j,loop(3,1))
                         metric_center = 1.0_dp
-                        if (geometry_power > 0) then
-                            metric_center = max(radius,0.0_dp)**geometry_power
-                        end if
+                        if (geometry_power > 0) metric_center = max(radius,0.0_dp)**geometry_power
                         conductance_z(ii,jj,kk) = base_volume*metric_center/dx(3)**2
                         left_marker = bc%bc_markers(i,j,k-1)
                         right_marker = bc%bc_markers(i,j,k)
-                        call classify_correction_boundary(left_marker,right_marker, &
+                        call classify_correction_boundary(left_marker, right_marker, &
                             elliptic_boundary%type_z(ii,jj,kk))
                     end do
                 end do
             end do
         end if
-
-        this%pressure_solver%relative_tolerance = 1.0e-3_dp
-        this%pressure_solver%absolute_tolerance = 1.0e-10_dp
-        call this%pressure_solver%solve(correction, rhs, conductance_x, conductance_y, &
-            conductance_z, cell_volume, active, elliptic_boundary, dimensions, &
-            use_initial_guess=.false., statistics=statistics)
-        if (.not. statistics%converged) then
-            error stop 'FDS shared multigrid correction did not converge'
-        end if
-
-        !$omp parallel do collapse(3) schedule(static) private(i,j,k,ii,jj,kk)
-        do k = loop(3,1), loop(3,2)
-            do j = loop(2,1), loop(2,2)
-                do i = loop(1,1), loop(1,2)
-                    if (bc%bc_markers(i,j,k) /= 0) cycle
-                    ii = i-loop(1,1)+1
-                    jj = j-loop(2,1)+1
-                    kk = k-loop(3,1)+1
-                    this%pressure_correction(i,j,k) = correction(ii,jj,kk)
-                end do
-            end do
-        end do
-        !$omp end parallel do
-
         end associate
 
-    contains
+        call this%pressure_solver%prepare(conductance_x, conductance_y, conductance_z, &
+            cell_volume, active, elliptic_boundary, dimensions)
+        this%pressure_operator_prepared = .true.
+        this%pressure_operator_preparations = this%pressure_operator_preparations + 1
+        this%pressure_operator_dimensions = dimensions
+        this%pressure_operator_geometry_power = geometry_power
+        this%pressure_operator_loop = loop
+        this%pressure_operator_dx = dx
+        this%pressure_operator_base_volume = base_volume
 
+    contains
         subroutine classify_correction_boundary(marker_a, marker_b, boundary_type)
             integer, intent(in) :: marker_a, marker_b
             integer, intent(out) :: boundary_type
 
             boundary_type = elliptic_bc_internal
             if (marker_a == 0 .and. marker_b == 0) return
-
             boundary_marker = merge(marker_a, marker_b, marker_a /= 0)
-            boundary_name = this%boundary%bc_ptr%boundary_types( &
-                boundary_marker)%get_type_name()
+            boundary_name = this%boundary%bc_ptr%boundary_types(boundary_marker)%get_type_name()
             if (boundary_name == 'outlet') then
-                ! The nonlinear iterate already carries the inhomogeneous state;
-                ! the defect correction is zero at a fixed-pressure outlet.
                 boundary_type = elliptic_bc_dirichlet
             else
                 boundary_type = elliptic_bc_neumann
             end if
         end subroutine classify_correction_boundary
+    end subroutine prepare_shared_elliptic_operator
 
-    end subroutine solve_shared_elliptic_correction
+
+    !> Explicitly invalidate the cached pressure operator after any topology or
+    !! metric change not detectable by the inexpensive scalar guards above.
+    subroutine invalidate_pressure_operator_cache(this)
+        class(fds_solver), intent(inout) :: this
+        this%pressure_operator_prepared = .false.
+        call this%pressure_solver%invalidate()
+    end subroutine invalidate_pressure_operator_cache
+
+
+    !--------------------------------------------------------------------------
+    ! Emit one compact pressure-performance record for each predictor/corrector
+    ! projection.  The file is intentionally independent of the generic
+    ! elliptic solver so CABARET can reuse that solver without FDS diagnostics.
+    !--------------------------------------------------------------------------
+    subroutine write_pressure_profile(this, predictor, pressure_converged, pressure_iterations, &
+        legacy_smoothing_sweeps, multigrid_calls, multigrid_cycles, &
+        multigrid_smoothing_iterations, multigrid_parallel_smoothing, &
+        multigrid_serial_smoothing, multigrid_residual_evaluations, hierarchy_levels, &
+        multigrid_initial_residual_max, multigrid_final_residual_max, &
+        multigrid_relative_residual_max)
+
+        class(fds_solver), intent(inout) :: this
+        logical, intent(in) :: predictor, pressure_converged
+        integer, intent(in) :: pressure_iterations, legacy_smoothing_sweeps
+        integer, intent(in) :: multigrid_calls, multigrid_cycles, multigrid_smoothing_iterations
+        integer, intent(in) :: multigrid_parallel_smoothing, multigrid_serial_smoothing
+        integer, intent(in) :: multigrid_residual_evaluations, hierarchy_levels
+        real(dp), intent(in) :: multigrid_initial_residual_max
+        real(dp), intent(in) :: multigrid_final_residual_max
+        real(dp), intent(in) :: multigrid_relative_residual_max
+
+        character(len=9) :: stage
+
+        if (.not. this%pressure_profiling_enabled) return
+
+        if (this%pressure_profile_unit == 0) then
+            open(newunit=this%pressure_profile_unit, file='fds_pressure_profile.csv', &
+                status='replace', action='write')
+            write(this%pressure_profile_unit,'(A)') &
+                'time,stage,pressure_converged,nonlinear_pressure_iterations,'// &
+                'legacy_pre_sweeps_per_correction,legacy_post_sweeps_per_correction,'// &
+                'legacy_smoothing_sweeps,multigrid_calls,multigrid_cycles,'// &
+                'multigrid_smoothing_iterations,multigrid_parallel_smoothing_iterations,'// &
+                'multigrid_serial_smoothing_iterations,multigrid_residual_evaluations,'// &
+                'multigrid_hierarchy_levels,prepared_operator_rebuilds,multigrid_initial_residual_max,'// &
+                'multigrid_final_residual_max,multigrid_relative_residual_max'
+        end if
+
+        if (predictor) then
+            stage = 'predictor'
+        else
+            stage = 'corrector'
+        end if
+
+        write(this%pressure_profile_unit, &
+            '(ES24.16,",",A,",",L1,12(",",I0),3(",",ES24.16))') &
+            this%time, trim(stage), pressure_converged, pressure_iterations, &
+            this%pressure_legacy_pre_smoothing_sweeps, &
+            this%pressure_legacy_post_smoothing_sweeps, &
+            legacy_smoothing_sweeps, multigrid_calls, multigrid_cycles, &
+            multigrid_smoothing_iterations, multigrid_parallel_smoothing, &
+            multigrid_serial_smoothing, multigrid_residual_evaluations, hierarchy_levels, &
+            this%pressure_operator_preparations, multigrid_initial_residual_max, &
+            multigrid_final_residual_max, &
+            multigrid_relative_residual_max
+        flush(this%pressure_profile_unit)
+    end subroutine write_pressure_profile
+
     !--------------------------------------------------------------------------
     ! Recover perturbational pressure from H = p'/rho + |u|^2/2 and populate
     ! ghost values consistent with wall/inlet velocity conditions and p'=0 at

@@ -49,6 +49,7 @@ module fickean_diffusion_solver_class
         logical :: soret_enabled = .true.
         integer, allocatable :: soret_species_indices(:)
         real(dp), allocatable :: soret_alpha(:)
+        real(dp), allocatable :: reference_enthalpy_molar(:)
     contains
         procedure :: solve_diffusion
         procedure :: update_diffusion_coefficients
@@ -75,6 +76,7 @@ contains
         type(field_scalar_cons_pointer) :: scalar_pointer
         type(field_vector_cons_pointer) :: vector_pointer
         type(field_tensor_cons_pointer) :: tensor_pointer
+        integer :: specie, species_number
 
         constructor%domain = manager%domain
         constructor%mpi_support = manager%mpi_communications
@@ -128,6 +130,14 @@ contains
         call zero_vector_field(constructor%species_source%v_ptr)
         call zero_vector_field(constructor%diffusivity%v_ptr)
         call zero_vector_field(constructor%thermal_diffusion_coefficient%v_ptr)
+
+        species_number = constructor%chemistry%chem_ptr%species_number
+        allocate(constructor%reference_enthalpy_molar(species_number))
+        do specie = 1, species_number
+            constructor%reference_enthalpy_molar(specie) = &
+                constructor%thermophysics%thermo_ptr%specie_enthalpy_molar( &
+                    T_ref, specie)
+        end do
 
         call constructor%initialize_default_soret_model()
         if (present(soret_enabled)) constructor%soret_enabled = soret_enabled
@@ -196,6 +206,8 @@ contains
         integer, dimension(3,2) :: cell_loop
         real(dp), dimension(3) :: cell_size
         real(dp), allocatable :: flux_left(:), flux_right(:)
+        real(dp), allocatable :: face_mass_fraction(:), mass_fraction_jump(:)
+        real(dp), allocatable :: raw_mass_flux(:)
         real(dp) :: enthalpy_flux_left, enthalpy_flux_right
         real(dp) :: left_ratio, right_ratio, radius
 
@@ -221,9 +233,13 @@ contains
             mesh => this%mesh%mesh_ptr)
 
             !$omp parallel default(shared) private(i,j,k,dim,specie,flux_left, &
-            !$omp& flux_right,enthalpy_flux_left,enthalpy_flux_right, &
+            !$omp& flux_right,face_mass_fraction,mass_fraction_jump, &
+            !$omp& raw_mass_flux, &
+            !$omp& enthalpy_flux_left,enthalpy_flux_right, &
             !$omp& left_ratio,right_ratio,radius)
-            allocate(flux_left(species_number), flux_right(species_number))
+            allocate(flux_left(species_number), flux_right(species_number), &
+                face_mass_fraction(species_number), &
+                mass_fraction_jump(species_number), raw_mass_flux(species_number))
             !$omp do collapse(3) schedule(static)
             do k = cell_loop(3,1), cell_loop(3,2)
                 do j = cell_loop(2,1), cell_loop(2,2)
@@ -233,9 +249,15 @@ contains
                         radius = mesh%mesh(1,i,j,k)
                         do dim = 1, dimensions
                             call this%calculate_face_flux( &
-                                i, j, k, dim, -1, flux_left, enthalpy_flux_left)
+                                i, j, k, dim, -1, cell_size(dim), &
+                                this%reference_enthalpy_molar, face_mass_fraction, &
+                                mass_fraction_jump, raw_mass_flux, flux_left, &
+                                enthalpy_flux_left)
                             call this%calculate_face_flux( &
-                                i, j, k, dim, 1, flux_right, enthalpy_flux_right)
+                                i, j, k, dim, 1, cell_size(dim), &
+                                this%reference_enthalpy_molar, face_mass_fraction, &
+                                mass_fraction_jump, raw_mass_flux, flux_right, &
+                                enthalpy_flux_right)
 
                             left_ratio = this%radial_face_ratio( &
                                 power, dim, radius, cell_size(1), -1)
@@ -257,7 +279,8 @@ contains
                 end do
             end do
             !$omp end do
-            deallocate(flux_left, flux_right)
+            deallocate(flux_left, flux_right, face_mass_fraction, &
+                mass_fraction_jump, raw_mass_flux)
             !$omp end parallel
         end associate
 
@@ -360,22 +383,28 @@ contains
     end subroutine update_diffusion_coefficients
 
 
-    subroutine calculate_face_flux(this, i, j, k, dimension, side, &
-        mass_flux, enthalpy_flux)
+    subroutine calculate_face_flux(this, i, j, k, dimension, side, spacing, &
+        reference_enthalpy_molar, face_mass_fraction, mass_fraction_jump, &
+        raw_mass_flux, mass_flux, enthalpy_flux)
         class(diffusion_solver), intent(in) :: this
         integer, intent(in) :: i, j, k, dimension, side
+        real(dp), intent(in) :: spacing
+        real(dp), dimension(:), intent(in) :: reference_enthalpy_molar
+        real(dp), dimension(:), intent(inout) :: face_mass_fraction
+        real(dp), dimension(:), intent(inout) :: mass_fraction_jump, raw_mass_flux
         real(dp), dimension(:), intent(out) :: mass_flux
         real(dp), intent(out) :: enthalpy_flux
 
         integer :: neighbour_i, neighbour_j, neighbour_k
         integer :: species_number, specie
-        real(dp), dimension(3) :: cell_size
-        real(dp) :: spacing, density_face, temperature_gradient
+        real(dp) :: density_face, temperature_gradient
         real(dp) :: mass_fraction_sum, raw_flux_sum
         real(dp) :: diffusivity_face, thermal_diffusion_face
         real(dp) :: gradient_mass_fraction, raw_flux
         real(dp) :: sensible_enthalpy_cell, sensible_enthalpy_neighbour
-        real(dp), allocatable :: face_mass_fraction(:), raw_mass_flux(:)
+        real(dp) :: temperature_cell, temperature_neighbour, side_real
+        real(dp) :: mass_fraction_cell, mass_fraction_neighbour
+        real(dp) :: species_molar_mass
 
         species_number = size(mass_flux)
         mass_flux = 0.0_dp
@@ -387,8 +416,6 @@ contains
         if (this%boundary%bc_ptr%bc_markers( &
             neighbour_i,neighbour_j,neighbour_k) /= 0) return
 
-        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
-        spacing = cell_size(dimension)
         density_face = 0.5_dp*( &
             this%density%s_ptr%cells(i,j,k) + &
             this%density%s_ptr%cells(neighbour_i,neighbour_j,neighbour_k))
@@ -396,19 +423,25 @@ contains
             error stop 'Diffusion solver: invalid face density'
         end if
 
-        temperature_gradient = real(side,dp) * &
-            (log(max(this%temperature%s_ptr%cells( &
-                neighbour_i,neighbour_j,neighbour_k), tiny(1.0_dp))) - &
-             log(max(this%temperature%s_ptr%cells(i,j,k), tiny(1.0_dp)))) / &
-            spacing
+        side_real = real(side,dp)
+        temperature_cell = this%temperature%s_ptr%cells(i,j,k)
+        temperature_neighbour = &
+            this%temperature%s_ptr%cells(neighbour_i,neighbour_j,neighbour_k)
+        temperature_gradient = side_real * &
+            (log(max(temperature_neighbour, tiny(1.0_dp))) - &
+             log(max(temperature_cell, tiny(1.0_dp)))) / spacing
 
-        allocate(face_mass_fraction(species_number), raw_mass_flux(species_number))
         mass_fraction_sum = 0.0_dp
         do specie = 1, species_number
-            face_mass_fraction(specie) = 0.5_dp*( &
-                this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k) + &
+            mass_fraction_cell = &
+                this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k)
+            mass_fraction_neighbour = &
                 this%mass_fraction%v_ptr%pr(specie)%cells( &
-                    neighbour_i,neighbour_j,neighbour_k))
+                    neighbour_i,neighbour_j,neighbour_k)
+            face_mass_fraction(specie) = &
+                0.5_dp*(mass_fraction_cell + mass_fraction_neighbour)
+            mass_fraction_jump(specie) = &
+                mass_fraction_neighbour - mass_fraction_cell
             if (face_mass_fraction(specie) < -1.0e-12_dp) then
                 error stop 'Diffusion solver: negative face mass fraction'
             end if
@@ -431,10 +464,8 @@ contains
                     cells(i,j,k) + &
                 this%thermal_diffusion_coefficient%v_ptr%pr(specie)% &
                     cells(neighbour_i,neighbour_j,neighbour_k))
-            gradient_mass_fraction = real(side,dp) * &
-                (this%mass_fraction%v_ptr%pr(specie)%cells( &
-                    neighbour_i,neighbour_j,neighbour_k) - &
-                 this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k)) / spacing
+            gradient_mass_fraction = &
+                side_real*mass_fraction_jump(specie) / spacing
 
             raw_flux = density_face*diffusivity_face*gradient_mass_fraction + &
                 thermal_diffusion_face*temperature_gradient
@@ -446,24 +477,20 @@ contains
         mass_flux(species_number) = mass_flux(species_number) - sum(mass_flux)
 
         do specie = 1, species_number
+            species_molar_mass = &
+                this%thermophysics%thermo_ptr%molar_masses(specie)
             sensible_enthalpy_cell = &
                 (this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
-                    this%temperature%s_ptr%cells(i,j,k), specie) - &
-                 this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
-                    T_ref, specie)) / &
-                this%thermophysics%thermo_ptr%molar_masses(specie)
+                    temperature_cell, specie) - &
+                 reference_enthalpy_molar(specie)) / species_molar_mass
             sensible_enthalpy_neighbour = &
                 (this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
-                    this%temperature%s_ptr%cells( &
-                        neighbour_i,neighbour_j,neighbour_k), specie) - &
-                 this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
-                    T_ref, specie)) / &
-                this%thermophysics%thermo_ptr%molar_masses(specie)
+                    temperature_neighbour, specie) - &
+                 reference_enthalpy_molar(specie)) / species_molar_mass
             enthalpy_flux = enthalpy_flux + mass_flux(specie) * &
                 0.5_dp*(sensible_enthalpy_cell + sensible_enthalpy_neighbour)
         end do
 
-        deallocate(face_mass_fraction, raw_mass_flux)
     end subroutine calculate_face_flux
 
 

@@ -51,8 +51,8 @@ module viscosity_solver_class
         procedure, private :: fill_viscosity_boundary_ghosts
         procedure, private :: calculate_stress_fluxes
         procedure, private :: velocity_divergence_at_cell
-        procedure, private :: velocity_divergence_at_face
-        procedure, private :: face_component_derivative
+        procedure, private :: calculate_face_kinematics
+        procedure, private :: transverse_face_derivative
         procedure, private :: geometry_power
         procedure, private, nopass :: radial_face_ratio
         procedure, private, nopass :: positive_harmonic_mean
@@ -148,7 +148,8 @@ contains
         integer, dimension(3,2) :: cell_loop
         real(dp), dimension(3) :: cell_size
         real(dp) :: source_value, energy_value
-        real(dp) :: left_ratio, right_ratio, radius, divergence_cell
+        real(dp), dimension(3) :: left_ratio, right_ratio
+        real(dp) :: radius, divergence_cell
         real(dp) :: radial_velocity_ratio
 
         if (.not. ieee_is_finite(time_step) .or. time_step <= 0.0_dp) then
@@ -166,7 +167,7 @@ contains
         call this%update_dynamic_viscosity()
         call this%mpi_support%exchange_conservative_vector_field( &
             this%velocity%v_ptr)
-        call this%calculate_stress_fluxes()
+        call this%calculate_stress_fluxes(dimensions, power, cell_size)
 
         associate( &
             energy_source => this%energy_source%s_ptr, &
@@ -192,28 +193,36 @@ contains
                             if (radius <= 0.0_dp) then
                                 error stop 'Viscosity solver: non-positive radial cell metric'
                             end if
-                            divergence_cell = &
-                                this%velocity_divergence_at_cell(i,j,k)
+                            divergence_cell = this%velocity_divergence_at_cell( &
+                                i, j, k, dimensions, power, cell_size)
                             radial_velocity_ratio = velocity%pr(1)%cells(i,j,k)/radius
                             this%hoop_stress(i,j,k) = viscosity%cells(i,j,k) * &
                                 (2.0_dp*radial_velocity_ratio - &
                                  (2.0_dp/3.0_dp)*divergence_cell)
                         end if
 
+                        ! Geometry factors depend only on the cell and face normal.
+                        ! Compute them once and reuse them for all momentum and
+                        ! viscous-energy flux divergences in this cell.
+                        left_ratio = 1.0_dp
+                        right_ratio = 1.0_dp
+                        if (power > 0) then
+                            left_ratio(1) = this%radial_face_ratio( &
+                                power, 1, radius, cell_size(1), -1)
+                            right_ratio(1) = this%radial_face_ratio( &
+                                power, 1, radius, cell_size(1), 1)
+                        end if
+
                         do component = 1, dimensions
                             source_value = 0.0_dp
                             do normal = 1, dimensions
-                                left_ratio = this%radial_face_ratio( &
-                                    power, normal, radius, cell_size(1), -1)
-                                right_ratio = this%radial_face_ratio( &
-                                    power, normal, radius, cell_size(1), 1)
                                 source_value = source_value + &
-                                    (right_ratio*stress%pr(component,normal)% &
+                                    (right_ratio(normal)*stress%pr(component,normal)% &
                                         cells(normal, &
                                             i+I_m(normal,1), &
                                             j+I_m(normal,2), &
                                             k+I_m(normal,3)) - &
-                                     left_ratio*stress%pr(component,normal)% &
+                                     left_ratio(normal)*stress%pr(component,normal)% &
                                         cells(normal,i,j,k)) / cell_size(normal)
                             end do
                             if (power > 0 .and. component == 1) then
@@ -225,17 +234,13 @@ contains
 
                         energy_value = 0.0_dp
                         do normal = 1, dimensions
-                            left_ratio = this%radial_face_ratio( &
-                                power, normal, radius, cell_size(1), -1)
-                            right_ratio = this%radial_face_ratio( &
-                                power, normal, radius, cell_size(1), 1)
                             energy_value = energy_value + &
-                                (right_ratio*stress_power_flux%pr(normal)% &
+                                (right_ratio(normal)*stress_power_flux%pr(normal)% &
                                     cells(normal, &
                                         i+I_m(normal,1), &
                                         j+I_m(normal,2), &
                                         k+I_m(normal,3)) - &
-                                 left_ratio*stress_power_flux%pr(normal)% &
+                                 left_ratio(normal)*stress_power_flux%pr(normal)% &
                                     cells(normal,i,j,k)) / cell_size(normal)
                         end do
                         energy_source%cells(i,j,k) = energy_value
@@ -313,20 +318,18 @@ contains
     end subroutine update_dynamic_viscosity
 
 
-    subroutine calculate_stress_fluxes(this)
+    subroutine calculate_stress_fluxes(this, dimensions, power, cell_size)
         class(viscosity_solver), intent(inout) :: this
+        integer, intent(in) :: dimensions, power
+        real(dp), dimension(3), intent(in) :: cell_size
 
-        integer :: dimensions
         integer :: normal, component, i, j, k, dim
         integer, dimension(3,2) :: face_loop, loop
-        real(dp), dimension(3) :: cell_size
+        real(dp), dimension(3) :: normal_derivative, transverse_derivative
         real(dp) :: viscosity_face, divergence_face
-        real(dp) :: normal_derivative, transverse_derivative
         real(dp) :: stress_value, energy_flux_value
 
-        dimensions = this%domain%get_domain_dimensions()
         face_loop = this%domain%get_local_inner_faces_bounds()
-        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
 
         call zero_tensor_flow_field(this%stress%t_ptr)
         call zero_vector_flow_field(this%stress_power_flux%v_ptr)
@@ -356,28 +359,26 @@ contains
                                     i-I_m(normal,1), &
                                     j-I_m(normal,2), &
                                     k-I_m(normal,3)))
-                            divergence_face = &
-                                this%velocity_divergence_at_face(normal,i,j,k)
+
+                            ! All face-local velocity derivatives are assembled
+                            ! once and reused by both div(u) and tau_ij.  Mesh
+                            ! spacing and geometry metadata are supplied by the
+                            ! caller and are invariant throughout this sweep.
+                            call this%calculate_face_kinematics( &
+                                normal, i, j, k, dimensions, power, cell_size, &
+                                normal_derivative, transverse_derivative, &
+                                divergence_face)
+
                             energy_flux_value = 0.0_dp
-
                             do component = 1, dimensions
-                                normal_derivative = &
-                                    (velocity%pr(component)%cells(i,j,k) - &
-                                     velocity%pr(component)%cells( &
-                                        i-I_m(normal,1), &
-                                        j-I_m(normal,2), &
-                                        k-I_m(normal,3))) / cell_size(normal)
-
                                 if (component == normal) then
                                     stress_value = viscosity_face * &
-                                        (2.0_dp*normal_derivative - &
+                                        (2.0_dp*normal_derivative(component) - &
                                          (2.0_dp/3.0_dp)*divergence_face)
                                 else
-                                    transverse_derivative = &
-                                        this%face_component_derivative( &
-                                            normal, component, normal, i, j, k)
                                     stress_value = viscosity_face * &
-                                        (normal_derivative + transverse_derivative)
+                                        (normal_derivative(component) + &
+                                         transverse_derivative(component))
                                 end if
 
                                 stress%pr(component,normal)% &
@@ -411,18 +412,16 @@ contains
     end subroutine calculate_stress_fluxes
 
 
-    real(dp) function velocity_divergence_at_cell(this, i, j, k) result(value)
+    real(dp) function velocity_divergence_at_cell( &
+        this, i, j, k, dimensions, power, cell_size) result(value)
         class(viscosity_solver), intent(in) :: this
-        integer, intent(in) :: i, j, k
+        integer, intent(in) :: i, j, k, dimensions, power
+        real(dp), dimension(3), intent(in) :: cell_size
 
-        integer :: dimensions, power, dim
-        real(dp), dimension(3) :: cell_size
+        integer :: dim
         real(dp) :: radius, radial_velocity_high, radial_velocity_low
         real(dp) :: radial_derivative
 
-        dimensions = this%domain%get_domain_dimensions()
-        power = this%geometry_power()
-        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
         value = 0.0_dp
 
         if (power == 0) then
@@ -467,30 +466,64 @@ contains
     end function velocity_divergence_at_cell
 
 
-    real(dp) function velocity_divergence_at_face(this, normal, i, j, k) &
-        result(value)
+    subroutine calculate_face_kinematics(this, normal, i, j, k, &
+        dimensions, power, cell_size, normal_derivative, &
+        transverse_derivative, divergence)
         class(viscosity_solver), intent(in) :: this
-        integer, intent(in) :: normal, i, j, k
+        integer, intent(in) :: normal, i, j, k, dimensions, power
+        real(dp), dimension(3), intent(in) :: cell_size
+        real(dp), dimension(3), intent(out) :: normal_derivative
+        real(dp), dimension(3), intent(out) :: transverse_derivative
+        real(dp), intent(out) :: divergence
 
-        integer :: dimensions, power, dim
-        real(dp), dimension(3) :: cell_size
+        integer :: component, dim
+        integer :: left_i, left_j, left_k
         real(dp) :: radius, face_radius, left_radius, right_radius
         real(dp) :: radial_velocity_left, radial_velocity_right
         real(dp) :: radial_velocity_high, radial_velocity_low
+        real(dp) :: diagonal_derivative
 
-        dimensions = this%domain%get_domain_dimensions()
-        power = this%geometry_power()
-        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
-        value = 0.0_dp
+        normal_derivative = 0.0_dp
+        transverse_derivative = 0.0_dp
+
+        left_i = i - I_m(normal,1)
+        left_j = j - I_m(normal,2)
+        left_k = k - I_m(normal,3)
+
+        ! d(u_component)/d(x_normal) is shared by the normal stress,
+        ! shear stresses and (for the normal velocity component) div(u).
+        do component = 1, dimensions
+            normal_derivative(component) = ( &
+                this%velocity%v_ptr%pr(component)%cells(i,j,k) - &
+                this%velocity%v_ptr%pr(component)%cells( &
+                    left_i,left_j,left_k)) / cell_size(normal)
+        end do
+
+        ! The off-diagonal stress tau(component,normal) additionally needs
+        ! d(u_normal)/d(x_component), collocated at the same face.
+        transverse_derivative(normal) = normal_derivative(normal)
+        do component = 1, dimensions
+            if (component == normal) cycle
+            transverse_derivative(component) = this%transverse_face_derivative( &
+                normal, component, normal, i, j, k, cell_size)
+        end do
 
         if (power == 0) then
+            divergence = 0.0_dp
             do dim = 1, dimensions
-                value = value + this%face_component_derivative( &
-                    dim, dim, normal, i, j, k)
+                if (dim == normal) then
+                    diagonal_derivative = normal_derivative(dim)
+                else
+                    diagonal_derivative = this%transverse_face_derivative( &
+                        dim, dim, normal, i, j, k, cell_size)
+                end if
+                divergence = divergence + diagonal_derivative
             end do
             return
         end if
 
+        ! Curvilinear radial contribution to div(u), preserving the original
+        ! finite-volume metric treatment exactly.
         if (normal == 1) then
             face_radius = this%mesh%mesh_ptr%mesh(1,i,j,k) - &
                 0.5_dp*cell_size(1)
@@ -499,10 +532,10 @@ contains
             radial_velocity_left = this%velocity%v_ptr%pr(1)%cells(i-1,j,k)
             radial_velocity_right = this%velocity%v_ptr%pr(1)%cells(i,j,k)
             if (abs(face_radius) <= tiny(1.0_dp)) then
-                value = real(power + 1,dp) * &
-                    (radial_velocity_right - radial_velocity_left) / cell_size(1)
+                divergence = real(power + 1,dp) * &
+                    (radial_velocity_right-radial_velocity_left)/cell_size(1)
             else
-                value = ( &
+                divergence = ( &
                     right_radius**power*radial_velocity_right - &
                     left_radius**power*radial_velocity_left) / &
                     (cell_size(1)*face_radius**power)
@@ -511,25 +544,23 @@ contains
             radius = this%mesh%mesh_ptr%mesh(1,i,j,k)
             radial_velocity_high = 0.25_dp*( &
                 this%velocity%v_ptr%pr(1)%cells(i,j,k) + &
-                this%velocity%v_ptr%pr(1)%cells( &
-                    i-I_m(normal,1),j-I_m(normal,2),k-I_m(normal,3)) + &
+                this%velocity%v_ptr%pr(1)%cells(left_i,left_j,left_k) + &
                 this%velocity%v_ptr%pr(1)%cells(i+1,j,k) + &
                 this%velocity%v_ptr%pr(1)%cells( &
                     i+1-I_m(normal,1), &
                     j-I_m(normal,2),k-I_m(normal,3)))
             radial_velocity_low = 0.25_dp*( &
                 this%velocity%v_ptr%pr(1)%cells(i,j,k) + &
-                this%velocity%v_ptr%pr(1)%cells( &
-                    i-I_m(normal,1),j-I_m(normal,2),k-I_m(normal,3)) + &
+                this%velocity%v_ptr%pr(1)%cells(left_i,left_j,left_k) + &
                 this%velocity%v_ptr%pr(1)%cells(i-1,j,k) + &
                 this%velocity%v_ptr%pr(1)%cells( &
                     i-1-I_m(normal,1), &
                     j-I_m(normal,2),k-I_m(normal,3)))
             if (abs(radius) <= tiny(1.0_dp)) then
-                value = real(power + 1,dp) * &
+                divergence = real(power + 1,dp) * &
                     (radial_velocity_high-radial_velocity_low)/cell_size(1)
             else
-                value = ( &
+                divergence = ( &
                     (radius+0.5_dp*cell_size(1))**power*radial_velocity_high - &
                     (radius-0.5_dp*cell_size(1))**power*radial_velocity_low) / &
                     (cell_size(1)*radius**power)
@@ -537,36 +568,35 @@ contains
         end if
 
         do dim = 2, dimensions
-            value = value + this%face_component_derivative( &
-                dim, dim, normal, i, j, k)
+            if (dim == normal) then
+                diagonal_derivative = normal_derivative(dim)
+            else
+                diagonal_derivative = this%transverse_face_derivative( &
+                    dim, dim, normal, i, j, k, cell_size)
+            end if
+            divergence = divergence + diagonal_derivative
         end do
-    end function velocity_divergence_at_face
+    end subroutine calculate_face_kinematics
 
 
-    real(dp) function face_component_derivative(this, component, &
-        derivative_dimension, normal, i, j, k) result(value)
+    real(dp) function transverse_face_derivative(this, component, &
+        derivative_dimension, normal, i, j, k, cell_size) result(value)
         class(viscosity_solver), intent(in) :: this
         integer, intent(in) :: component, derivative_dimension, normal
         integer, intent(in) :: i, j, k
+        real(dp), dimension(3), intent(in) :: cell_size
 
         integer :: left_i, left_j, left_k
         integer :: high_i, high_j, high_k, low_i, low_j, low_k
-        real(dp), dimension(3) :: cell_size
         real(dp) :: high_value, low_value
 
-        cell_size = this%mesh%mesh_ptr%get_cell_edges_length()
+        if (derivative_dimension == normal) then
+            error stop 'Viscosity solver: transverse derivative requested in face-normal direction'
+        end if
+
         left_i = i - I_m(normal,1)
         left_j = j - I_m(normal,2)
         left_k = k - I_m(normal,3)
-
-        if (derivative_dimension == normal) then
-            value = ( &
-                this%velocity%v_ptr%pr(component)%cells(i,j,k) - &
-                this%velocity%v_ptr%pr(component)%cells( &
-                    left_i,left_j,left_k)) / cell_size(normal)
-            return
-        end if
-
         high_i = i + I_m(derivative_dimension,1)
         high_j = j + I_m(derivative_dimension,2)
         high_k = k + I_m(derivative_dimension,3)
@@ -589,7 +619,7 @@ contains
                 low_i-I_m(normal,1), &
                 low_j-I_m(normal,2),low_k-I_m(normal,3)))
         value = (high_value-low_value)/cell_size(derivative_dimension)
-    end function face_component_derivative
+    end function transverse_face_derivative
 
 
     subroutine fill_viscosity_boundary_ghosts(this)

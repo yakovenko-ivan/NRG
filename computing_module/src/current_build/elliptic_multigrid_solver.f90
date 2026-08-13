@@ -58,6 +58,10 @@ module elliptic_multigrid_solver_class
     type elliptic_solver_statistics
         integer :: cycles = 0
         integer :: smoothing_iterations = 0
+        integer :: parallel_smoothing_iterations = 0
+        integer :: serial_smoothing_iterations = 0
+        integer :: residual_evaluations = 0
+        integer :: hierarchy_levels = 1
         real(dp) :: initial_residual = 0.0_dp
         real(dp) :: final_residual = 0.0_dp
         real(dp) :: relative_residual = 0.0_dp
@@ -78,7 +82,11 @@ module elliptic_multigrid_solver_class
         real(dp), allocatable :: conductance_x(:,:,:)
         real(dp), allocatable :: conductance_y(:,:,:)
         real(dp), allocatable :: conductance_z(:,:,:)
+        real(dp), allocatable :: diagonal(:,:,:)
+        real(dp), allocatable :: boundary_source(:,:,:)
         logical, allocatable :: active(:,:,:)
+        logical, allocatable :: regular_interior(:,:,:)
+        integer :: active_cells = 0
         type(elliptic_boundary_data) :: boundary
     end type multigrid_level
 
@@ -88,11 +96,23 @@ module elliptic_multigrid_solver_class
         integer :: post_smoothing_steps = 2
         integer :: coarse_smoothing_steps = 40
         integer :: maximum_cycles = 20
+        ! Multigrid levels smaller than this are executed serially.  This avoids
+        ! repeated OpenMP fork/barrier costs on coarse grids while preserving the
+        ! same numerical algorithm and public solver API for all callers.
+        integer :: minimum_parallel_cells = 512 !4096
         real(dp) :: relative_tolerance = 1.0e-4_dp
         real(dp) :: absolute_tolerance = 1.0e-10_dp
+        ! A prepared operator owns a fully coarsened and preassembled hierarchy.
+        ! Repeated solves may then replace only the finest RHS/initial guess.
+        logical :: operator_prepared = .false.
+        logical :: prepared_pure_neumann = .false.
+        integer :: prepared_dimensions = 0
         type(multigrid_level), allocatable :: level(:)
     contains
         procedure :: solve => solve_elliptic_problem
+        procedure :: prepare => prepare_elliptic_operator
+        procedure :: solve_prepared => solve_prepared_elliptic_problem
+        procedure :: invalidate => invalidate_prepared_operator
         procedure, private :: build_hierarchy
         procedure, private :: load_finest_level
         procedure, private :: coarsen_hierarchy_data
@@ -110,6 +130,11 @@ contains
     !==========================================================================
 
     !> Solve a one-, two-, or three-dimensional finite-volume elliptic system.
+    !!
+    !! This compatibility entry point intentionally rebuilds the prepared
+    !! hierarchy from the caller-supplied operator on every call.  Callers with
+    !! a demonstrably invariant operator may instead call prepare() once and
+    !! solve_prepared() repeatedly.
     subroutine solve_elliptic_problem(this, solution, rhs, conductance_x, conductance_y, conductance_z, &
         cell_volume, active, boundary, dimensions, use_initial_guess, statistics)
 
@@ -127,11 +152,7 @@ contains
         type(elliptic_solver_statistics), intent(out), optional :: statistics
 
         type(elliptic_solver_statistics) :: stat
-        integer :: cycle
         logical :: warm_start, pure_neumann
-        real(dp) :: forcing_norm, tolerance
-
-        stat = elliptic_solver_statistics()
 
         call validate_problem(solution, rhs, conductance_x, conductance_y, conductance_z, &
             cell_volume, active, boundary, dimensions)
@@ -141,19 +162,101 @@ contains
         if (present(use_initial_guess)) warm_start = use_initial_guess
         pure_neumann = .not. has_active_dirichlet_boundary(active, boundary, dimensions)
 
-        ! A direct solve is cheaper and more accurate for a fully active 1-D row.
+        ! Preserve the original direct path for ordinary one-shot 1-D solves.
         if (dimensions == 1 .and. all(active)) then
+            call this%invalidate()
             call solve_tridiagonal_1d(solution, rhs, conductance_x, cell_volume, boundary, &
                 pure_neumann, this%relative_tolerance, this%absolute_tolerance, stat)
             if (present(statistics)) statistics = stat
             return
         end if
 
-        call this%build_hierarchy(size(rhs,1), size(rhs,2), size(rhs,3), dimensions)
-        call this%load_finest_level(rhs, conductance_x, conductance_y, conductance_z, &
-            cell_volume, active, boundary)
-        call this%coarsen_hierarchy_data()
+        call this%prepare(conductance_x, conductance_y, conductance_z, cell_volume, active, &
+            boundary, dimensions)
+        call this%solve_prepared(solution, rhs, warm_start, stat)
+        if (present(statistics)) statistics = stat
+    end subroutine solve_elliptic_problem
 
+
+    !> Prepare and retain the complete geometric multigrid operator hierarchy.
+    !!
+    !! The prepared state is valid only while conductances, active mask, cell
+    !! volumes, boundary types/values, dimensions and grid shape are unchanged.
+    !! The caller owns that lifetime contract and can explicitly invalidate it.
+    subroutine prepare_elliptic_operator(this, conductance_x, conductance_y, conductance_z, &
+        cell_volume, active, boundary, dimensions)
+
+        class(elliptic_multigrid_solver), intent(inout) :: this
+        real(dp), intent(in) :: conductance_x(:,:,:), conductance_y(:,:,:), conductance_z(:,:,:)
+        real(dp), intent(in) :: cell_volume(:,:,:)
+        logical, intent(in) :: active(:,:,:)
+        type(elliptic_boundary_data), intent(in) :: boundary
+        integer, intent(in) :: dimensions
+
+        integer :: nx, ny, nz
+
+        nx = size(active,1)
+        ny = size(active,2)
+        nz = size(active,3)
+        call validate_operator_data(conductance_x, conductance_y, conductance_z, cell_volume, &
+            active, boundary, dimensions)
+        call validate_solver_controls(this)
+
+        call this%build_hierarchy(nx, ny, nz, dimensions)
+        this%level(1)%rhs = 0.0_dp
+        this%level(1)%volume = cell_volume
+        this%level(1)%active = active
+        this%level(1)%conductance_x = conductance_x
+        this%level(1)%conductance_y = conductance_y
+        this%level(1)%conductance_z = conductance_z
+        call copy_boundary_data(this%level(1)%boundary, boundary)
+        call this%coarsen_hierarchy_data()
+        call assemble_hierarchy_operator(this)
+
+        this%prepared_pure_neumann = &
+            .not. has_active_dirichlet_boundary(active, boundary, dimensions)
+        this%prepared_dimensions = dimensions
+        this%operator_prepared = .true.
+    end subroutine prepare_elliptic_operator
+
+
+    !> Solve a new right-hand side using an already prepared operator hierarchy.
+    subroutine solve_prepared_elliptic_problem(this, solution, rhs, use_initial_guess, statistics)
+        class(elliptic_multigrid_solver), intent(inout) :: this
+        real(dp), intent(inout) :: solution(:,:,:)
+        real(dp), intent(in) :: rhs(:,:,:)
+        logical, intent(in), optional :: use_initial_guess
+        type(elliptic_solver_statistics), intent(out), optional :: statistics
+
+        type(elliptic_solver_statistics) :: stat
+        integer :: cycle
+        logical :: warm_start
+        real(dp) :: forcing_norm, tolerance
+
+        if (.not. this%operator_prepared) &
+            error stop 'Elliptic solver: solve_prepared called without prepare'
+        if (any(shape(solution) /= [this%level(1)%nx,this%level(1)%ny,this%level(1)%nz]) .or. &
+            any(shape(rhs) /= [this%level(1)%nx,this%level(1)%ny,this%level(1)%nz])) &
+            error stop 'Elliptic solver: prepared solve has incompatible cell-array shape'
+        if (.not. all(ieee_is_finite(solution)) .or. .not. all(ieee_is_finite(rhs))) &
+            error stop 'Elliptic solver: non-finite prepared solve data'
+        call validate_solver_controls(this)
+
+        stat = elliptic_solver_statistics()
+        stat%hierarchy_levels = size(this%level)
+        warm_start = .false.
+        if (present(use_initial_guess)) warm_start = use_initial_guess
+
+        ! Prepared 1-D systems can still use the direct tridiagonal path.
+        if (this%prepared_dimensions == 1 .and. all(this%level(1)%active)) then
+            call solve_tridiagonal_1d(solution, rhs, this%level(1)%conductance_x, &
+                this%level(1)%volume, this%level(1)%boundary, this%prepared_pure_neumann, &
+                this%relative_tolerance, this%absolute_tolerance, stat)
+            if (present(statistics)) statistics = stat
+            return
+        end if
+
+        this%level(1)%rhs = rhs
         if (warm_start) then
             this%level(1)%x = solution
         else
@@ -161,14 +264,13 @@ contains
         end if
         where (.not. this%level(1)%active) this%level(1)%x = 0.0_dp
 
-        if (pure_neumann) then
+        if (this%prepared_pure_neumann) then
             call enforce_neumann_compatibility(this%level(1), stat%compatibility_correction)
-            ! Fix the gauge before the first convergence test as well as after
-            ! every cycle.  This also gives deterministic early-exit results.
             call remove_volume_weighted_mean(this%level(1))
         end if
 
         call this%calculate_residual(1)
+        stat%residual_evaluations = stat%residual_evaluations + 1
         stat%initial_residual = active_max_abs(this%level(1)%residual, this%level(1)%active)
         forcing_norm = calculate_forcing_norm(this%level(1))
         tolerance = this%absolute_tolerance + this%relative_tolerance*forcing_norm
@@ -177,13 +279,15 @@ contains
             stat%converged = .true.
         else
             do cycle = 1, this%maximum_cycles
-                call this%v_cycle(1, stat%smoothing_iterations)
-                if (pure_neumann) call remove_volume_weighted_mean(this%level(1))
+                call this%v_cycle(1, stat%smoothing_iterations, &
+                    stat%parallel_smoothing_iterations, stat%serial_smoothing_iterations, &
+                    stat%residual_evaluations)
+                if (this%prepared_pure_neumann) call remove_volume_weighted_mean(this%level(1))
 
                 call this%calculate_residual(1)
+                stat%residual_evaluations = stat%residual_evaluations + 1
                 stat%final_residual = active_max_abs(this%level(1)%residual, this%level(1)%active)
                 stat%cycles = cycle
-
                 if (stat%final_residual <= tolerance) then
                     stat%converged = .true.
                     exit
@@ -193,11 +297,19 @@ contains
 
         if (stat%cycles == 0) stat%final_residual = stat%initial_residual
         stat%relative_residual = stat%final_residual/max(forcing_norm, tiny(1.0_dp))
-
         solution = this%level(1)%x
-        where (.not. active) solution = 0.0_dp
+        where (.not. this%level(1)%active) solution = 0.0_dp
         if (present(statistics)) statistics = stat
-    end subroutine solve_elliptic_problem
+    end subroutine solve_prepared_elliptic_problem
+
+
+    !> Mark the retained hierarchy unusable without forcing immediate deallocation.
+    subroutine invalidate_prepared_operator(this)
+        class(elliptic_multigrid_solver), intent(inout) :: this
+        this%operator_prepared = .false.
+        this%prepared_pure_neumann = .false.
+        this%prepared_dimensions = 0
+    end subroutine invalidate_prepared_operator
 
 
     !==========================================================================
@@ -455,6 +567,8 @@ contains
         allocate(level%conductance_x(nx+1,ny,nz))
         allocate(level%conductance_y(nx,ny+1,nz))
         allocate(level%conductance_z(nx,ny,nz+1))
+        allocate(level%diagonal(nx,ny,nz), level%boundary_source(nx,ny,nz))
+        allocate(level%regular_interior(nx,ny,nz))
         call allocate_boundary_data(level%boundary, nx, ny, nz)
 
         level%x = 0.0_dp
@@ -465,6 +579,10 @@ contains
         level%conductance_x = 0.0_dp
         level%conductance_y = 0.0_dp
         level%conductance_z = 0.0_dp
+        level%diagonal = 0.0_dp
+        level%boundary_source = 0.0_dp
+        level%regular_interior = .false.
+        level%active_cells = nx*ny*nz
     end subroutine allocate_level
 
 
@@ -542,6 +660,115 @@ contains
             call coarsen_z_faces(this%level(level_index-1), this%level(level_index))
         end do
     end subroutine coarsen_hierarchy_data
+
+
+    !> Preassemble the cell-local part of the operator on every hierarchy level.
+    !!
+    !! The diagonal and imposed boundary source are invariant during a multigrid
+    !! solve.  Caching them removes boundary classification and six nested face
+    !! dispatches from every smoother and residual sweep.  regular_interior marks
+    !! cells whose neighbour sum can use a branch-free Cartesian-style stencil;
+    !! the face conductances themselves retain the full metric/variable-coefficient
+    !! information, so this optimization is valid in 1-D, 2-D, 3-D and curvilinear
+    !! finite-volume callers such as FDS and low-Mach CABARET.
+    subroutine assemble_hierarchy_operator(this)
+        class(elliptic_multigrid_solver), intent(inout) :: this
+
+        integer :: level_index
+        logical :: use_parallel
+
+        do level_index = 1, size(this%level)
+            this%level(level_index)%active_cells = count(this%level(level_index)%active)
+            use_parallel = this%level(level_index)%active_cells >= this%minimum_parallel_cells
+            call assemble_level_operator(this%level(level_index), use_parallel)
+        end do
+    end subroutine assemble_hierarchy_operator
+
+
+    !> Assemble cached diagonal/source data and classify regular interior cells.
+    subroutine assemble_level_operator(level, use_parallel)
+        type(multigrid_level), intent(inout) :: level
+        logical, intent(in) :: use_parallel
+
+        integer :: i, j, k
+        real(dp) :: diagonal_value, source_value
+        logical :: regular_cell
+
+        level%diagonal = 0.0_dp
+        level%boundary_source = 0.0_dp
+        level%regular_interior = .false.
+
+        !$omp parallel do collapse(3) schedule(static) if(use_parallel) &
+        !$omp& private(i,j,k,diagonal_value,source_value,regular_cell)
+        do k = 1, level%nz
+            do j = 1, level%ny
+                do i = 1, level%nx
+                    if (.not. level%active(i,j,k)) cycle
+
+                    diagonal_value = 0.0_dp
+                    source_value = 0.0_dp
+                    regular_cell = .true.
+
+                    call accumulate_operator_face(level, i-1, j, k, &
+                        level%conductance_x(i,j,k), level%boundary%type_x(i,j,k), &
+                        level%boundary%value_x(i,j,k), diagonal_value, source_value, regular_cell)
+                    call accumulate_operator_face(level, i+1, j, k, &
+                        level%conductance_x(i+1,j,k), level%boundary%type_x(i+1,j,k), &
+                        level%boundary%value_x(i+1,j,k), diagonal_value, source_value, regular_cell)
+
+                    if (level%dimensions >= 2) then
+                        call accumulate_operator_face(level, i, j-1, k, &
+                            level%conductance_y(i,j,k), level%boundary%type_y(i,j,k), &
+                            level%boundary%value_y(i,j,k), diagonal_value, source_value, regular_cell)
+                        call accumulate_operator_face(level, i, j+1, k, &
+                            level%conductance_y(i,j+1,k), level%boundary%type_y(i,j+1,k), &
+                            level%boundary%value_y(i,j+1,k), diagonal_value, source_value, regular_cell)
+                    end if
+
+                    if (level%dimensions >= 3) then
+                        call accumulate_operator_face(level, i, j, k-1, &
+                            level%conductance_z(i,j,k), level%boundary%type_z(i,j,k), &
+                            level%boundary%value_z(i,j,k), diagonal_value, source_value, regular_cell)
+                        call accumulate_operator_face(level, i, j, k+1, &
+                            level%conductance_z(i,j,k+1), level%boundary%type_z(i,j,k+1), &
+                            level%boundary%value_z(i,j,k+1), diagonal_value, source_value, regular_cell)
+                    end if
+
+                    level%diagonal(i,j,k) = diagonal_value
+                    level%boundary_source(i,j,k) = source_value
+                    level%regular_interior(i,j,k) = regular_cell
+                end do
+            end do
+        end do
+        !$omp end parallel do
+    end subroutine assemble_level_operator
+
+
+    !> Add one face to the cached cell-local operator.
+    subroutine accumulate_operator_face(level, neighbour_i, neighbour_j, neighbour_k, conductance, &
+        boundary_type, boundary_value, diagonal_value, source_value, regular_cell)
+
+        type(multigrid_level), intent(in) :: level
+        integer, intent(in) :: neighbour_i, neighbour_j, neighbour_k, boundary_type
+        real(dp), intent(in) :: conductance, boundary_value
+        real(dp), intent(inout) :: diagonal_value, source_value
+        logical, intent(inout) :: regular_cell
+        logical :: neighbour_is_active
+
+        neighbour_is_active = neighbour_i >= 1 .and. neighbour_i <= level%nx .and. &
+            neighbour_j >= 1 .and. neighbour_j <= level%ny .and. &
+            neighbour_k >= 1 .and. neighbour_k <= level%nz
+        if (neighbour_is_active) &
+            neighbour_is_active = level%active(neighbour_i,neighbour_j,neighbour_k)
+
+        if (neighbour_is_active) then
+            diagonal_value = diagonal_value + conductance
+        else
+            regular_cell = .false.
+            call add_boundary_terms(conductance, boundary_type, boundary_value, &
+                diagonal_value, source_value)
+        end if
+    end subroutine accumulate_operator_face
 
 
     !> Rediscretize x-normal face conductances and homogeneous error BCs.
@@ -712,155 +939,300 @@ contains
     !==========================================================================
 
     !> Apply one recursive V-cycle to level_index.
-    recursive subroutine v_cycle(this, level_index, smoothing_count)
+    recursive subroutine v_cycle(this, level_index, smoothing_count, parallel_smoothing_count, &
+        serial_smoothing_count, residual_evaluation_count)
+
         class(elliptic_multigrid_solver), intent(inout) :: this
         integer, intent(in) :: level_index
-        integer, intent(inout) :: smoothing_count
+        integer, intent(inout) :: smoothing_count, parallel_smoothing_count
+        integer, intent(inout) :: serial_smoothing_count, residual_evaluation_count
+        logical :: use_parallel
+
+        use_parallel = this%level(level_index)%active_cells >= this%minimum_parallel_cells
 
         if (level_index == size(this%level)) then
             call this%smooth(level_index, this%coarse_smoothing_steps)
             smoothing_count = smoothing_count + this%coarse_smoothing_steps
+            if (use_parallel) then
+                parallel_smoothing_count = parallel_smoothing_count + this%coarse_smoothing_steps
+            else
+                serial_smoothing_count = serial_smoothing_count + this%coarse_smoothing_steps
+            end if
             return
         end if
 
         call this%smooth(level_index, this%pre_smoothing_steps)
         smoothing_count = smoothing_count + this%pre_smoothing_steps
+        if (use_parallel) then
+            parallel_smoothing_count = parallel_smoothing_count + this%pre_smoothing_steps
+        else
+            serial_smoothing_count = serial_smoothing_count + this%pre_smoothing_steps
+        end if
 
         call this%calculate_residual(level_index)
+        residual_evaluation_count = residual_evaluation_count + 1
         call this%restrict_residual(level_index)
         this%level(level_index+1)%x = 0.0_dp
 
-        call this%v_cycle(level_index+1, smoothing_count)
+        call this%v_cycle(level_index+1, smoothing_count, parallel_smoothing_count, &
+            serial_smoothing_count, residual_evaluation_count)
         call this%prolongate_kwak_and_add(level_index)
 
         call this%smooth(level_index, this%post_smoothing_steps)
         smoothing_count = smoothing_count + this%post_smoothing_steps
+        if (use_parallel) then
+            parallel_smoothing_count = parallel_smoothing_count + this%post_smoothing_steps
+        else
+            serial_smoothing_count = serial_smoothing_count + this%post_smoothing_steps
+        end if
     end subroutine v_cycle
 
 
     !> Red-black Gauss-Seidel smoothing on one hierarchy level.
+    !!
+    !! Traverse only cells of the requested checkerboard colour.  The previous
+    !! implementation visited every cell and rejected half of them with
+    !! mod(i+j+k,2).  The colour dependency is unchanged, but the hot loop now
+    !! performs roughly half as many loop iterations and only one parity test
+    !! per i-row.  Keep the Intel-friendly PARALLEL DO structure: red and black
+    !! sweeps remain separate OpenMP regions, exactly as in the validated
+    !! prepared baseline.
     subroutine smooth(this, level_index, iterations)
         class(elliptic_multigrid_solver), intent(inout) :: this
         integer, intent(in) :: level_index, iterations
 
-        integer :: iteration, color, i, j, k
-        real(dp) :: diagonal, neighbour_sum, imposed_source, algebraic_residual
+        integer :: iteration, color, i, j, k, i_start
+        real(dp) :: neighbour_sum, algebraic_residual
+        logical :: use_parallel
+
+        use_parallel = this%level(level_index)%active_cells >= this%minimum_parallel_cells
 
         do iteration = 1, iterations
             do color = 0, 1
-                !$omp parallel do collapse(3) schedule(static) &
-                !$omp& private(i,j,k,diagonal,neighbour_sum,imposed_source,algebraic_residual)
-                do k = 1, this%level(level_index)%nz
-                    do j = 1, this%level(level_index)%ny
-                        do i = 1, this%level(level_index)%nx
-                            if (mod(i+j+k,2) /= color) cycle
-                            if (.not. this%level(level_index)%active(i,j,k)) cycle
+                if (this%level(level_index)%dimensions == 1) then
+                    ! For j=k=1, checkerboard colour is simply the parity of i.
+                    if (color == 1) then
+                        i_start = 1
+                    else
+                        i_start = 2
+                    end if
 
-                            call stencil_terms(this%level(level_index), i, j, k, &
-                                diagonal, neighbour_sum, imposed_source)
-                            if (diagonal <= tiny(1.0_dp)) cycle
+                    !$omp parallel do schedule(static) if(use_parallel) &
+                    !$omp& private(i,neighbour_sum,algebraic_residual)
+                    do i = i_start, this%level(level_index)%nx, 2
+                        if (.not. this%level(level_index)%active(i,1,1)) cycle
+                        if (this%level(level_index)%diagonal(i,1,1) <= tiny(1.0_dp)) cycle
 
-                            algebraic_residual = &
-                                this%level(level_index)%rhs(i,j,k)*this%level(level_index)%volume(i,j,k) + &
-                                imposed_source + neighbour_sum - &
-                                diagonal*this%level(level_index)%x(i,j,k)
-                            this%level(level_index)%x(i,j,k) = &
-                                this%level(level_index)%x(i,j,k) + algebraic_residual/diagonal
+                        neighbour_sum = preassembled_neighbour_sum(this%level(level_index), i, 1, 1)
+                        algebraic_residual = &
+                            this%level(level_index)%rhs(i,1,1)*this%level(level_index)%volume(i,1,1) + &
+                            this%level(level_index)%boundary_source(i,1,1) + neighbour_sum - &
+                            this%level(level_index)%diagonal(i,1,1)*this%level(level_index)%x(i,1,1)
+                        this%level(level_index)%x(i,1,1) = this%level(level_index)%x(i,1,1) + &
+                            algebraic_residual/this%level(level_index)%diagonal(i,1,1)
+                    end do
+                    !$omp end parallel do
+                else
+                    !$omp parallel do collapse(2) schedule(static) if(use_parallel) &
+                    !$omp& private(i,j,k,i_start,neighbour_sum,algebraic_residual)
+                    do k = 1, this%level(level_index)%nz
+                        do j = 1, this%level(level_index)%ny
+                            if (mod(1+j+k,2) == color) then
+                                i_start = 1
+                            else
+                                i_start = 2
+                            end if
+
+                            do i = i_start, this%level(level_index)%nx, 2
+                                if (.not. this%level(level_index)%active(i,j,k)) cycle
+                                if (this%level(level_index)%diagonal(i,j,k) <= tiny(1.0_dp)) cycle
+
+                                neighbour_sum = preassembled_neighbour_sum(this%level(level_index), i, j, k)
+                                algebraic_residual = &
+                                    this%level(level_index)%rhs(i,j,k)*this%level(level_index)%volume(i,j,k) + &
+                                    this%level(level_index)%boundary_source(i,j,k) + neighbour_sum - &
+                                    this%level(level_index)%diagonal(i,j,k)*this%level(level_index)%x(i,j,k)
+                                this%level(level_index)%x(i,j,k) = this%level(level_index)%x(i,j,k) + &
+                                    algebraic_residual/this%level(level_index)%diagonal(i,j,k)
+                            end do
                         end do
                     end do
-                end do
-                !$omp end parallel do
+                    !$omp end parallel do
+                end if
             end do
         end do
     end subroutine smooth
 
 
     !> Compute the cell-volume-normalized residual on one level.
+    !!
+    !! Regular interior cells use an inlined dimension-specialized stencil.
+    !! Only irregular/boundary cells fall back to preassembled_neighbour_sum,
+    !! removing the helper's regular/interior and dimensional dispatches from
+    !! the overwhelmingly common residual path while preserving the exact
+    !! cached finite-volume operator.
     subroutine calculate_residual(this, level_index)
         class(elliptic_multigrid_solver), intent(inout) :: this
         integer, intent(in) :: level_index
 
         integer :: i, j, k
-        real(dp) :: diagonal, neighbour_sum, imposed_source, integrated_residual
+        real(dp) :: neighbour_sum, integrated_residual
+        logical :: use_parallel
 
+        use_parallel = this%level(level_index)%active_cells >= this%minimum_parallel_cells
         this%level(level_index)%residual = 0.0_dp
-        !$omp parallel do collapse(3) schedule(static) &
-        !$omp& private(i,j,k,diagonal,neighbour_sum,imposed_source,integrated_residual)
-        do k = 1, this%level(level_index)%nz
-            do j = 1, this%level(level_index)%ny
-                do i = 1, this%level(level_index)%nx
-                    if (.not. this%level(level_index)%active(i,j,k)) cycle
 
-                    call stencil_terms(this%level(level_index), i, j, k, &
-                        diagonal, neighbour_sum, imposed_source)
-                    integrated_residual = &
-                        this%level(level_index)%rhs(i,j,k)*this%level(level_index)%volume(i,j,k) + &
-                        imposed_source + neighbour_sum - &
-                        diagonal*this%level(level_index)%x(i,j,k)
-                    this%level(level_index)%residual(i,j,k) = &
-                        integrated_residual/this%level(level_index)%volume(i,j,k)
+        select case (this%level(level_index)%dimensions)
+        case (1)
+            !$omp parallel do collapse(3) schedule(static) if(use_parallel) &
+            !$omp& private(i,j,k,neighbour_sum,integrated_residual)
+            do k = 1, this%level(level_index)%nz
+                do j = 1, this%level(level_index)%ny
+                    do i = 1, this%level(level_index)%nx
+                        if (.not. this%level(level_index)%active(i,j,k)) cycle
+
+                        if (this%level(level_index)%regular_interior(i,j,k)) then
+                            neighbour_sum = &
+                                this%level(level_index)%conductance_x(i,j,k)*this%level(level_index)%x(i-1,j,k) + &
+                                this%level(level_index)%conductance_x(i+1,j,k)*this%level(level_index)%x(i+1,j,k)
+                        else
+                            neighbour_sum = preassembled_neighbour_sum(this%level(level_index), i, j, k)
+                        end if
+
+                        integrated_residual = &
+                            this%level(level_index)%rhs(i,j,k)*this%level(level_index)%volume(i,j,k) + &
+                            this%level(level_index)%boundary_source(i,j,k) + neighbour_sum - &
+                            this%level(level_index)%diagonal(i,j,k)*this%level(level_index)%x(i,j,k)
+                        this%level(level_index)%residual(i,j,k) = &
+                            integrated_residual/this%level(level_index)%volume(i,j,k)
+                    end do
                 end do
             end do
-        end do
-        !$omp end parallel do
+            !$omp end parallel do
+
+        case (2)
+            !$omp parallel do collapse(3) schedule(static) if(use_parallel) &
+            !$omp& private(i,j,k,neighbour_sum,integrated_residual)
+            do k = 1, this%level(level_index)%nz
+                do j = 1, this%level(level_index)%ny
+                    do i = 1, this%level(level_index)%nx
+                        if (.not. this%level(level_index)%active(i,j,k)) cycle
+
+                        if (this%level(level_index)%regular_interior(i,j,k)) then
+                            neighbour_sum = &
+                                this%level(level_index)%conductance_x(i,j,k)*this%level(level_index)%x(i-1,j,k) + &
+                                this%level(level_index)%conductance_x(i+1,j,k)*this%level(level_index)%x(i+1,j,k)
+                            neighbour_sum = neighbour_sum + &
+                                this%level(level_index)%conductance_y(i,j,k)*this%level(level_index)%x(i,j-1,k) + &
+                                this%level(level_index)%conductance_y(i,j+1,k)*this%level(level_index)%x(i,j+1,k)
+                        else
+                            neighbour_sum = preassembled_neighbour_sum(this%level(level_index), i, j, k)
+                        end if
+
+                        integrated_residual = &
+                            this%level(level_index)%rhs(i,j,k)*this%level(level_index)%volume(i,j,k) + &
+                            this%level(level_index)%boundary_source(i,j,k) + neighbour_sum - &
+                            this%level(level_index)%diagonal(i,j,k)*this%level(level_index)%x(i,j,k)
+                        this%level(level_index)%residual(i,j,k) = &
+                            integrated_residual/this%level(level_index)%volume(i,j,k)
+                    end do
+                end do
+            end do
+            !$omp end parallel do
+
+        case (3)
+            !$omp parallel do collapse(3) schedule(static) if(use_parallel) &
+            !$omp& private(i,j,k,neighbour_sum,integrated_residual)
+            do k = 1, this%level(level_index)%nz
+                do j = 1, this%level(level_index)%ny
+                    do i = 1, this%level(level_index)%nx
+                        if (.not. this%level(level_index)%active(i,j,k)) cycle
+
+                        if (this%level(level_index)%regular_interior(i,j,k)) then
+                            neighbour_sum = &
+                                this%level(level_index)%conductance_x(i,j,k)*this%level(level_index)%x(i-1,j,k) + &
+                                this%level(level_index)%conductance_x(i+1,j,k)*this%level(level_index)%x(i+1,j,k)
+                            neighbour_sum = neighbour_sum + &
+                                this%level(level_index)%conductance_y(i,j,k)*this%level(level_index)%x(i,j-1,k) + &
+                                this%level(level_index)%conductance_y(i,j+1,k)*this%level(level_index)%x(i,j+1,k)
+                            neighbour_sum = neighbour_sum + &
+                                this%level(level_index)%conductance_z(i,j,k)*this%level(level_index)%x(i,j,k-1) + &
+                                this%level(level_index)%conductance_z(i,j,k+1)*this%level(level_index)%x(i,j,k+1)
+                        else
+                            neighbour_sum = preassembled_neighbour_sum(this%level(level_index), i, j, k)
+                        end if
+
+                        integrated_residual = &
+                            this%level(level_index)%rhs(i,j,k)*this%level(level_index)%volume(i,j,k) + &
+                            this%level(level_index)%boundary_source(i,j,k) + neighbour_sum - &
+                            this%level(level_index)%diagonal(i,j,k)*this%level(level_index)%x(i,j,k)
+                        this%level(level_index)%residual(i,j,k) = &
+                            integrated_residual/this%level(level_index)%volume(i,j,k)
+                    end do
+                end do
+            end do
+            !$omp end parallel do
+
+        case default
+            error stop 'Elliptic solver: unsupported dimensionality in calculate_residual'
+        end select
     end subroutine calculate_residual
 
 
-    !> Assemble the diagonal, active-neighbour term, and imposed boundary source.
-    subroutine stencil_terms(level, i, j, k, diagonal, neighbour_sum, imposed_source)
+    !> Evaluate only the solution-dependent neighbour part of the cached operator.
+    real(dp) function preassembled_neighbour_sum(level, i, j, k) result(neighbour_sum)
         type(multigrid_level), intent(in) :: level
         integer, intent(in) :: i, j, k
-        real(dp), intent(out) :: diagonal, neighbour_sum, imposed_source
 
-        diagonal = 0.0_dp
         neighbour_sum = 0.0_dp
-        imposed_source = 0.0_dp
 
-        call add_face(i-1, j, k, level%conductance_x(i,j,k), &
-            level%boundary%type_x(i,j,k), level%boundary%value_x(i,j,k))
-        call add_face(i+1, j, k, level%conductance_x(i+1,j,k), &
-            level%boundary%type_x(i+1,j,k), level%boundary%value_x(i+1,j,k))
+        if (level%regular_interior(i,j,k)) then
+            neighbour_sum = level%conductance_x(i,j,k)*level%x(i-1,j,k) + &
+                level%conductance_x(i+1,j,k)*level%x(i+1,j,k)
+            if (level%dimensions >= 2) then
+                neighbour_sum = neighbour_sum + &
+                    level%conductance_y(i,j,k)*level%x(i,j-1,k) + &
+                    level%conductance_y(i,j+1,k)*level%x(i,j+1,k)
+            end if
+            if (level%dimensions >= 3) then
+                neighbour_sum = neighbour_sum + &
+                    level%conductance_z(i,j,k)*level%x(i,j,k-1) + &
+                    level%conductance_z(i,j,k+1)*level%x(i,j,k+1)
+            end if
+            return
+        end if
+
+        if (i > 1) then
+            if (level%active(i-1,j,k)) neighbour_sum = neighbour_sum + &
+                level%conductance_x(i,j,k)*level%x(i-1,j,k)
+        end if
+        if (i < level%nx) then
+            if (level%active(i+1,j,k)) neighbour_sum = neighbour_sum + &
+                level%conductance_x(i+1,j,k)*level%x(i+1,j,k)
+        end if
 
         if (level%dimensions >= 2) then
-            call add_face(i, j-1, k, level%conductance_y(i,j,k), &
-                level%boundary%type_y(i,j,k), level%boundary%value_y(i,j,k))
-            call add_face(i, j+1, k, level%conductance_y(i,j+1,k), &
-                level%boundary%type_y(i,j+1,k), level%boundary%value_y(i,j+1,k))
+            if (j > 1) then
+                if (level%active(i,j-1,k)) neighbour_sum = neighbour_sum + &
+                    level%conductance_y(i,j,k)*level%x(i,j-1,k)
+            end if
+            if (j < level%ny) then
+                if (level%active(i,j+1,k)) neighbour_sum = neighbour_sum + &
+                    level%conductance_y(i,j+1,k)*level%x(i,j+1,k)
+            end if
         end if
 
         if (level%dimensions >= 3) then
-            call add_face(i, j, k-1, level%conductance_z(i,j,k), &
-                level%boundary%type_z(i,j,k), level%boundary%value_z(i,j,k))
-            call add_face(i, j, k+1, level%conductance_z(i,j,k+1), &
-                level%boundary%type_z(i,j,k+1), level%boundary%value_z(i,j,k+1))
-        end if
-
-    contains
-
-        subroutine add_face(neighbour_i, neighbour_j, neighbour_k, conductance, &
-            boundary_type, boundary_value)
-
-            integer, intent(in) :: neighbour_i, neighbour_j, neighbour_k, boundary_type
-            real(dp), intent(in) :: conductance, boundary_value
-            logical :: neighbour_is_active
-
-            neighbour_is_active = neighbour_i >= 1 .and. neighbour_i <= level%nx .and. &
-                neighbour_j >= 1 .and. neighbour_j <= level%ny .and. &
-                neighbour_k >= 1 .and. neighbour_k <= level%nz
-            if (neighbour_is_active) &
-                neighbour_is_active = level%active(neighbour_i,neighbour_j,neighbour_k)
-
-            if (neighbour_is_active) then
-                diagonal = diagonal + conductance
-                neighbour_sum = neighbour_sum + &
-                    conductance*level%x(neighbour_i,neighbour_j,neighbour_k)
-            else
-                call add_boundary_terms(conductance, boundary_type, boundary_value, &
-                    diagonal, imposed_source)
+            if (k > 1) then
+                if (level%active(i,j,k-1)) neighbour_sum = neighbour_sum + &
+                    level%conductance_z(i,j,k)*level%x(i,j,k-1)
             end if
-        end subroutine add_face
-
-    end subroutine stencil_terms
+            if (k < level%nz) then
+                if (level%active(i,j,k+1)) neighbour_sum = neighbour_sum + &
+                    level%conductance_z(i,j,k+1)*level%x(i,j,k+1)
+            end if
+        end if
+    end function preassembled_neighbour_sum
 
 
     !> Add one Dirichlet or Neumann contribution to a cell equation.
@@ -898,6 +1270,7 @@ contains
 
         this%level(level_index+1)%rhs = 0.0_dp
         !$omp parallel do collapse(3) schedule(static) &
+        !$omp& if(this%level(level_index+1)%active_cells >= this%minimum_parallel_cells) &
         !$omp& private(i,j,k,fine_i,fine_j,fine_k,ii,jj,kk,integrated_residual,active_volume)
         do k = 1, this%level(level_index+1)%nz
             do j = 1, this%level(level_index+1)%ny
@@ -941,6 +1314,7 @@ contains
         real(dp) :: center_value, correction
 
         !$omp parallel do collapse(3) schedule(static) &
+        !$omp& if(this%level(level_index)%active_cells >= this%minimum_parallel_cells) &
         !$omp& private(i,j,k,coarse_i,coarse_j,coarse_k,x_direction,y_direction,z_direction, &
         !$omp& center_value,correction)
         do k = 1, this%level(level_index)%nz
@@ -1083,17 +1457,16 @@ contains
         type(multigrid_level), intent(in) :: level
 
         integer :: i, j, k
-        real(dp) :: diagonal, neighbour_sum, imposed_source, local_forcing
+        real(dp) :: local_forcing
 
         norm = 0.0_dp
         do k = 1, level%nz
             do j = 1, level%ny
                 do i = 1, level%nx
                     if (.not. level%active(i,j,k)) cycle
-                    call stencil_terms(level, i, j, k, diagonal, neighbour_sum, imposed_source)
-                    ! Remove the current-solution neighbour term: only rhs and
-                    ! prescribed boundary data define the convergence scale.
-                    local_forcing = abs(level%rhs(i,j,k) + imposed_source/level%volume(i,j,k))
+                    ! Only rhs and prescribed boundary data define the convergence scale.
+                    local_forcing = abs(level%rhs(i,j,k) + &
+                        level%boundary_source(i,j,k)/level%volume(i,j,k))
                     norm = max(norm, local_forcing)
                 end do
             end do
@@ -1271,6 +1644,8 @@ contains
             error stop 'Elliptic solver: coarse smoothing count must be positive'
         if (this%maximum_cycles < 1) &
             error stop 'Elliptic solver: maximum cycle count must be positive'
+        if (this%minimum_parallel_cells < 1) &
+            error stop 'Elliptic solver: minimum parallel cell count must be positive'
         if (this%relative_tolerance < 0.0_dp .or. this%absolute_tolerance < 0.0_dp) &
             error stop 'Elliptic solver: tolerances must be non-negative'
     end subroutine validate_solver_controls
@@ -1293,6 +1668,29 @@ contains
         ny = size(rhs,2)
         nz = size(rhs,3)
 
+        if (any(shape(solution) /= shape(rhs)) .or. any(shape(active) /= shape(rhs))) &
+            error stop 'Elliptic solver: incompatible cell-array shapes'
+        call validate_operator_data(conductance_x, conductance_y, conductance_z, cell_volume, &
+            active, boundary, dimensions)
+        if (.not. all(ieee_is_finite(solution)) .or. .not. all(ieee_is_finite(rhs))) &
+            error stop 'Elliptic solver: non-finite cell data'
+    end subroutine validate_problem
+
+
+    !> Validate operator data independently of any particular RHS/solution.
+    subroutine validate_operator_data(conductance_x, conductance_y, conductance_z, cell_volume, &
+        active, boundary, dimensions)
+        real(dp), intent(in) :: conductance_x(:,:,:), conductance_y(:,:,:), conductance_z(:,:,:)
+        real(dp), intent(in) :: cell_volume(:,:,:)
+        logical, intent(in) :: active(:,:,:)
+        type(elliptic_boundary_data), intent(in) :: boundary
+        integer, intent(in) :: dimensions
+
+        integer :: nx, ny, nz
+
+        nx = size(active,1)
+        ny = size(active,2)
+        nz = size(active,3)
         if (dimensions < 1 .or. dimensions > 3) &
             error stop 'Elliptic solver: dimensions must be 1, 2 or 3'
         if (dimensions == 1 .and. (ny /= 1 .or. nz /= 1)) &
@@ -1301,10 +1699,8 @@ contains
             error stop 'Elliptic solver: a 2-D problem requires nz=1'
         if (.not. any(active)) &
             error stop 'Elliptic solver: the domain contains no active cells'
-
-        if (any(shape(solution) /= shape(rhs)) .or. &
-            any(shape(cell_volume) /= shape(rhs)) .or. any(shape(active) /= shape(rhs))) &
-            error stop 'Elliptic solver: incompatible cell-array shapes'
+        if (any(shape(cell_volume) /= shape(active))) &
+            error stop 'Elliptic solver: incompatible operator cell-array shapes'
         if (any(shape(conductance_x) /= [nx+1,ny,nz])) &
             error stop 'Elliptic solver: invalid x-face conductance shape'
         if (any(shape(conductance_y) /= [nx,ny+1,nz])) &
@@ -1314,21 +1710,18 @@ contains
 
         call validate_boundary_shapes(boundary, nx, ny, nz)
         call validate_boundary_types(boundary, dimensions)
-
         if (any(cell_volume <= 0.0_dp .and. active)) &
             error stop 'Elliptic solver: non-positive active-cell volume'
         if (any(conductance_x < 0.0_dp) .or. any(conductance_y < 0.0_dp) .or. &
             any(conductance_z < 0.0_dp)) &
             error stop 'Elliptic solver: negative face conductance'
-
-        if (.not. all(ieee_is_finite(solution)) .or. .not. all(ieee_is_finite(rhs)) .or. &
-            .not. all(ieee_is_finite(cell_volume))) &
-            error stop 'Elliptic solver: non-finite cell data'
+        if (.not. all(ieee_is_finite(cell_volume))) &
+            error stop 'Elliptic solver: non-finite cell-volume data'
         if (.not. all(ieee_is_finite(conductance_x)) .or. &
             .not. all(ieee_is_finite(conductance_y)) .or. &
             .not. all(ieee_is_finite(conductance_z))) &
             error stop 'Elliptic solver: non-finite conductance data'
-    end subroutine validate_problem
+    end subroutine validate_operator_data
 
 
     !> Check allocation and exact shapes of all boundary arrays.
