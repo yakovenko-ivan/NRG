@@ -276,7 +276,7 @@ program computing_module
 				time_step			= problem_fds_solver%get_time_step()					
 		end select
 		
-		if ((mod(iter-1,1) == 0).and.(processor_rank == 0)) then
+		if ((mod(iter-1,100) == 0).and.(processor_rank == 0)) then
 			print *, ' Calculation time : ', calculation_time
 			print *, ' Current time step : ', time_step
 			print *, ' Amount of iterations : ', iter

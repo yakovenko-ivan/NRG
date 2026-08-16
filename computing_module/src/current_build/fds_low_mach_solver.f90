@@ -91,7 +91,7 @@ module fds_low_mach_solver_class
 
         ! Lightweight pressure-solver profiling.  One CSV row is emitted for
         ! each predictor/corrector projection call when enabled.
-        logical :: pressure_profiling_enabled = .true.
+        logical :: pressure_profiling_enabled = .false.
         integer :: pressure_profile_unit = 0
 
         ! FDS-only defect-correction smoothing around the shared multigrid solve.
@@ -308,7 +308,7 @@ contains
         end if
 
         if (constructor%diffusion_flag) then
-            constructor%diff_solver            = diffusion_solver_c(manager)
+            constructor%diff_solver            = diffusion_solver_c(manager, soret_enabled = manager%solver_options%get_soret_diffusion_flag())
             call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'energy_production_diffusion')
             constructor%E_f_prod_diff%s_ptr            => scal_ptr%s_ptr
             call manager%get_cons_field_pointer_by_name(scal_ptr,vect_ptr,tens_ptr,'specie_production_diffusion')

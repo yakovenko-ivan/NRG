@@ -232,7 +232,7 @@ contains
         end if
 
         if (constructor%diffusion_flag) then
-            constructor%diff_solver = diffusion_solver_c(manager)
+            constructor%diff_solver = diffusion_solver_c(manager, soret_enabled = manager%solver_options%get_soret_diffusion_flag())
             call manager%get_cons_field_pointer_by_name(scal_c_ptr, vect_c_ptr, tens_c_ptr, &
                 'energy_production_diffusion')
             constructor%E_f_prod_diff%s_ptr => scal_c_ptr%s_ptr

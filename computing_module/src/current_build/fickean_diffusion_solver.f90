@@ -46,7 +46,7 @@ module fickean_diffusion_solver_class
         type(thermophysical_properties_pointer) :: thermophysics
         type(chemical_properties_pointer) :: chemistry
 
-        logical :: soret_enabled = .true.
+        logical :: soret_enabled = .false.
         integer, allocatable :: soret_species_indices(:)
         real(dp), allocatable :: soret_alpha(:)
         real(dp), allocatable :: reference_enthalpy_molar(:)
