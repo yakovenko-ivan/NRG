@@ -1,5 +1,7 @@
 module data_io_class
-	
+
+    use, intrinsic :: iso_fortran_env, only: error_unit, iostat_end
+
 	use kind_parameters
 	use global_data
 	use computational_domain_class
@@ -13,27 +15,30 @@ module data_io_class
 #endif
 
 	implicit none
-	
+
 	private
 	public	::	data_io, data_io_c	
-		
+
+    integer, parameter :: data_io_message_length = 512
+    integer, parameter :: data_io_line_length = 1024
+
 	type data_io
 		private
 		type(computational_domain)			:: domain
 		type(computational_mesh_pointer)	:: mesh
 		type(boundary_conditions_pointer)	:: boundaries
-		
+
 		type(field_scalar_cons_pointer)	,dimension(:)	,allocatable	:: scalar_io_fields
 		type(field_vector_cons_pointer)	,dimension(:)	,allocatable	:: vector_io_fields
 		type(field_tensor_cons_pointer)	,dimension(:)	,allocatable	:: tensor_io_fields
-	
+
 		type(field_scalar_flow_pointer)	,dimension(:)	,allocatable	:: scalar_flow_io_fields
 		type(field_vector_flow_pointer)	,dimension(:)	,allocatable	:: vector_flow_io_fields
 
 		character(len=35)			,dimension(:)		,allocatable	:: scalar_io_fields_names
 		character(len=35)			,dimension(:)		,allocatable	:: vector_io_fields_names
 		character(len=35)			,dimension(:)		,allocatable	:: tensor_io_fields_names
-		
+
 		character(len=35)			,dimension(:)		,allocatable	:: scalar_flow_io_fields_names
 		character(len=35)			,dimension(:)		,allocatable	:: vector_flow_io_fields_names		
 
@@ -43,15 +48,15 @@ module data_io_class
 		integer	,dimension(3,2)	:: io_cons_loop, io_cons_loop_max, io_flow_loop, io_flow_loop_max
 		integer	,dimension(3,2)	:: io_cons_buffer_bounds
 		integer	,dimension(3)	:: io_cons_buffer_size
-		
+
 		real(dp)			:: check_time
 		character(len=20)	:: check_time_units		
 		character(len=10)   :: check_time_units_abbreviation
 		real(sp)         :: check_time_coefficient		
-		
+
 		real(dp)			:: start_time
 		real(dp)			:: output_time
-		
+
 		integer				:: load_counter
 		character(len=20)	:: data_output_folder
 
@@ -64,7 +69,7 @@ module data_io_class
 		procedure	,private	:: read_properties
 		procedure	,private	:: write_properties
 		procedure	,private	:: set_properties
-		
+
 		! Setters
 		procedure	:: set_start_time
 		procedure	:: add_io_scalar_cons_field
@@ -104,12 +109,12 @@ module data_io_class
 		procedure	:: write_load_counter	
 
 	end type
-	
+
 	interface data_io_c
 		module procedure constructor
 		module procedure constructor_file
 	end interface
-	
+
 contains
 
 	type(data_io)	function constructor(manager,check_time,check_time_units,output_time,data_output_folder,io_fields_names)
@@ -119,111 +124,219 @@ contains
 		real(dp)							,intent(in), optional	:: output_time
 		character(len=*)					,intent(in)	            :: data_output_folder
 		character(len=35)	,dimension(:)	,intent(in)	,optional	:: io_fields_names
-					
+
         real(dp)            :: output_time_set
 		character(len=10)	:: field_type
 		integer	:: load_counter, fields_counter
-		integer	:: io_unit
-				
+		integer :: io_unit, io_status
+        character(len=data_io_message_length) :: io_message
 		load_counter = 0
-		
+
         if(present(output_time)) then
             output_time_set = output_time
         else
             output_time_set = 365*24*60 !# 1 year computing time if not explicitly specified
         end if
-        
+
 		if(present(io_fields_names)) then
 			call constructor%set_properties(manager,check_time,check_time_units,output_time_set,data_output_folder,load_counter,io_fields_names)
 		else
 			call constructor%set_properties(manager,check_time,check_time_units,output_time_set,data_output_folder,load_counter)
         end if
-        
-        
-            
-            
-		
-		open(newunit = io_unit, file = data_io_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
+
+
+
+
+
+		open(newunit = io_unit, file = data_io_data_file_name, &
+            status = 'replace', form = 'formatted', action = 'write', &
+            delim = 'quote', iostat = io_status, iomsg = io_message)
+        if (io_status /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: unable to create setup file: '// &
+                trim(data_io_data_file_name)
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO setup-file write failure'
+        end if
 		call constructor%write_properties(io_unit)
 		close(io_unit)
 
 	end function 
-	
+
 	type(data_io) function constructor_file(manager,calculation_time)
 		type(data_manager)			,intent(in)		:: manager
 		real(dp)					,intent(out)	:: calculation_time
-		
-		integer	:: io_unit
-		
-		open(newunit = io_unit, file = data_io_data_file_name, status = 'old', form = 'formatted', delim = 'quote')
-		call constructor_file%read_properties(manager,io_unit,calculation_time)
-		close(io_unit)	
 
+		integer :: io_unit, io_status
+        logical :: file_exists
+        character(len=data_io_message_length) :: io_message
+
+        inquire(file = data_io_data_file_name, exist = file_exists)
+        if (.not. file_exists) then
+            write(error_unit,'(A)') &
+                'Data IO: setup file does not exist: '// &
+                trim(data_io_data_file_name)
+            error stop 'Data IO setup file not found'
+        end if
+
+		open(newunit = io_unit, file = data_io_data_file_name, &
+            status = 'old', form = 'formatted', action = 'read', &
+            delim = 'quote', iostat = io_status, iomsg = io_message)
+
+        if (io_status /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: unable to open setup file: '// &
+                trim(data_io_data_file_name)
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO setup-file open failure'
+        end if
+
+		call constructor_file%read_properties(manager,io_unit,calculation_time)
+		close(io_unit)
 	end function
-	
+
 	subroutine read_properties(this,manager,data_io_file_unit,calculation_time)
 		class(data_io)		,intent(inout)	:: this
 		type(data_manager)	,intent(in)		:: manager
 		integer				,intent(in)		:: data_io_file_unit
 		real(dp)			,intent(out)	:: calculation_time
 		character(len=35)	,dimension(:)	,allocatable	:: io_fields_names
-		
+
 		integer				:: io_fields_number
 		real(dp)			:: check_time
 		character(len=20)	:: check_time_units
 		real(dp)			:: output_time
-		character(len=20)	:: data_output_folder		
-		integer				:: load_counter	
+		character(len=20)	:: data_output_folder
+		integer				:: load_counter
 		integer				:: ierr
-		
-		namelist /data_io_parameters/ io_fields_number, check_time,check_time_units, output_time, data_output_folder	
+        character(len=data_io_message_length) :: io_message
+
+		namelist /data_io_parameters/ io_fields_number, check_time, &
+            check_time_units, output_time, data_output_folder
 		namelist /io_fields/ io_fields_names
 		namelist /data_io_load_counter/ load_counter, calculation_time
-		
-		read(unit = data_io_file_unit, nml = data_io_parameters)
+
+        ! Explicit initialization prevents Release builds from depending on
+        ! undefined stack contents if a namelist read is incomplete.
+        io_fields_number   = -1
+        check_time         = -1.0_dp
+        check_time_units   = ''
+        output_time        = -1.0_dp
+        data_output_folder = ''
+        load_counter       = 0
+        calculation_time   = 0.0_dp
+
+		read(unit = data_io_file_unit, nml = data_io_parameters, &
+            iostat = ierr, iomsg = io_message)
+
+        if (ierr /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: failed to read /data_io_parameters/ from '// &
+                trim(data_io_data_file_name)
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO parameters namelist read failure'
+        end if
+
+        if (io_fields_number < 0) then
+            error stop 'Data IO: invalid negative io_fields_number'
+        end if
+        if (check_time <= 0.0_dp) then
+            error stop 'Data IO: check_time must be positive'
+        end if
+        if (output_time <= 0.0_dp) then
+            error stop 'Data IO: output_time must be positive'
+        end if
+        if (len_trim(check_time_units) == 0) then
+            error stop 'Data IO: check_time_units is empty'
+        end if
+        if (len_trim(data_output_folder) == 0) then
+            error stop 'Data IO: data_output_folder is empty'
+        end if
+
 		allocate(io_fields_names(io_fields_number))
-		read(unit = data_io_file_unit, nml = io_fields)
-		read(unit = data_io_file_unit, nml = data_io_load_counter, iostat = ierr)
-		if(ierr /= 0) then
+        if (io_fields_number > 0) io_fields_names = ''
+
+		read(unit = data_io_file_unit, nml = io_fields, &
+            iostat = ierr, iomsg = io_message)
+
+        if (ierr /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: failed to read /io_fields/ from '// &
+                trim(data_io_data_file_name)
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO fields namelist read failure'
+        end if
+
+        ! This group is not present in a freshly generated setup file, so EOF
+        ! here is a normal "no checkpoint yet" condition.
+		read(unit = data_io_file_unit, nml = data_io_load_counter, &
+            iostat = ierr, iomsg = io_message)
+
+		if (ierr == iostat_end) then
 			load_counter = 0
 			calculation_time = 0.0_dp
+        else if (ierr /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: malformed /data_io_load_counter/ in '// &
+                trim(data_io_data_file_name)
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO load-counter namelist read failure'
 		end if
-		
-		call this%set_properties(manager,check_time,check_time_units,output_time,data_output_folder,load_counter,io_fields_names)	
-		call this%commit_mpi_io_datatype()	
+
+		call this%set_properties(manager,check_time,check_time_units, &
+            output_time,data_output_folder,load_counter,io_fields_names)
+		call this%commit_mpi_io_datatype()
 	end subroutine
-	
+
 	subroutine write_properties(this,data_io_file_unit)
 		class(data_io)		,intent(in)	:: this
 		integer				,intent(in)	:: data_io_file_unit		
-	
+
 		character(len=35)	,dimension(:)	,allocatable	:: io_fields_names
-		
+
 		integer				:: io_fields_number
+		integer             :: fields_counter
 		real(dp)			:: check_time
 		character(len=20)	:: check_time_units		
-		real(sp)			:: output_time
+		real(dp)			:: output_time
 		character(len=20)	:: data_output_folder		
-		integer				:: load_counter	
-		real(dp)			:: calculation_time = 0.0_dp
-		
-		namelist /data_io_parameters/ io_fields_number, check_time,check_time_units, output_time, data_output_folder	
-		namelist /io_fields/ io_fields_names
-		
-		io_fields_number	= size(this%scalar_io_fields_names) + size(this%vector_io_fields_names) + size(this%tensor_io_fields_names)
+
+		namelist /data_io_parameters/ io_fields_number, check_time, &
+			check_time_units, output_time, data_output_folder
+
+		io_fields_number	= size(this%scalar_io_fields_names) + &
+			size(this%vector_io_fields_names) + &
+			size(this%tensor_io_fields_names)
 		check_time			= this%check_time
 		check_time_units	= this%check_time_units
 		output_time			= this%output_time
 		data_output_folder	= this%data_output_folder
-		
+
 		allocate(io_fields_names(io_fields_number))
-		io_fields_names = [this%scalar_io_fields_names,this%vector_io_fields_names,this%tensor_io_fields_names]
+		io_fields_names = [this%scalar_io_fields_names, &
+			this%vector_io_fields_names, this%tensor_io_fields_names]
 
 		write(unit = data_io_file_unit, nml = data_io_parameters)
-		write(unit = data_io_file_unit, nml = io_fields)
+
+		! Avoid compiler-generated namelist wrapping of CHARACTER arrays.
+		! Intel may split a quoted field name at the formatted-record width
+		! (approximately 132 columns), creating a file that Debug can accept
+		! while Release fails with EOF during namelist input.
+		!
+		! One array element per physical record is valid namelist syntax and
+		! keeps every quoted string entirely on one line.
+		write(data_io_file_unit,'(A)') ' &IO_FIELDS'
+
+		do fields_counter = 1, io_fields_number
+			write(data_io_file_unit,'(A,I0,A,A,A)') &
+				' IO_FIELDS_NAMES(', fields_counter, ') = "', &
+				trim(io_fields_names(fields_counter)), '"'
+		end do
+
+		write(data_io_file_unit,'(A)') ' /'
 
 	end subroutine
-	
+
 	subroutine set_properties(this,manager,check_time,check_time_units,output_time,data_output_folder,load_counter,io_fields_names)
 		class(data_io)		,intent(inout)	:: this
 		type(data_manager)	,intent(in)		:: manager
@@ -240,11 +353,11 @@ contains
 		type(field_scalar_cons_pointer)	:: scal_ptr
 		type(field_vector_cons_pointer)	:: vect_ptr
 		type(field_tensor_cons_pointer)	:: tens_ptr		
-		
+
 		character(len=10)	:: field_type
-		integer	:: scalar_fields = 0
-		integer	:: vector_fields = 0
-		integer	:: tensor_fields = 0
+		integer	:: scalar_fields
+		integer	:: vector_fields
+		integer	:: tensor_fields
 
 		integer	,dimension(3,2)	:: cons_allocation_bounds, flow_allocation_bounds
 		integer	,dimension(3,2)	:: utter_loop
@@ -255,16 +368,22 @@ contains
 		integer	:: fields_counter
 		integer	:: dimensions, dim
 
+        ! Reset these locals on every call; declaration-time initialization
+        ! would give them implicit SAVE semantics.
+        scalar_fields = 0
+        vector_fields = 0
+        tensor_fields = 0
+
 		this%check_time			= check_time
 		this%check_time_units	= check_time_units
 		this%output_time		= output_time
 		this%data_output_folder = data_output_folder
 		this%load_counter		= load_counter
 		this%domain				= manager%domain
-		
+
 		this%mesh 				= manager%computational_mesh_pointer
 		this%boundaries			= manager%boundary_conditions_pointer		
-		
+
 		cons_allocation_bounds	= this%domain%get_local_utter_cells_bounds()
 		flow_allocation_bounds	= this%domain%get_local_utter_faces_bounds()
 
@@ -275,7 +394,7 @@ contains
 		allocate(this%io_flow_buffer(	flow_allocation_bounds(1,1):flow_allocation_bounds(1,2), &
 										flow_allocation_bounds(2,1):flow_allocation_bounds(2,2), &
 										flow_allocation_bounds(3,1):flow_allocation_bounds(3,2)))									
-									
+
 		select case(this%check_time_units)
 			 case('milliseconds')
 				  this%check_time_units_abbreviation = 'ms'
@@ -287,7 +406,7 @@ contains
 				  this%check_time_units_abbreviation = 'ns'
 				  this%check_time_coefficient        = 1e+09_dp
 		end select									
-									
+
 		if(present(io_fields_names)) then
 			do fields_counter = 1,size(io_fields_names)
 				field_type = manager%get_field_type_by_name(io_fields_names(fields_counter))
@@ -328,18 +447,18 @@ contains
 				end if				
 			end do			
 		else
-			
+
 			scalar_fields = manager%get_number_of_cons_scalar_fields()
 			vector_fields = manager%get_number_of_cons_vector_fields()
 			tensor_fields = manager%get_number_of_cons_tensor_fields()
-			
+
 			allocate(this%scalar_io_fields(scalar_fields))
 			allocate(this%vector_io_fields(vector_fields))
 			allocate(this%tensor_io_fields(tensor_fields))
 			allocate(this%scalar_io_fields_names(scalar_fields))
 			allocate(this%vector_io_fields_names(vector_fields))
 			allocate(this%tensor_io_fields_names(tensor_fields))
-			
+
 			do fields_counter = 1, scalar_fields
 				call manager%get_cons_field_pointer_by_number(scal_ptr,vect_ptr,tens_ptr,'scalar',fields_counter)
 				this%scalar_io_fields(fields_counter)%s_ptr => scal_ptr%s_ptr
@@ -388,31 +507,31 @@ contains
 			if((grid_coord(dim) /= 0).and.(grid_coord(dim) /= grid_size(dim)-1)) then	
 				this%io_cons_loop(dim,1) 			= utter_loop(dim,1) + 1
 				this%io_cons_loop(dim,2)			= utter_loop(dim,2) - 1
-				this%io_cons_buffer_size(dim)  		= local_cells_number(dim) - 2				
+				this%io_cons_buffer_size(dim)  	= local_cells_number(dim) - 2				
 				this%io_cons_buffer_bounds(dim,1)	= 1
 				this%io_cons_buffer_bounds(dim,2)	= local_cells_number(dim) - 2 				
 			end if	
 			if((grid_coord(dim) == 0).and.(grid_coord(dim) == grid_size(dim)-1)) then			
 				this%io_cons_loop(dim,1) 			= utter_loop(dim,1)
 				this%io_cons_loop(dim,2)			= utter_loop(dim,2)
-				this%io_cons_buffer_size(dim)  		= local_cells_number(dim)
+				this%io_cons_buffer_size(dim)  	= local_cells_number(dim)
 				this%io_cons_buffer_bounds(dim,1)	= 0
 				this%io_cons_buffer_bounds(dim,2)	= local_cells_number(dim) - 1 				
 			end if
 		end do
 
 		processor_rank = this%domain%get_processor_rank()
-		
+
 		if (processor_rank == 0) then
 			system_command = 'mkdir ' // trim(data_output_folder)
 			call system(system_command)
 		end if
 
 	end subroutine
-	
+
 	subroutine set_start_time(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer	:: c(8)
 		integer	:: day,h,m,s,t
 
@@ -431,7 +550,7 @@ contains
 		m=c(6)
 		s=c(7)
 		t=c(8)
-		
+
 		this%start_time = ((day*24+h)*60+m)
 
 		if (processor_rank == 0) then
@@ -440,11 +559,11 @@ contains
 		end if
 
 	end subroutine
-	
+
 	subroutine write_log(this,log_unit)
 		class(data_io)	,intent(in)	:: this
 		integer			,intent(in)	:: log_unit
-		
+
 		write(log_unit,'(A)')	'************************************************************************************* '	
 		write(log_unit,'(A)')			' Data output setup:'
 		write(log_unit,'(A,E14.7,A)')	' Data output time (minutes): ', this%output_time
@@ -452,30 +571,125 @@ contains
 		write(log_unit,'(A,E14.7,A)')	' Check time: ', this%check_time, this%check_time_units_abbreviation 
 		write(log_unit,'(A)')	'************************************************************************************* '
 	end subroutine
-	
+
 	subroutine write_load_counter(this,calculation_time)
 		class(data_io)	,intent(in)	:: this
 		real(dp)		,intent(in)	:: calculation_time
-		
-		integer	:: load_counter
-		
-		integer	:: io_unit
-		
+
+		integer :: load_counter
+		integer :: io_unit
+        integer :: io_status, line_count, line_index
+        character(len=data_io_line_length) :: line
+        character(len=data_io_line_length), allocatable :: preserved_lines(:)
+        character(len=data_io_message_length) :: io_message
+
 		namelist /data_io_load_counter/ load_counter,calculation_time
-		
+
 		load_counter = this%load_counter
-		
-		open(newunit = io_unit, file = data_io_data_file_name, status = 'old', form = 'formatted', position = 'append')
-		if (load_counter /= 1) then
-			backspace(io_unit)
-			backspace(io_unit)
-			backspace(io_unit)
-			backspace(io_unit)
-		end if
+
+        ! Namelist physical-record layout is compiler/runtime dependent.  Do
+        ! not try to overwrite the previous group with a fixed number of
+        ! BACKSPACE operations.  Preserve everything before an existing
+        ! /data_io_load_counter/ group and then write one fresh group.
+        open(newunit = io_unit, file = data_io_data_file_name, &
+            status = 'old', form = 'formatted', action = 'read', &
+            iostat = io_status, iomsg = io_message)
+
+        if (io_status /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: unable to open setup file while updating checkpoint.'
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO checkpoint setup-file open failure'
+        end if
+
+        line_count = 0
+
+        do
+            read(io_unit,'(A)',iostat=io_status,iomsg=io_message) line
+
+            if (io_status == iostat_end) exit
+
+            if (io_status /= 0) then
+                write(error_unit,'(A)') &
+                    'Data IO: failed while scanning checkpoint metadata.'
+                write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+                error stop 'Data IO checkpoint metadata scan failure'
+            end if
+
+            if (is_load_counter_group_start(line)) exit
+            line_count = line_count + 1
+        end do
+
+        rewind(io_unit)
+        allocate(preserved_lines(line_count))
+
+        do line_index = 1, line_count
+            read(io_unit,'(A)',iostat=io_status,iomsg=io_message) &
+                preserved_lines(line_index)
+
+            if (io_status /= 0) then
+                write(error_unit,'(A)') &
+                    'Data IO: failed while preserving setup metadata.'
+                write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+                error stop 'Data IO checkpoint metadata preserve failure'
+            end if
+        end do
+
+        close(io_unit)
+
+        open(newunit = io_unit, file = data_io_data_file_name, &
+            status = 'replace', form = 'formatted', action = 'write', &
+            delim = 'quote', iostat = io_status, iomsg = io_message)
+
+        if (io_status /= 0) then
+            write(error_unit,'(A)') &
+                'Data IO: unable to rewrite setup file with checkpoint metadata.'
+            write(error_unit,'(A)') 'I/O message: '//trim(io_message)
+            error stop 'Data IO checkpoint metadata write failure'
+        end if
+
+        do line_index = 1, line_count
+            write(io_unit,'(A)') trim(preserved_lines(line_index))
+        end do
+
 		write(unit = io_unit, nml = data_io_load_counter)
 		close(io_unit)
+
+        if (allocated(preserved_lines)) deallocate(preserved_lines)
 	end subroutine
-	
+
+
+    pure logical function is_load_counter_group_start(line)
+        character(len=*), intent(in) :: line
+        character(len=len(line)) :: normalized
+
+        normalized = to_lower_ascii(adjustl(line))
+
+        is_load_counter_group_start = &
+            index(normalized,'&data_io_load_counter') == 1 .or. &
+            index(normalized,'$data_io_load_counter') == 1
+    end function is_load_counter_group_start
+
+
+    pure function to_lower_ascii(value) result(lowered)
+        character(len=*), intent(in) :: value
+        character(len=len(value)) :: lowered
+
+        integer :: character_index, character_code
+
+        lowered = value
+
+        do character_index = 1, len(value)
+            character_code = iachar(lowered(character_index:character_index))
+
+            if (character_code >= iachar('A') .and. &
+                character_code <= iachar('Z')) then
+                lowered(character_index:character_index) = &
+                    achar(character_code + iachar('a') - iachar('A'))
+            end if
+        end do
+    end function to_lower_ascii
+
 	subroutine write_restart_checkpoint(this,time)
 		class(data_io), intent(inout) :: this
 		real(dp), intent(in) :: time
@@ -495,7 +709,7 @@ contains
 		processor_rank = this%domain%get_processor_rank()
 		if (processor_rank == 0) call this%write_load_counter(time)
 	end subroutine write_restart_checkpoint
-	
+
 	subroutine output_all_data(this,time,stop_flag,make_output)
 		class(data_io)	,intent(inout)				:: this
 		real(dp)		,intent(in)					:: time
@@ -510,7 +724,7 @@ contains
 		real(dp)	:: current_time, output_time
 		integer		:: c(8)
 		integer		:: day,h,m,s,t
-	
+
 		integer		:: error
 
 		processor_rank = this%domain%get_processor_rank()
@@ -520,9 +734,9 @@ contains
 		if(present(make_output)) make_flag = make_output
 
 		if((time*this%check_time_coefficient >= this%check_time*check_counter).or.(make_flag)) then
-		
+
 			check_counter = check_counter + 1
-		
+
 #ifdef mpi
 			call MPI_BARRIER(MPI_COMM_WORLD,error)
 #endif	
@@ -534,18 +748,18 @@ contains
 			s=c(7)
 			t=c(8)
 			current_time = ((day*24+h)*60+m)
-			
+
 			if (processor_rank == 0) then
 !                print *, 'Current time = ', day, h, m, s, t
 				print *, 'Time left = ', this%start_time + this%output_time - current_time, ' min'
 			end if
 
 			if (((current_time - this%start_time) >= this%output_time).or.(make_flag)) then
-		
+
 				if (processor_rank == 0) then
 					print *, 'Performing data output.'
 					print *, 'Current time = ', day,'  ',h,':',m
-					
+
 					write(system_command,'(A,A,A,I3.3)') 'mkdir ', trim(this%data_output_folder), trim(fold_sep), this%load_counter
 					call system(system_command)	
 				end if			
@@ -576,15 +790,15 @@ contains
 					print *, 'Data output successfully finished.'
 					print *, 'Output lasts ', output_time ,' min'
 				end if	
-		
+
 			end if
 		end if
 
 	end subroutine
-	
+
 	subroutine output_fields(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: io_unit
 		character(len=100)	:: file_name
 		character(len=125)	:: system_command
@@ -603,9 +817,9 @@ contains
 		utter_loop		= this%domain%get_local_utter_cells_bounds()
 
 		inner_loop		= this%domain%get_local_inner_faces_bounds()
-		
+
 		dimensions		= this%domain%get_domain_dimensions()
-		
+
 		processor_rank = this%domain%get_processor_rank()
 
 		do fields_counter = 1,size(this%scalar_io_fields)
@@ -622,11 +836,11 @@ contains
 			open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 			this%io_cons_buffer = this%scalar_io_fields(fields_counter)%s_ptr%cells(:,:,:)
 			write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-															j = utter_loop(2,1),utter_loop(2,2)), &
-															k = utter_loop(3,1),utter_loop(3,2))
+													j = utter_loop(2,1),utter_loop(2,2)), &
+													k = utter_loop(3,1),utter_loop(3,2))
 			close(io_unit)
 		end do	
-		
+
 		do fields_counter = 1,size(this%vector_io_fields)
 #ifdef mpi		
 			if (processor_rank == 0) then
@@ -643,12 +857,12 @@ contains
 			do dim = 1, vector_projections_number
 				this%io_cons_buffer = this%vector_io_fields(fields_counter)%v_ptr%pr(dim)%cells(:,:,:)
 				write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-																j = utter_loop(2,1),utter_loop(2,2)), &
-																k = utter_loop(3,1),utter_loop(3,2))
+														j = utter_loop(2,1),utter_loop(2,2)), &
+														k = utter_loop(3,1),utter_loop(3,2))
 			end do
 			close(io_unit)
 		end do		
-	
+
 		do fields_counter = 1,size(this%tensor_io_fields)
 #ifdef mpi
 			if (processor_rank == 0) then
@@ -666,8 +880,8 @@ contains
 			do dim2 = 1, tensor_projections_number(2)
 				this%io_cons_buffer = this%tensor_io_fields(fields_counter)%t_ptr%pr(dim1,dim2)%cells(:,:,:)
 				write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-																j = utter_loop(2,1),utter_loop(2,2)), &
-																k = utter_loop(3,1),utter_loop(3,2))
+														j = utter_loop(2,1),utter_loop(2,2)), &
+														k = utter_loop(3,1),utter_loop(3,2))
 			end do
 			end do
 			close(io_unit)
@@ -686,13 +900,13 @@ contains
 				write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_flow_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 #endif				
 				open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
-				
+
 				do dim = 1,dimensions
 					this%io_flow_buffer = this%scalar_flow_io_fields(fields_counter)%s_ptr%cells(dim,:,:,:)
 
 					write(io_unit) (((this%io_flow_buffer(i,j,k),	i = inner_loop(1,1),inner_loop(1,2)), &
-																	j = inner_loop(2,1),inner_loop(2,2)), &
-																	k = inner_loop(3,1),inner_loop(3,2))
+															j = inner_loop(2,1),inner_loop(2,2)), &
+															k = inner_loop(3,1),inner_loop(3,2))
 				end do
 				close(io_unit)
 			end do
@@ -713,27 +927,27 @@ contains
 				open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 
 				vector_projections_number = this%vector_flow_io_fields(fields_counter)%v_ptr%get_projections_number_flow()
-				
+
 				do dim1 = 1, vector_projections_number
 				do dim2 = 1, dimensions
 					this%io_flow_buffer = this%vector_flow_io_fields(fields_counter)%v_ptr%pr(dim1)%cells(dim2,:,:,:)
 
 					write(io_unit) (((this%io_flow_buffer(i,j,k),	i = inner_loop(1,1),inner_loop(1,2)), &
-																	j = inner_loop(2,1),inner_loop(2,2)), &
-																	k = inner_loop(3,1),inner_loop(3,2))
+															j = inner_loop(2,1),inner_loop(2,2)), &
+															k = inner_loop(3,1),inner_loop(3,2))
 				end do
 				end do
 
 				close(io_unit)
 			end do
 		end if		
-		
-		
+
+
 	end subroutine
-	
+
 	subroutine output_mesh(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: io_unit
 		character(len=100)	:: file_name
 		character(len=125)	:: system_command
@@ -766,15 +980,15 @@ contains
 		do dim = 1, dimensions
 			this%io_cons_buffer = this%mesh%mesh_ptr%mesh(dim,:,:,:)
 			write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-															j = utter_loop(2,1),utter_loop(2,2)), &
-															k = utter_loop(3,1),utter_loop(3,2))
+													j = utter_loop(2,1),utter_loop(2,2)), &
+													k = utter_loop(3,1),utter_loop(3,2))
 		end do
 		close(io_unit)
 	end subroutine	
-	
+
 	subroutine output_bounds(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: io_unit
 		character(len=100)	:: file_name
 		character(len=125)	:: system_command
@@ -804,12 +1018,12 @@ contains
 		open(newunit = io_unit, file = file_name, status = 'replace', access='stream', form='unformatted')
 		this%io_cons_buffer = this%boundaries%bc_ptr%bc_markers(:,:,:)
 		write(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-														j = utter_loop(2,1),utter_loop(2,2)), &
-														k = utter_loop(3,1),utter_loop(3,2))
+												j = utter_loop(2,1),utter_loop(2,2)), &
+												k = utter_loop(3,1),utter_loop(3,2))
 
 		close(io_unit)
 	end subroutine	
-	
+
 	subroutine input_all_data(this)
 		class(data_io)	,intent(inout)	:: this
 
@@ -817,13 +1031,13 @@ contains
 		integer	:: io_unit, error
 
 		call this%set_start_time()		
-		
+
 		processor_rank = this%domain%get_processor_rank()
-		
+
 		if(processor_rank == 0) then
 			print *, 'Performing data input.'
 		end if
-		
+
 #ifdef mpi
 		call this%input_mesh_mpi()
 		call this%input_fields_mpi()
@@ -836,13 +1050,13 @@ contains
 
 		this%load_counter = this%load_counter + 1
 	end subroutine
-	
+
 	subroutine input_fields(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: io_unit
 		character(len=65)	:: file_name
-		
+
 		integer						:: dimensions
 		integer		,dimension(3,2)	:: utter_loop, inner_loop
 		integer						:: vector_projections_number
@@ -853,32 +1067,32 @@ contains
 		utter_loop	= this%domain%get_local_utter_cells_bounds()
 
 		inner_loop	= this%domain%get_local_inner_faces_bounds()
-		
+
 		dimensions	= this%domain%get_domain_dimensions()
-		
+
 		do fields_counter = 1,size(this%scalar_io_fields)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 			open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 			read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2))	, &
-															j = utter_loop(2,1),utter_loop(2,2)), &
-															k = utter_loop(3,1),utter_loop(3,2))
+													j = utter_loop(2,1),utter_loop(2,2)), &
+													k = utter_loop(3,1),utter_loop(3,2))
 			this%scalar_io_fields(fields_counter)%s_ptr%cells(:,:,:) = this%io_cons_buffer 
 			close(io_unit)
 		end do	
-		
+
 		do fields_counter = 1,size(this%vector_io_fields)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%vector_io_fields_names(fields_counter)) , trim(data_io_data_format)
 			open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 			vector_projections_number = this%vector_io_fields(fields_counter)%v_ptr%get_projections_number()
 			do dim = 1, vector_projections_number
 				read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-																j = utter_loop(2,1),utter_loop(2,2)), &
-																k = utter_loop(3,1),utter_loop(3,2))
+														j = utter_loop(2,1),utter_loop(2,2)), &
+														k = utter_loop(3,1),utter_loop(3,2))
 				this%vector_io_fields(fields_counter)%v_ptr%pr(dim)%cells(:,:,:) = this%io_cons_buffer
 			end do
 			close(io_unit)
 		end do		
-	
+
 		do fields_counter = 1,size(this%tensor_io_fields)
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%tensor_io_fields_names(fields_counter)) , trim(data_io_data_format)
 			open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
@@ -886,24 +1100,24 @@ contains
 			do dim1 = 1, tensor_projections_number(1)
 			do dim2 = 1, tensor_projections_number(2)
 				read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-																j = utter_loop(2,1),utter_loop(2,2)), &
-																k = utter_loop(3,1),utter_loop(3,2))
+														j = utter_loop(2,1),utter_loop(2,2)), &
+														k = utter_loop(3,1),utter_loop(3,2))
 				this%tensor_io_fields(fields_counter)%t_ptr%pr(dim1,dim2)%cells(:,:,:) = this%io_cons_buffer									
 			end do
 			end do
 			close(io_unit)
 		end do		
-		
+
 		if (allocated(this%scalar_flow_io_fields)) then
 			do fields_counter = 1,size(this%scalar_flow_io_fields)	
 				write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_flow_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 				open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
-				
+
 				do dim = 1,dimensions
 					read(io_unit) (((this%io_flow_buffer(i,j,k),	i = inner_loop(1,1),inner_loop(1,2)), &
-																	j = inner_loop(2,1),inner_loop(2,2)), &
-																	k = inner_loop(3,1),inner_loop(3,2))
-					this%scalar_flow_io_fields(fields_counter)%s_ptr%cells(dim,:,:,:) = this%io_flow_buffer											
+															j = inner_loop(2,1),inner_loop(2,2)), &
+															k = inner_loop(3,1),inner_loop(3,2))
+					this%scalar_flow_io_fields(fields_counter)%s_ptr%cells(dim,:,:,:) = this%io_flow_buffer										
 				end do
 				close(io_unit)
 			end do
@@ -915,22 +1129,22 @@ contains
 				open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 
 				vector_projections_number = this%vector_flow_io_fields(fields_counter)%v_ptr%get_projections_number_flow()
-				
+
 				do dim1 = 1, vector_projections_number
 				do dim2 = 1, dimensions
 					read(io_unit) (((this%io_flow_buffer(i,j,k),	i = inner_loop(1,1),inner_loop(1,2)), &
-																	j = inner_loop(2,1),inner_loop(2,2)), &
-																	k = inner_loop(3,1),inner_loop(3,2))
-					this%vector_flow_io_fields(fields_counter)%v_ptr%pr(dim1)%cells(dim2,:,:,:)	= this%io_flow_buffer											
+															j = inner_loop(2,1),inner_loop(2,2)), &
+															k = inner_loop(3,1),inner_loop(3,2))
+					this%vector_flow_io_fields(fields_counter)%v_ptr%pr(dim1)%cells(dim2,:,:,:)	= this%io_flow_buffer										
 				end do
 				end do
 
 				close(io_unit)
 			end do
 		end if		
-		
+
 	end subroutine
-	
+
 	subroutine input_mesh(this)
 		class(data_io)	,intent(inout)	:: this
 
@@ -939,7 +1153,7 @@ contains
 
 		integer				:: io_unit
 		character(len=65)	:: file_name
-		
+
 		integer	:: i,j,k, fields_counter, dim
 
 		dimensions	= this%domain%get_domain_dimensions()
@@ -949,21 +1163,21 @@ contains
 		open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 		do dim = 1, dimensions
 			read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-															j = utter_loop(2,1),utter_loop(2,2)), &
-															k = utter_loop(3,1),utter_loop(3,2))
+													j = utter_loop(2,1),utter_loop(2,2)), &
+													k = utter_loop(3,1),utter_loop(3,2))
 			this%mesh%mesh_ptr%mesh(dim,:,:,:) = this%io_cons_buffer 									
 		end do
 		close(io_unit)
 	end subroutine	
-	
+
 	subroutine input_bounds(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer		,dimension(3,2)	:: utter_loop
 
 		integer				:: io_unit
 		character(len=65)	:: file_name
-		
+
 		integer	:: i,j,k
 
 		utter_loop	= this%domain%get_local_utter_cells_bounds()
@@ -971,12 +1185,12 @@ contains
 		write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , 'bc' , trim(data_io_data_format)
 		open(newunit = io_unit, file = file_name, status = 'old', access='stream', form='unformatted')
 		read(io_unit) (((this%io_cons_buffer(i,j,k),	i = utter_loop(1,1),utter_loop(1,2)), &
-														j = utter_loop(2,1),utter_loop(2,2)), &
-														k = utter_loop(3,1),utter_loop(3,2))
+												j = utter_loop(2,1),utter_loop(2,2)), &
+												k = utter_loop(3,1),utter_loop(3,2))
 		this%boundaries%bc_ptr%bc_markers(:,:,:) = this%io_cons_buffer
 		close(io_unit)
 	end subroutine	
-	
+
 	subroutine commit_mpi_io_datatype(this)
 		class(data_io)	,intent(inout)	:: this
 
@@ -1016,10 +1230,10 @@ contains
 
 subroutine input_fields_mpi(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer					:: mpi_io_unit
 		character(len=65)		:: file_name
-		
+
 		integer					:: dimensions
 		integer					:: vector_projections_number
 		integer	,dimension(2)	:: tensor_projections_number
@@ -1041,7 +1255,7 @@ subroutine input_fields_mpi(this)
 		global_cells_number	= this%domain%get_global_cells_number()
 
 		do fields_counter = 1,size(this%scalar_io_fields)
-			
+
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%scalar_io_fields_names(fields_counter)) , trim(data_io_data_format)		
 			call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_io_unit, error) 
 
@@ -1068,7 +1282,7 @@ subroutine input_fields_mpi(this)
 		end do
 
 		do fields_counter = 1,size(this%vector_io_fields)
-			
+
 			write(file_name,'(A,A,I3.3,A,A,A)') trim(this%data_output_folder) , trim(fold_sep) , this%load_counter, trim(fold_sep) , trim(this%vector_io_fields_names(fields_counter)) , trim(data_io_data_format)
 			call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_io_unit, error) 
 
@@ -1085,7 +1299,7 @@ subroutine input_fields_mpi(this)
 					end do
 
 					displacement =  displacement +	((k-this%io_cons_loop(3,1)) * global_cells_number(2)  * global_cells_number(1) + &
-									 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
+					 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
 
 					call MPI_FILE_SET_VIEW(mpi_io_unit, max(displacement,0), MPI_DOUBLE_PRECISION, this%mpi_array_bounds_type, 'native', MPI_INFO_NULL, error) 
 
@@ -1120,7 +1334,7 @@ subroutine input_fields_mpi(this)
 					end do
 
 					displacement =  displacement +	((k-this%io_cons_loop(3,1)) * global_cells_number(2)  * global_cells_number(1) + &
-									 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
+					 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
 
 					call MPI_FILE_SET_VIEW(mpi_io_unit, max(displacement,0), MPI_DOUBLE_PRECISION, this%mpi_array_bounds_type, 'native', MPI_INFO_NULL, error) 
 
@@ -1190,7 +1404,7 @@ subroutine input_fields_mpi(this)
 				call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_RDONLY, MPI_INFO_NULL, mpi_io_unit, error) 
 
 				vector_projections_number = this%vector_flow_io_fields(fields_counter)%v_ptr%get_projections_number_flow()
-				
+
 				do dim1 = 1, vector_projections_number
 				do dim2 = 1, dimensions
 					this%io_flow_buffer = 0.0_dp 
@@ -1230,7 +1444,7 @@ subroutine input_fields_mpi(this)
 
 	subroutine input_mesh_mpi(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: mpi_io_unit
 		character(len=65)	:: file_name
 
@@ -1288,7 +1502,7 @@ subroutine input_fields_mpi(this)
 
 	subroutine input_bounds_mpi(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: mpi_io_unit
 		character(len=65)	:: file_name
 
@@ -1343,10 +1557,10 @@ subroutine input_fields_mpi(this)
 
 subroutine output_fields_mpi(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer					:: mpi_io_unit
 		character(len=65)		:: file_name
-		
+
 		integer					:: dimensions
 		integer					:: vector_projections_number
 		integer	,dimension(2)	:: tensor_projections_number
@@ -1398,7 +1612,7 @@ subroutine output_fields_mpi(this)
 			call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_WRONLY + MPI_MODE_CREATE, MPI_INFO_NULL, mpi_io_unit, error) 
 
 			vector_projections_number = this%vector_io_fields(fields_counter)%v_ptr%get_projections_number()
-			
+
 			do dim = 1, vector_projections_number
 				this%io_cons_buffer = this%vector_io_fields(fields_counter)%v_ptr%pr(dim)%cells(:,:,:)
 				do k = this%io_cons_loop_max(3,1),this%io_cons_loop_max(3,2) 
@@ -1410,7 +1624,7 @@ subroutine output_fields_mpi(this)
 					end do
 
 					displacement =  displacement +	((k-this%io_cons_loop(3,1)) * global_cells_number(2)  * global_cells_number(1) + &
-									 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
+					 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
 
 					call MPI_FILE_SET_VIEW(mpi_io_unit, max(displacement,0), MPI_DOUBLE_PRECISION, this%mpi_array_bounds_type, 'native', MPI_INFO_NULL, error) 
 
@@ -1444,7 +1658,7 @@ subroutine output_fields_mpi(this)
 					end do
 
 					displacement =  displacement +	((k-this%io_cons_loop(3,1)) * global_cells_number(2)  * global_cells_number(1) + &
-									 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
+					 				 (j-this%io_cons_loop(2,1)) * global_cells_number(1)) * sizeof(this%io_cons_buffer(1,1,1))
 
 					call MPI_FILE_SET_VIEW(mpi_io_unit, max(displacement,0), MPI_DOUBLE_PRECISION, this%mpi_array_bounds_type, 'native', MPI_INFO_NULL, error) 
 
@@ -1512,7 +1726,7 @@ subroutine output_fields_mpi(this)
 				call MPI_FILE_OPEN(MPI_COMM_WORLD, file_name, MPI_MODE_WRONLY + MPI_MODE_CREATE, MPI_INFO_NULL, mpi_io_unit, error) 
 
 				vector_projections_number = this%vector_flow_io_fields(fields_counter)%v_ptr%get_projections_number_flow()
-				
+
 				do dim1 = 1, vector_projections_number
 				do dim2 = 1, dimensions
 					this%io_flow_buffer = this%vector_flow_io_fields(fields_counter)%v_ptr%pr(dim1)%cells(dim2,:,:,:)
@@ -1549,7 +1763,7 @@ subroutine output_fields_mpi(this)
 
 	subroutine output_mesh_mpi(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: mpi_io_unit
 		character(len=65)	:: file_name
 
@@ -1606,7 +1820,7 @@ subroutine output_fields_mpi(this)
 
 	subroutine output_bounds_mpi(this)
 		class(data_io)	,intent(inout)	:: this
-		
+
 		integer				:: mpi_io_unit
 		character(len=65)	:: file_name
 
@@ -1682,7 +1896,7 @@ subroutine output_fields_mpi(this)
 			allocate(scalar_cons_io_fields_names_buffer(size(this%scalar_io_fields)+1))
 			scalar_cons_io_fields_buffer(:size(this%scalar_io_fields))		= this%scalar_io_fields
 			scalar_cons_io_fields_buffer(size(this%scalar_io_fields)+1)	= scal_ptr
-			
+
 			scalar_cons_io_fields_names_buffer(:size(this%scalar_io_fields))	= this%scalar_io_fields_names
 			scalar_cons_io_fields_names_buffer(size(this%scalar_io_fields)+1)	= scal_ptr%s_ptr%name_long
 			deallocate(this%scalar_io_fields)
@@ -1700,7 +1914,7 @@ subroutine output_fields_mpi(this)
 		allocate(this%scalar_io_fields_names(size(scalar_cons_io_fields_buffer)))
 		this%scalar_io_fields_names = scalar_cons_io_fields_names_buffer
 	end subroutine	
-	
+
 	subroutine add_io_scalar_flow_field(this,scal_ptr)
 		class(data_io)					,intent(inout)	:: this
 		type(field_scalar_flow_pointer)	,intent(in)		:: scal_ptr
@@ -1713,7 +1927,7 @@ subroutine output_fields_mpi(this)
 			allocate(scalar_flow_io_fields_names_buffer(size(this%scalar_flow_io_fields)+1))
 			scalar_flow_io_fields_buffer(:size(this%scalar_flow_io_fields))		= this%scalar_flow_io_fields
 			scalar_flow_io_fields_buffer(size(this%scalar_flow_io_fields)+1)	= scal_ptr
-			
+
 			scalar_flow_io_fields_names_buffer(:size(this%scalar_flow_io_fields))	= this%scalar_flow_io_fields_names
 			scalar_flow_io_fields_names_buffer(size(this%scalar_flow_io_fields)+1)	= scal_ptr%s_ptr%name_long
 			deallocate(this%scalar_flow_io_fields)
@@ -1744,7 +1958,7 @@ subroutine output_fields_mpi(this)
 			allocate(vector_flow_io_fields_names_buffer(size(this%vector_flow_io_fields)+1))
 			vector_flow_io_fields_buffer(:size(this%vector_flow_io_fields))		= this%vector_flow_io_fields
 			vector_flow_io_fields_buffer(size(this%vector_flow_io_fields)+1)	= vect_ptr
-			
+
 			vector_flow_io_fields_names_buffer(:size(this%vector_flow_io_fields))	= this%vector_flow_io_fields_names
 			vector_flow_io_fields_names_buffer(size(this%vector_flow_io_fields)+1)	= vect_ptr%v_ptr%name_long
 			deallocate(this%vector_flow_io_fields)
@@ -1762,6 +1976,6 @@ subroutine output_fields_mpi(this)
 		allocate(this%vector_flow_io_fields_names(size(vector_flow_io_fields_buffer)))
 		this%vector_flow_io_fields_names = vector_flow_io_fields_names_buffer
 	end subroutine
-	
+
 
 end module
