@@ -19,6 +19,7 @@ module global_data
 	character(len=100)	,parameter	:: solver_data_file_name					= trim(task_setup_folder) // trim(fold_sep)	// 'solver_setup.inf'
     character(len=100)	,parameter	:: run_control_data_file_name				= trim(task_setup_folder) // trim(fold_sep)	// 'run_control.inf'
     character(len=100)  ,parameter  :: run_control_stop_request_file_name       = 'run_control.stop'
+    character(len=100)  ,parameter  :: run_control_pause_request_file_name      = 'run_control.pause'
     character(len=100)  ,parameter  :: run_control_status_file_name             = 'run_control_status.inf'
     character(len=100)  ,parameter  :: post_processor_manager_data_file_name	= trim(task_setup_folder) // trim(fold_sep) // 'post_processors_manager_setup.inf'
 	character(len=100)	,parameter	:: post_processor_data_file_name			= trim(task_setup_folder) // trim(fold_sep) // 'post_processor#.inf'

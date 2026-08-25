@@ -238,7 +238,7 @@ contains
         real(dp) :: elapsed_wall_time, wall_trigger_time
         real(dp) :: time_tolerance
         logical :: simulation_limit_reached, wall_limit_reached
-        logical :: external_stop_requested
+        logical :: external_stop_requested, external_pause_requested
         character(len=reason_length) :: local_reason
 
         if (.not. this%clock_started) call this%start()
@@ -246,6 +246,7 @@ contains
         simulation_limit_reached = .false.
         wall_limit_reached = .false.
         external_stop_requested = .false.
+        external_pause_requested = .false.
 
         if (this%limits_simulation_time()) then
             time_tolerance = 100.0_dp*epsilon(1.0_dp)* &
@@ -262,14 +263,18 @@ contains
 
         inquire(file=run_control_stop_request_file_name, &
             exist=external_stop_requested)
+        inquire(file=run_control_pause_request_file_name, &
+            exist=external_pause_requested)
 
         terminate = simulation_limit_reached .or. wall_limit_reached .or. &
-            external_stop_requested
+            external_stop_requested .or. external_pause_requested
 
         if (simulation_limit_reached) then
             local_reason = 'final_simulation_time'
         else if (wall_limit_reached) then
             local_reason = 'wall_time_limit'
+        else if (external_pause_requested) then
+            local_reason = 'external_pause_request'
         else if (external_stop_requested) then
             local_reason = 'external_stop_request'
         else
@@ -278,13 +283,14 @@ contains
 
         if (present(reason)) reason = trim(local_reason)
 
-        ! A restart checkpoint is required only when a wall-clock limit stops
-        ! an otherwise unfinished calculation.  If the physical final time is
-        ! reached in the same step, the calculation is complete and no restart
-        ! checkpoint is needed.
+        ! A restart checkpoint is required when an unfinished calculation is
+        ! stopped by the wall-time budget or by an explicit pause request.
+        ! A scientific external stop remains terminal and does not request a
+        ! checkpoint. If final physical time is reached in the same step, the
+        ! calculation is complete and no restart checkpoint is needed.
         if (present(restart_required)) then
-            restart_required = wall_limit_reached .and. &
-                .not. simulation_limit_reached
+            restart_required = (wall_limit_reached .or. &
+                external_pause_requested) .and. .not. simulation_limit_reached
         end if
     end subroutine check_termination
 
@@ -400,6 +406,8 @@ contains
 
         write(log_unit, '(A,A)') ' External stop request file  : ', &
             trim(run_control_stop_request_file_name)
+        write(log_unit, '(A,A)') ' External pause request file : ', &
+            trim(run_control_pause_request_file_name)
 
         write(log_unit, '(A)') repeat('*', 84)
     end subroutine write_log
