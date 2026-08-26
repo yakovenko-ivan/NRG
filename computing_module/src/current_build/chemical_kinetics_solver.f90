@@ -738,11 +738,17 @@ contains
                     temperature_cell = temperature_field%cells(i,j,k)
                     if (.not. ieee_is_finite(density_cell) .or. &
                         density_cell <= 0.0_dp) then
-                        call report_invalid_cell('non-positive density',i,j,k)
+                        call report_invalid_cell( &
+                            this,'non-positive density',i,j,k, &
+                            offending_value=density_cell, &
+                            threshold=0.0_dp,time_step=time_step)
                     end if
                     if (.not. ieee_is_finite(temperature_cell) .or. &
                         temperature_cell <= 0.0_dp) then
-                        call report_invalid_cell('non-positive temperature',i,j,k)
+                        call report_invalid_cell( &
+                            this,'non-positive temperature',i,j,k, &
+                            offending_value=temperature_cell, &
+                            threshold=0.0_dp,time_step=time_step)
                     end if
                     if (temperature_cell < this%activation_temperature) cycle
                     active_cells_step = active_cells_step + 1_int64
@@ -756,11 +762,21 @@ contains
                         if (.not. ieee_is_finite( &
                             thread_workspace%mass_fraction_cell(specie))) then
                             call report_invalid_cell( &
-                                'non-finite mass fraction',i,j,k)
+                                this,'non-finite mass fraction',i,j,k, &
+                                specie_index=specie, &
+                                offending_value= &
+                                    thread_workspace%mass_fraction_cell(specie), &
+                                time_step=time_step)
                         end if
                         if (thread_workspace%mass_fraction_cell(specie) < &
                             -negative_tolerance) then
-                            call report_invalid_cell('negative mass fraction',i,j,k)
+                            call report_invalid_cell( &
+                                this,'negative mass fraction',i,j,k, &
+                                specie_index=specie, &
+                                offending_value= &
+                                    thread_workspace%mass_fraction_cell(specie), &
+                                threshold=-negative_tolerance, &
+                                time_step=time_step)
                         end if
                         thread_workspace%mass_fraction_cell(specie) = max( &
                             thread_workspace%mass_fraction_cell(specie),0.0_dp)
@@ -768,7 +784,12 @@ contains
                             thread_workspace%mass_fraction_cell(specie)
                     end do
                     if (mass_fraction_sum <= tiny(1.0_dp)) then
-                        call report_invalid_cell('empty composition',i,j,k)
+                        call report_invalid_cell( &
+                            this,'empty composition',i,j,k, &
+                            offending_value=mass_fraction_sum, &
+                            threshold=tiny(1.0_dp), &
+                            time_step=time_step, &
+                            composition_sum=mass_fraction_sum)
                     end if
                     thread_workspace%mass_fraction_cell = &
                         thread_workspace%mass_fraction_cell/mass_fraction_sum
@@ -805,7 +826,9 @@ contains
                             temperature_cell, &
                             thread_workspace%concentration_increment_cell)
                     case default
-                        call report_invalid_cell('unsupported ODE solver',i,j,k)
+                        call report_invalid_cell( &
+                            this,'unsupported ODE solver',i,j,k, &
+                            time_step=time_step)
                     end select
 
 #ifdef CHEMISTRY_PROFILE
@@ -1136,7 +1159,10 @@ contains
         jacobian_evaluations = int(max(thread_workspace%iwork(5),0),int64)
 
         if (ierflg /= 0 .or. nstate <= 0) then
-            call report_slatec_failure(i_cell,j_cell,k_cell,nstate,ierflg)
+            call report_slatec_failure( &
+                this,i_cell,j_cell,k_cell,nstate,ierflg,time_step, &
+                thread_workspace%concentration_initial, &
+                thread_workspace%concentration_final)
         end if
 
         concentration_scale = max(1.0_dp, &
@@ -1147,12 +1173,36 @@ contains
             if (.not. ieee_is_finite( &
                 thread_workspace%concentration_final(specie))) then
                 call report_invalid_cell( &
-                    'non-finite final concentration',i_cell,j_cell,k_cell)
+                    this,'non-finite final concentration', &
+                    i_cell,j_cell,k_cell,specie_index=specie, &
+                    offending_value= &
+                        thread_workspace%concentration_final(specie), &
+                    time_step=time_step, &
+                    initial_value= &
+                        thread_workspace%concentration_initial(specie), &
+                    final_value= &
+                        thread_workspace%concentration_final(specie), &
+                    concentration_initial= &
+                        thread_workspace%concentration_initial, &
+                    concentration_final= &
+                        thread_workspace%concentration_final)
             end if
             if (thread_workspace%concentration_final(specie) < &
                 -negative_limit) then
                 call report_invalid_cell( &
-                    'negative final concentration',i_cell,j_cell,k_cell)
+                    this,'negative final concentration', &
+                    i_cell,j_cell,k_cell,specie_index=specie, &
+                    offending_value= &
+                        thread_workspace%concentration_final(specie), &
+                    threshold=-negative_limit,time_step=time_step, &
+                    initial_value= &
+                        thread_workspace%concentration_initial(specie), &
+                    final_value= &
+                        thread_workspace%concentration_final(specie), &
+                    concentration_initial= &
+                        thread_workspace%concentration_initial, &
+                    concentration_final= &
+                        thread_workspace%concentration_final)
             end if
             thread_workspace%concentration_final(specie) = max( &
                 thread_workspace%concentration_final(specie),0.0_dp)
@@ -1338,17 +1388,20 @@ contains
 
         if (abs(integrated_mass_defect) > integrated_mass_tolerance) then
             call report_mass_imbalance( &
-                i_cell,j_cell,k_cell,density,source_sum,source_l1, &
+                this,i_cell,j_cell,k_cell,density,source_sum,source_l1, &
                 integrated_mass_defect,integrated_mass_activity, &
-                integrated_mass_tolerance)
+                integrated_mass_tolerance,time_step)
         end if
 
         ! Remove the integrator-level residual.  Normalize the correction weights
         ! defensively even though the caller already normalizes mass fractions.
         composition_sum = sum(mass_fraction)
         if (composition_sum <= tiny(1.0_dp)) then
-            call report_invalid_cell('empty correction composition', &
-                i_cell,j_cell,k_cell)
+            call report_invalid_cell( &
+                this,'empty correction composition', &
+                i_cell,j_cell,k_cell,offending_value=composition_sum, &
+                threshold=tiny(1.0_dp),time_step=time_step, &
+                composition_sum=composition_sum)
         end if
         species_source = species_source - &
             mass_fraction*(source_sum/composition_sum)
@@ -1368,7 +1421,9 @@ contains
 
         if (.not. ieee_is_finite(energy_source)) then
             call report_invalid_cell( &
-                'non-finite chemistry energy source',i_cell,j_cell,k_cell)
+                this,'non-finite chemistry energy source', &
+                i_cell,j_cell,k_cell,offending_value=energy_source, &
+                time_step=time_step)
         end if
     end subroutine assemble_cell_sources
 
@@ -1767,25 +1822,103 @@ contains
     end function dummy_root
 
 
-    subroutine report_invalid_cell(message, i, j, k)
+    subroutine report_invalid_cell(this, message, i, j, k, &
+            specie_index, offending_value, threshold, time_step, &
+            initial_value, final_value, composition_sum, &
+            concentration_initial, concentration_final)
+        class(chemical_kinetics_solver), intent(in) :: this
         character(len=*), intent(in) :: message
         integer, intent(in) :: i, j, k
+        integer, intent(in), optional :: specie_index
+        real(dp), intent(in), optional :: offending_value, threshold
+        real(dp), intent(in), optional :: time_step
+        real(dp), intent(in), optional :: initial_value, final_value
+        real(dp), intent(in), optional :: composition_sum
+        real(dp), dimension(:), intent(in), optional :: concentration_initial
+        real(dp), dimension(:), intent(in), optional :: concentration_final
+
+        integer :: specie
+        character(len=20) :: specie_name
 
 !$omp critical(chemical_kinetics_error_output)
-        write(error_unit,'(A,1X,A,1X,A,3(I0,1X))') &
-            'Chemical kinetics error:',trim(message),'cell',i,j,k
+        write(error_unit,'(A)') ''
+        write(error_unit,'(A)') &
+            '============================================================'
+        write(error_unit,'(A)') 'CHEMICAL KINETICS ERROR'
+        write(error_unit,'(A)') &
+            '============================================================'
+        write(error_unit,'(A,A)') 'Reason                    : ',trim(message)
+
+        if (present(time_step)) then
+            call write_cell_diagnostic_context(this,i,j,k,time_step)
+        else
+            call write_cell_diagnostic_context(this,i,j,k)
+        end if
+
+        if (present(specie_index)) then
+            if (specie_index >= 1 .and. specie_index <= this%species_number) then
+                specie_name = this%chemistry%chem_ptr%species_names(specie_index)
+                write(error_unit,'(A,I0)') &
+                    'Species index             : ',specie_index
+                write(error_unit,'(A,A)') &
+                    'Species                   : ',trim(specie_name)
+                write(error_unit,'(A,ES24.16)') &
+                    'Species mass fraction     : ', &
+                    this%mass_fraction%v_ptr%pr(specie_index)%cells(i,j,k)
+                write(error_unit,'(A,ES24.16)') &
+                    'Species molar mass [kg/mol]: ', &
+                    this%thermophysics%thermo_ptr%molar_masses(specie_index)
+            else
+                write(error_unit,'(A,I0)') &
+                    'Invalid species index     : ',specie_index
+            end if
+        end if
+
+        if (present(offending_value)) then
+            write(error_unit,'(A,ES24.16)') &
+                'Offending value           : ',offending_value
+        end if
+        if (present(threshold)) then
+            write(error_unit,'(A,ES24.16)') &
+                'Threshold / tolerance     : ',threshold
+        end if
+        if (present(initial_value)) then
+            write(error_unit,'(A,ES24.16)') &
+                'Initial value             : ',initial_value
+        end if
+        if (present(final_value)) then
+            write(error_unit,'(A,ES24.16)') &
+                'Final value               : ',final_value
+        end if
+        if (present(composition_sum)) then
+            write(error_unit,'(A,ES24.16)') &
+                'Composition sum           : ',composition_sum
+        end if
+
+        if (present(concentration_initial) .and. &
+                present(concentration_final)) then
+            call write_cell_species_state(this,i,j,k, &
+                concentration_initial,concentration_final)
+        else
+            call write_cell_species_state(this,i,j,k)
+        end if
+
+        write(error_unit,'(A)') &
+            '============================================================'
 !$omp end critical(chemical_kinetics_error_output)
+
         error stop 'Chemical kinetics solver failed'
     end subroutine report_invalid_cell
 
 
-    subroutine report_mass_imbalance(i, j, k, density, source_sum, &
+    subroutine report_mass_imbalance(this, i, j, k, density, source_sum, &
             source_l1, integrated_defect, integrated_activity, &
-            integrated_tolerance)
+            integrated_tolerance, time_step)
+        class(chemical_kinetics_solver), intent(in) :: this
         integer, intent(in) :: i, j, k
         real(dp), intent(in) :: density, source_sum, source_l1
         real(dp), intent(in) :: integrated_defect, integrated_activity
-        real(dp), intent(in) :: integrated_tolerance
+        real(dp), intent(in) :: integrated_tolerance, time_step
         real(dp) :: relative_to_density, relative_to_activity
 
         relative_to_density = abs(integrated_defect)/max(density,tiny(1.0_dp))
@@ -1793,35 +1926,163 @@ contains
             max(integrated_activity,tiny(1.0_dp))
 
 !$omp critical(chemical_kinetics_error_output)
-        write(error_unit,'(A,3(I0,1X))') &
-            'Chemical kinetics mass imbalance at cell ',i,j,k
+        write(error_unit,'(A)') ''
+        write(error_unit,'(A)') &
+            '============================================================'
+        write(error_unit,'(A)') 'CHEMICAL KINETICS MASS IMBALANCE'
+        write(error_unit,'(A)') &
+            '============================================================'
+
+        call write_cell_diagnostic_context(this,i,j,k,time_step)
+
         write(error_unit,'(A,ES24.16)') &
-            '  sum(species_source) [kg m-3 s-1] = ',source_sum
+            'sum(species_source) [kg m-3 s-1] = ',source_sum
         write(error_unit,'(A,ES24.16)') &
-            '  sum(abs(species_source))          = ',source_l1
+            'sum(abs(species_source))          = ',source_l1
         write(error_unit,'(A,ES24.16)') &
-            '  integrated mass defect [kg m-3]   = ',integrated_defect
+            'integrated mass defect [kg m-3]   = ',integrated_defect
         write(error_unit,'(A,ES24.16)') &
-            '  defect / cell density             = ',relative_to_density
+            'defect / cell density             = ',relative_to_density
         write(error_unit,'(A,ES24.16)') &
-            '  defect / chemistry activity       = ',relative_to_activity
+            'defect / chemistry activity       = ',relative_to_activity
         write(error_unit,'(A,ES24.16)') &
-            '  allowed integrated defect         = ',integrated_tolerance
+            'allowed integrated defect         = ',integrated_tolerance
+
+        call write_cell_species_state(this,i,j,k)
+
+        write(error_unit,'(A)') &
+            '============================================================'
 !$omp end critical(chemical_kinetics_error_output)
+
         error stop 'Chemical kinetics solver failed'
     end subroutine report_mass_imbalance
 
 
-    subroutine report_slatec_failure(i, j, k, nstate, ierflg)
+    subroutine report_slatec_failure(this, i, j, k, nstate, ierflg, &
+            time_step, concentration_initial, concentration_final)
+        class(chemical_kinetics_solver), intent(in) :: this
         integer, intent(in) :: i, j, k, nstate, ierflg
+        real(dp), intent(in) :: time_step
+        real(dp), dimension(:), intent(in) :: concentration_initial
+        real(dp), dimension(:), intent(in) :: concentration_final
 
 !$omp critical(chemical_kinetics_error_output)
-        write(error_unit,'(A,3(I0,1X),A,I0,A,I0)') &
-            'SLATEC chemistry failure at cell ',i,j,k, &
-            ' NSTATE=',nstate,' IERFLG=',ierflg
+        write(error_unit,'(A)') ''
+        write(error_unit,'(A)') &
+            '============================================================'
+        write(error_unit,'(A)') 'SLATEC CHEMISTRY INTEGRATION FAILURE'
+        write(error_unit,'(A)') &
+            '============================================================'
+
+        call write_cell_diagnostic_context(this,i,j,k,time_step)
+
+        write(error_unit,'(A,I0)') 'NSTATE                    : ',nstate
+        write(error_unit,'(A,I0)') 'IERFLG                    : ',ierflg
+        write(error_unit,'(A,I0)') &
+            'Internal steps            : ',max(thread_workspace%iwork(3),0)
+        write(error_unit,'(A,I0)') &
+            'RHS evaluations           : ',max(thread_workspace%iwork(4),0)
+        write(error_unit,'(A,I0)') &
+            'Jacobian evaluations      : ',max(thread_workspace%iwork(5),0)
+
+        call write_cell_species_state(this,i,j,k, &
+            concentration_initial,concentration_final)
+
+        write(error_unit,'(A)') &
+            '============================================================'
 !$omp end critical(chemical_kinetics_error_output)
+
         error stop 'Chemical kinetics SLATEC integration failed'
     end subroutine report_slatec_failure
+
+
+    subroutine write_cell_diagnostic_context(this, i, j, k, time_step)
+        class(chemical_kinetics_solver), intent(in) :: this
+        integer, intent(in) :: i, j, k
+        real(dp), intent(in), optional :: time_step
+
+        write(error_unit,'(A,3(I0,1X))') &
+            'Cell (i,j,k)              : ',i,j,k
+        write(error_unit,'(A,I0)') &
+            'Boundary marker           : ', &
+            this%boundary%bc_ptr%bc_markers(i,j,k)
+        write(error_unit,'(A,ES24.16)') &
+            'Density [kg/m3]           : ',this%density%s_ptr%cells(i,j,k)
+        write(error_unit,'(A,ES24.16)') &
+            'Temperature [K]           : ', &
+            this%temperature%s_ptr%cells(i,j,k)
+        write(error_unit,'(A,ES24.16)') &
+            'Activation temperature [K]: ',this%activation_temperature
+        if (present(time_step)) then
+            write(error_unit,'(A,ES24.16)') &
+                'CFD time step [s]         : ',time_step
+        end if
+        write(error_unit,'(A,A)') &
+            'ODE solver                : ',trim(this%ode_solver)
+        write(error_unit,'(A,A)') &
+            'Mechanism                 : ', &
+            trim(this%chemistry%chem_ptr%chemical_mechanism_file_name)
+        write(error_unit,'(A,I0)') &
+            'Species number            : ',this%species_number
+        write(error_unit,'(A,I0)') &
+            'Reactions number          : ',this%reactions_number
+        write(error_unit,'(A,ES24.16)') &
+            'Negative concentration tol: ', &
+            this%negative_concentration_tolerance
+        write(error_unit,'(A,ES24.16)') &
+            'SLATEC accuracy           : ',this%slatec_accuracy
+        write(error_unit,'(A,ES24.16)') &
+            'SLATEC error weight       : ',this%slatec_error_weight
+        write(error_unit,'(A,ES24.16)') &
+            'SLATEC max internal step  : ', &
+            this%slatec_max_internal_step
+        write(error_unit,'(A,I0)') &
+            'SLATEC max steps          : ',this%slatec_max_steps
+    end subroutine write_cell_diagnostic_context
+
+
+    subroutine write_cell_species_state(this, i, j, k, &
+            concentration_initial, concentration_final)
+        class(chemical_kinetics_solver), intent(in) :: this
+        integer, intent(in) :: i, j, k
+        real(dp), dimension(:), intent(in), optional :: concentration_initial
+        real(dp), dimension(:), intent(in), optional :: concentration_final
+
+        integer :: specie
+        logical :: have_initial, have_final
+
+        have_initial = present(concentration_initial)
+        have_final = present(concentration_final)
+
+        if (have_initial) then
+            have_initial = size(concentration_initial) >= this%species_number
+        end if
+        if (have_final) then
+            have_final = size(concentration_final) >= this%species_number
+        end if
+
+        write(error_unit,'(A)') 'Species state:'
+
+        if (have_initial .and. have_final) then
+            write(error_unit,'(A)') &
+                '  idx  species                    Y_k'// &
+                '       C_initial [mol/m3]       C_final [mol/m3]'
+            do specie = 1, this%species_number
+                write(error_unit,'(2X,I4,2X,A20,3(2X,ES24.16))') &
+                    specie,trim(this%chemistry%chem_ptr%species_names(specie)), &
+                    this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k), &
+                    concentration_initial(specie),concentration_final(specie)
+            end do
+        else
+            write(error_unit,'(A)') &
+                '  idx  species                    Y_k'
+            do specie = 1, this%species_number
+                write(error_unit,'(2X,I4,2X,A20,2X,ES24.16)') &
+                    specie,trim(this%chemistry%chem_ptr%species_names(specie)), &
+                    this%mass_fraction%v_ptr%pr(specie)%cells(i,j,k)
+            end do
+        end if
+    end subroutine write_cell_species_state
 
 
     subroutine zero_vector_field(field)
