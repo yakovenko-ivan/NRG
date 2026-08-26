@@ -1,4 +1,23 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.15)
+
+# Use CMake's first-class MSVC-runtime abstraction. This policy must be set
+# before project() enables a language that targets the MSVC ABI.
+cmake_policy(SET CMP0091 NEW)
+
+# Select static or dynamic Microsoft/Intel multithreaded runtime libraries on
+# Windows. For Intel Fortran this maps to /MT(/MTd) or /MD(/MDd), respectively.
+# The option is defined before project() because CMAKE_MSVC_RUNTIME_LIBRARY must
+# be established before targets/languages are created.
+set(NRG_STATIC_RUNTIME ON CACHE BOOL
+    "Link Intel/MSVC runtime libraries statically on Windows")
+
+if(NRG_STATIC_RUNTIME)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+else()
+    set(CMAKE_MSVC_RUNTIME_LIBRARY
+        "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+endif()
 
 project(NRG VERSION 1.0
     DESCRIPTION "Numerical Reactive Gasdynamics JIHT RAS package"
@@ -77,6 +96,18 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "^(IntelLLVM|Intel)$")
             "$<$<CONFIG:Debug>:/check:all;/fpe:0>"
             "$<$<NOT:$<CONFIG:Debug>>:/fpe:0>"
         )
+
+        if(NRG_STATIC_RUNTIME)
+            message(STATUS
+                "Intel Windows runtime linkage: static (/MT for non-Debug, /MTd for Debug)")
+            if(NRG_ENABLE_OPENMP)
+                message(STATUS
+                    "Intel OpenMP runtime remains dynamic on Windows (libiomp5md.dll)")
+            endif()
+        else()
+            message(STATUS
+                "Intel Windows runtime linkage: dynamic (/MD for non-Debug, /MDd for Debug)")
+        endif()
     else()
         target_compile_options(nrg_build_options INTERFACE
             -fpp
