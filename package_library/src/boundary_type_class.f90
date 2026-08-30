@@ -98,7 +98,11 @@ contains
 		allocate(farfield_concentrations(farfield_species_number))
 		allocate(farfield_species_names(farfield_species_number))
 		
-		read(unit = bc_data_file_unit, nml = boundary_type_species)
+!		read(unit = bc_data_file_unit, nml = boundary_type_species)
+        
+		if (farfield_species_number > 0) then
+			read(unit = bc_data_file_unit, nml = boundary_type_species)
+		end if
 		
 		call this%set_properties(type_name,slip,conductive,wall_temperature,wall_conductivity_ratio,farfield_pressure,farfield_temperature,farfield_density,farfield_velocity,farfield_concentrations,farfield_species_names,priority)
 		
@@ -141,8 +145,11 @@ contains
 		priority				= this%priority
 		
 		write(unit = bc_data_file_unit, nml = boundary_type)
-		write(unit = bc_data_file_unit, nml = boundary_type_species)
+!		write(unit = bc_data_file_unit, nml = boundary_type_species)
 		
+		if (farfield_species_number > 0) then
+			write(unit = bc_data_file_unit, nml = boundary_type_species)
+		end if
 	end subroutine
 	
 	
