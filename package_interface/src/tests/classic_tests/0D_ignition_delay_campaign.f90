@@ -119,8 +119,12 @@ program package_interface
     logical           :: cfl_enabled
     real(dp)          :: cfl_coefficient
 
-    namelist /physics_config/ mechanism_id, solver_id, initial_time_step, &
-        cfl_enabled, cfl_coefficient
+    character(len=64) :: thermo_data_file
+    character(len=64) :: transport_data_file
+
+    namelist /physics_config/ mechanism_id, thermo_data_file, &
+    transport_data_file, solver_id, initial_time_step, &
+    cfl_enabled, cfl_coefficient
 
     !--------------------------------------------------------------------------
     ! Run control
@@ -197,7 +201,7 @@ program package_interface
     cfl_enabled              = .false.
     cfl_coefficient          = 0.25_dp
 
-    termination_mode         = 'simulation_time'
+    termination_mode         = 'wall_time'
     final_time_ms            = 0.03_dp
     wall_time_limit_s        = 3600.0_dp
     wall_time_reserve_s      = 30.0_dp
@@ -206,6 +210,9 @@ program package_interface
     field_save_interval_us   = 5.0_dp
     checkpoint_interval_us   = 25.0_dp
     save_spatial_fields      = .true.
+    
+    thermo_data_file        = 'COMMON_THERMO.txt'
+    transport_data_file     = 'COMMON_TRANSDATA.txt'
 
     !--------------------------------------------------------------------------
     ! Read configuration. Group order in the file is irrelevant.
@@ -323,7 +330,8 @@ program package_interface
 
     problem_mpi_support = mpi_communications_c(problem_domain)
 
-    ! No transport mechanisms are required in a homogeneous adiabatic reactor.
+    ! Transport properties are instantiated for NRG resource compatibility but
+    ! transport mechanisms are disabled in this homogeneous adiabatic 0D reactor.
     ! Hydrodynamics is retained so each CFD solver advances its native equations.
     problem_solver_options = solver_options_c( &
         solver_name                  = trim(solver_name), &
@@ -484,6 +492,8 @@ program package_interface
     write(log_unit,'(A,F12.6)') 'Initial H2 mole percent: ', hydrogen_mole_percent
     write(log_unit,'(A,F12.6)') 'Equivalence ratio: ', phi
     write(log_unit,'(A,A)') 'Chemical mechanism: ', trim(mechanism_name)
+    write(log_unit,'(A,A)') 'Thermodynamic database: ', trim(thermo_file)
+    write(log_unit,'(A,A)') 'Transport database: ', trim(transdata_file)    
     write(log_unit,'(A,A)') 'Solver: ', trim(solver_name)
     write(log_unit,'(A,ES14.6)') 'Initial time step [s]: ', initial_time_step
     write(log_unit,'(A,A)') 'Termination mode: ', trim(termination_mode)
@@ -666,6 +676,17 @@ contains
             error stop &
                 "ERROR: termination_mode must be 'simulation_time', 'wall_time' or 'either'."
         end select
+        
+        thermo_data_file    = adjustl(thermo_data_file)
+        transport_data_file = adjustl(transport_data_file)
+
+        if (len_trim(thermo_data_file) == 0) then
+            error stop 'ERROR: thermo_data_file may not be empty.'
+        end if
+
+        if (len_trim(transport_data_file) == 0) then
+            error stop 'ERROR: transport_data_file may not be empty.'
+        end if
     end subroutine normalize_and_validate_configuration
 
 
@@ -673,19 +694,60 @@ contains
         select case(trim(mechanism_id))
         case('keromnes')
             mechanism_name = 'KEROMNES'
+            mech_file = 'KEROMNES.txt'
+
         case('konnov')
             mechanism_name = 'KONNOV'
+            mech_file = 'KONNOV.txt'
+
         case('zhang')
             mechanism_name = 'ZHANG'
-        case('agafonov','tereza')
+            mech_file = 'ZHANG.txt'
+
+        case('gerasimov_shatalov2013')
+            mechanism_name = 'GERASIMOV_SHATALOV_2013'
+            mech_file = 'GERASIMOV_SHATALOV_2013_NRG_noREV.txt'
+
+        case('popov2007')
+            mechanism_name = 'POPOV_2007'
+            mech_file = 'POPOV_2007_H2_O2_NRG.txt'
+
+        case('maas_pope1992')
+            mechanism_name = 'MAAS_POPE_1992'
+            mech_file = 'MAAS_POPE_1992_H2_NRG_noREV.txt'
+
+        case('li2004')
+            mechanism_name = 'LI_2004'
+            mech_file = 'LI_ZHAO_KAZAKOV_DRYER_2004_checked_N2.txt'
+
+        case('williams2004')
+            mechanism_name = 'WILLIAMS_2004'
+            mech_file = 'WILLIAMS_2004.txt'
+            
+        case('gri_mech3')
+            mechanism_name = 'GRI_MECH3'
+            mech_file = 'GRI_MECH_3_H2_checked_original.txt'
+            
+        case('tereza')
             mechanism_name = 'TEREZA'
+            mech_file = 'TEREZA_orig.txt'
+            
+        case('hong2010')
+            mechanism_name = 'HONG_2010'
+            mech_file = 'HONG_2010_TABLE7_checked.txt'
+                                      
         case default
             write(*,'(A,A)') 'ERROR: unsupported mechanism_id: ', trim(mechanism_id)
             error stop 3
         end select
-        mech_file      = trim(mechanism_name)//'.txt'
-        thermo_file    = trim(mechanism_name)//'_THERMO.txt'
-        transdata_file = trim(mechanism_name)//'_TRANSDATA.txt'
+        
+        
+!        mech_file      = trim(mechanism_name)//'.txt'
+!        thermo_file    = trim(mechanism_name)//'_THERMO.txt'
+!        transdata_file = trim(mechanism_name)//'_TRANSDATA.txt'
+        
+        thermo_file    = trim(thermo_data_file)
+        transdata_file = trim(transport_data_file)
     end subroutine resolve_mechanism
 
 
