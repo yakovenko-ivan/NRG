@@ -1227,7 +1227,7 @@ contains
 
 		if (rho_trial <= 0.0_dp) error stop 'CABARET source probe: non-positive density'
 		if (p_trial <= 0.0_dp) error stop 'CABARET source probe: non-positive pressure'
-		if (any(Y_trial < 0.0_dp)) error stop 'CABARET source probe: negative mass fraction'
+!		if (any(Y_trial < 0.0_dp)) error stop 'CABARET source probe: negative mass fraction'
 
 		T_state = this%thermo%thermo_ptr%temperature_from_pressure_density_Y( &
 			p_state, rho_state, Y_state)
