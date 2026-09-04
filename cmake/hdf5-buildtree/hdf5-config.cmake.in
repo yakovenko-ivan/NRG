@@ -1,0 +1,25 @@
+# NRG build-tree compatibility package for bundled HDF5.
+#
+# HDF5 1.14.x creates its CMake targets correctly when embedded with
+# FetchContent, but its generated hdf5-config.cmake assumes an install-style
+# package layout. CGNS 4.5.x calls find_package(HDF5) during its own configure,
+# so expose the already-created in-tree target through the variables CGNS uses.
+
+set(HDF5_FOUND TRUE)
+set(HDF5_VERSION "@NRG_BUNDLED_HDF5_VERSION@")
+
+set(HDF5_C_FOUND TRUE)
+set(HDF5_static_C_FOUND TRUE)
+set(HDF5_shared_C_FOUND FALSE)
+
+set(HDF5_C_STATIC_LIBRARY hdf5-static)
+set(HDF5_C_STATIC_LIBRARIES hdf5-static)
+set(HDF5_LIBRARIES hdf5-static)
+
+set(HDF5_INCLUDE_DIRS
+    "@nrg_hdf5_SOURCE_DIR@/src"
+    "@nrg_hdf5_BINARY_DIR@/src"
+)
+set(HDF5_INCLUDE_DIR "@nrg_hdf5_SOURCE_DIR@/src")
+set(HDF5_TOOLS_DIR "")
+set(HDF5_BUILD_SHARED_LIBS NO)

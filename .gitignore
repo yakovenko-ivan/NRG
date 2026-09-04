@@ -37,4 +37,3 @@ build-cgns/
 *.vfproj
 *.sln
 *.vscode
-cmake/hdf5-buildtree
