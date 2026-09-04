@@ -168,7 +168,7 @@ program package_interface
     ! task6: Spatial resolution (2=dx=1.0e-04 m)
     !================================================================
     
-    do task1 = 2, 2          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
+    do task1 = 3, 3          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
@@ -451,8 +451,9 @@ program package_interface
             ], &
             save_time         = 1.0_dp,       &   ! Save interval
             save_time_units   = 'milliseconds', &   ! Time units for saving
-            save_format       = 'tecplot',      &   ! Output format
+            save_format       = 'cgns',      &   ! Output format
             data_save_folder  = 'data_save',    &   ! Output directory
+            dataset_name      = '1D_LBV_Keromnes', &
             debug_flag        = .false.)            ! Debug mode off
         
         !================================================================
@@ -468,7 +469,7 @@ program package_interface
         ! INITIAL CONDITIONS SETUP
         !================================================================
         
-        ambient_pressure = 5.0_dp * 101325.0_dp  ! Ambient pressure [Pa]
+        ambient_pressure = 1.0_dp * 101325.0_dp  ! Ambient pressure [Pa]
         
         ! Set uniform ambient conditions
         T%cells(:,:,:)   = 300.0_dp          ! Ambient temperature [K]

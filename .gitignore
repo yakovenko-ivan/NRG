@@ -31,8 +31,10 @@ package_utilities/debug_seq
 package_utilities/release_seq
 package_utilities/x64
 build/
+build-cgns/
 *.bak
 *.u2d
 *.vfproj
 *.sln
 *.vscode
+cmake/hdf5-buildtree
