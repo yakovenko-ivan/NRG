@@ -1,226 +1,408 @@
-# NRG Tutorial: Running Your First Simulation
+# NRG Tutorial — Generate and Run a 1D Reactive-Flow Case
 
-This tutorial guides you through the complete process of running a simulation with the NRG software. The workflow consists of two distinct phases, each using a different executable:
-1.  **Generate a Problem Setup**: Use a `package_interface` executable (e.g., for a 1D laminar flame) to create a specific case folder.
-2.  **Run the Simulation**: Use the `computing_module` solver to perform the calculation from within that generated folder.
+This tutorial demonstrates the actual two-stage workflow used by the current `refactor/core-solvers-validation` branch:
 
-We will use the **1D Laminar Burning Velocity** test case as our example.
+1. build and run a **problem interface** to generate a self-contained case;
+2. run **`computing_module` from inside that case directory**.
 
----
-
-## Prerequisites
-
-*   You have successfully built the NRG software by following the [Installation Guide](INSTALLATION.md).
-*   You have built both a `package_interface` target (e.g., `package_interface_1D_laminar_velocity`) and the `computing_module` target.
-*   You know the location of your compiled binaries (typically in `build/bin/` or `build/bin/Release/`).
-
----
-
-## Overview: The Two-Step Workflow
-
-A key concept in NRG is the separation between **problem setup** and **solver execution**. They are distinct steps run from different directories with different executables.
-
-1.  **Step 1 (Setup):** You run a `package_interface` program. It **must** find a `task_setup/` folder in its current working directory. It reads this template, applies specific parameters (like chemistry model, mesh resolution), and generates a new, self-contained problem folder right where you run it.
-2.  **Step 2 (Solve):** You navigate into the **newly generated problem folder**. You then run the `computing_module` solver from there. It reads the configuration files in that folder and writes results to its `data_save/` subdirectory.
-
-**Visual Workflow:**
+The example uses the default interface:
 
 ```text
-NRG Source Tree
-|
-| (Copy template)
-v
-Binary Directory (e.g., build/bin/)
-|--> Contains: package_interface_*, computing_module
-|
-| (Execute package_interface_*)
-v
-Generated Problem Folder (e.g., 1D_LBV_test/.../)
-|--> Contains: data_save/, data_output/, task_setup/
-|
-| (Execute computing_module from inside this folder)
-v
-Results written to data_save/
+package_interface/src/tests/classic_tests/1D_laminar_velocity.f90
 ```
 
----
+## Before you start: current platform limitation
 
-## Part 1: Generating the Problem Setup
+The current 1D interface is not yet a fully portable tutorial program: it uses Intel's `ifport` module and a Windows `xcopy` command. The instructions below therefore use **Windows 11 + Visual Studio 2022 + Intel oneAPI `ifx`**.
 
-The `package_interface` executable looks for a `task_setup/` folder **in its immediate working directory**. You must first copy the template there.
+The reference test uses the dependency-free Tecplot field-output backend by default. CGNS/HDF5 is optional and is covered separately in [INSTALLATION.md](INSTALLATION.md#9-cgnshdf5-output).
 
-### **Step-by-Step Instructions**
+## 1. Prerequisites
 
-#### **For Command-Line Users (All Platforms)**
+You should have:
 
-1.  **Navigate to your binary directory and copy the template.**
-    Run these commands from your **NRG source directory**.
-    ```bash
-    # Go to where your binaries are (adjust path if using Visual Studio generator)
-    cd build/bin/
-    # Copy the essential template folder from the source tree
-    cp -r ../../package_interface/task_setup/ .
-    ```
-    *Now, `build/bin/` contains both `package_interface_1D_laminar_velocity` and the `task_setup/` folder.*
+- Visual Studio 2022 with C++ development tools;
+- Intel oneAPI HPC Toolkit with `ifx` and Visual Studio integration;
+- CMake 3.29 or newer;
+- Git;
+- the `refactor/core-solvers-validation` branch checked out.
 
-2.  **Run the interface executable.**
-    ```bash
-    # For the 1D laminar velocity case
-    ./package_interface_1D_laminar_velocity
-    # On Windows Command Prompt, omit the ./
-    # package_interface_1D_laminar_velocity.exe
-    ```
+Verify the environment:
 
-#### **For Visual Studio IDE Users (Windows ifx)**
-
-When running from the Visual Studio GUI, the "working directory" is the folder containing the project file (`.vfproj`).
-
-1.  **Locate the `package_interface` project directory.** It is typically inside your `build` folder (e.g., `build/package_interface/`).
-2.  **Copy the template `task_setup` folder** from `NRG/package_interface/task_setup/` into this project directory.
-3.  In Visual Studio, set the `package_interface` project as the startup project, choose the **Release** configuration, and run it (**Debug** will also work but be slower).
-
-### **What Happens & What to Expect**
-
-*   The program will run and create a **new folder** in your current working directory (e.g., `build/bin/` or the VS project dir). Its name encodes all chosen parameters, for example:
-    `1D_LBV_test/nw/cartesian/FDS/KEROMNES/9.0_pcnt/dx_1.0e-04/`
-*   This new folder is your **complete problem setup**. It contains:
-    *   `data_save/`: **Empty initially.** This is where results will be written.
-    *   `data_output/`: Contains initial field files (e.g., `fields_init.plt`).
-    *   `problem_setup.log`: A text log describing the generated case.
-    *   A specific `task_setup/` folder: Configured input files (`.inf`) for this case.
-
-**Note:** You only need to copy the master `task_setup` template **once** to a given working directory. You can run `package_interface` multiple times from there to generate different cases.
-
----
-
-## Part 2: Running the Simulation
-
-The `computing_module` solver must be run **from within the specific problem folder** generated in Part 1.
-
-### **Step-by-Step Instructions**
-
-1.  **Navigate into the generated problem directory.**
-    ```bash
-    # Change into the folder that was just created.
-    # The exact name was printed to the terminal at the end of Part 1.
-    cd 1D_LBV_test/nw/cartesian/FDS/KEROMNES/9.0_pcnt/dx_1.0e-04/
-    ```
-    Verify this folder contains `data_save/`, `data_output/`, and `problem_setup.log`.
-
-2.  **Run the solver.** Choose the simplest option:
-    *   **Option A (Copy executable here):** Copy the `computing_module` executable into this problem directory, then run it.
-        ```bash
-        # Copy the solver from your build directory (adjust path as needed)
-        cp ../../../computing_module .
-        # Run it
-        ./computing_module
-        ```
-    *   **Option B (Run from build location):** Run it directly using a relative path.
-        ```bash
-        ../../../build/bin/computing_module          # If using Unix Makefiles
-        ../../../build/bin/Release/computing_module.exe # If using Visual Studio generator
-        ```
-
-#### **For Visual Studio IDE Users**
-
-1.  **Copy the generated problem folder** (e.g., `1D_LBV_test/nw/...`) into the **`computing_module` project directory**.
-2.  In Visual Studio, set the `computing_module` project as the startup project.
-3.  **Crucial:** In the project **Properties > Debugging**, set the **Working Directory** to the path of the copied problem folder.
-4.  Run the project (preferably in **Release** configuration).
-
----
-
-## Part 3: Verifying a Successful Run
-
-Check the following to confirm your simulation ran correctly:
-
-1.  **Console Output:** The `computing_module` will print progress information (time step, simulation time, etc.). A successful run will complete without printing fatal error messages. 
-2.  **Generated Files:** After the run, check:
-    *   `data_save/`: Should now contain `.plt` (Tecplot format) files with names like `000000us.plt`, `000100us.plt`, etc. These files should have a size greater than zero.
-    *   `problem_setup.log`: Can be opened with a text editor to review the case description.
-3.  **Visualization:** The `.plt` files can be opened with scientific visualization tools like **Tecplot** or **ParaView** to inspect the flow field, temperature, species concentrations, and other results.
-
----
-
-## Complete Quick-Start Example
-
-Here is the complete command-line workflow for a standard **Release** build with `Unix Makefiles` on Linux/macOS/WSL:
-
-```bash
-# 1. Build the software
-cd /path/to/NRG
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --target computing_module package_interface
-
-# 2. Generate a 1D laminar flame setup
-cd bin
-cp -r ../../package_interface/task_setup/ .
-./package_interface_1D_laminar_velocity
-
-# 3. Run the simulation
-cd 1D_LBV_test/nw/cartesian/FDS/KEROMNES/9.0_pcnt/dx_1.0e-04/
-cp ../../../computing_module .
-./computing_module
-
-# 4. Check results
-ls -la data_save/
+```cmd
+where ifx
+ifx --version
+cmake --version
+git branch --show-current
 ```
----
-## Troubleshooting
 
-This section addresses common problems encountered when setting up and running NRG simulations. If your issue isn't listed here, please search for or open a new topic on the [GitHub Issues](https://github.com/yakovenko-ivan/NRG/issues) page.
+## 2. Understand the NRG workflow
 
-| Problem & Error Message | Likely Cause | Solution |
-| :--- | :--- | :--- |
-| **`package_interface` crashes immediately or prints an error about a missing `task_setup` folder.** | The executable cannot find the required template directory in its current working directory. | **Copy the master `task_setup` folder** from `NRG/package_interface/task_setup/` into the **same directory** where your `package_interface_*.exe` is located (e.g., `build/bin/`). |
-| **`computing_module` crashes on startup with file errors.** | The solver is being run from the wrong directory. It must be executed from inside the specific problem folder generated by `package_interface`. | **Navigate into the generated problem folder** (e.g., `1D_LBV_test/nw/.../`) before running the solver. Ensure this folder contains `data_save/` and `problem_setup.log`. |
-| **No `.plt` result files are created in the `data_save/` folder.** | The simulation terminated prematurely, possibly due to a configuration error or numerical instability. | 1. Check the terminal output for error messages.<br>2. Verify the `task_setup` template was copied correctly in the first step.<br>3. Try running a **Debug** build for more detailed logs: `cmake --build . --config Debug`. |
-| **"Permission denied" error when trying to run an executable (Linux/macOS).** | The binary file does not have execute permissions. | Grant execute permissions: `chmod +x package_interface_1D_laminar_velocity computing_module`. |
-| **CMake or build errors during compilation.** | Issues with compiler configuration, missing dependencies, or the build environment. | Refer to the comprehensive solutions in the [Installation Guide (INSTALLATION.md)](INSTALLATION.md#troubleshooting). Common fixes include specifying the correct compiler or generator. |
-| **The `--config` flag (e.g., `--config Release`) seems to have no effect when using `Unix Makefiles`.** | This is expected behavior. The `--config` flag is only for multi-config generators like Visual Studio. | For `Unix Makefiles`, you **must** specify the build type during the *configuration* step using `-DCMAKE_BUILD_TYPE=Release` (or `Debug`) in the `cmake ..` command. |
+NRG separates **case generation** from **time integration**.
 
-## Next Steps
+```text
+package_interface source
+        |
+        | compile
+        v
+package_interface_1D_laminar_velocity.exe
+        |
+        | run with task_setup/ available in its working directory
+        v
+generated self-contained problem directory
+        |
+        | run computing_module.exe from this directory
+        v
+field files + checkpoints + post-processing data
+```
 
-Congratulations on running your first NRG simulation! Now that you understand the core workflow, you can explore the software's full capabilities. Here are several logical paths to continue your journey.
+The interface is not the CFD solver. It constructs a computational domain, chemistry/thermophysics setup, solver options, boundary conditions, initial fields, output settings and `.inf` files. The `computing_module` executable later reconstructs those objects from the generated files and advances the solution.
 
-### 1. Modify and Experiment with a Case
-The most direct next step is to change the parameters of your simulation.
-*   **Location:** Navigate into the `task_setup/` folder within your generated problem directory (e.g., `1D_LBV_test/nw/.../task_setup/`).
-*   **Action:** Open and edit the `.inf` configuration files with a text editor. You can modify physical properties, boundary conditions, numerical schemes, or output intervals.
-*   **Test:** After saving your changes, run `computing_module` again from the same problem folder to see their effect.
+## 3. Configure NRG
 
-### 2. Run a Different Type of Simulation
-NRG can model various reactive flow scenarios. To run a different case (e.g., a droplet evaporation in a high-temperature environment):
-1.  **Build a new interface:** Reconfigure and build a different `package_interface` target.
-    ```bash
-    cd build
-    cmake .. -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/3D_droplet_evaporation.f90
-    cmake --build . --target package_interface
-    ```
-2.  **Follow the workflow:** Repeat the two-step tutorial steps from the beginning, using the new `package_interface_3D_droplet_evaporation` executable.
+From the repository root:
 
-### 3. Visualize and Analyze Results
-The primary output is in the `data_save/` folder in Tecplot (`.plt`) format.
-*   **Recommended Tools:** Use **[Tecplot](https://www.tecplot.com/)** or **[ParaView](https://www.paraview.org/)** (open-source) to open the `.plt` files.
-*   **What to Explore:** Plot contours and graphs of fields like temperature (`T`), pressure (`p`), velocity (`v`), and species concentrations (`Y`) to analyze the combustion process and verify your setup.
+```cmd
+cmake -S . -B build ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -T fortran=ifx ^
+  -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/1D_laminar_velocity.f90
+```
 
-### 4. Dive into the Theory and Models
-To understand the scientific and numerical foundations of your simulations:
-*   **Review the source code** and module descriptions in the `package_library/` directory.
-*   **Consult academic references** for the implemented models (e.g., specific combustion mechanisms, the CABARET scheme).
-*   **Future Resource:** A comprehensive **Theory Guide** will be added to the project documentation, detailing governing equations, chemical kinetics, turbulence models, and numerical methods.
+The explicit `PACKAGE_INTERFACE_SOURCE` is technically unnecessary because this is currently the default, but keeping it in the tutorial makes the selected test unambiguous.
 
-### 5. Contribute to the NRG Project
-Interested in developing new features or improving the code?
-*   **Explore the Structure:** Familiarize yourself with the key directories: `computing_module/` (core solvers), `package_library/` (shared physics modules), and `package_interface/` (case setup).
-*   **Check Guidelines:** Look for a `CONTRIBUTING.md` file in the repository for coding standards and pull request procedures.
-*   **Future Resource:** A detailed **Developer Guide** will be created to explain the architecture, data structures, and how to extend the software.
+Do not add `-DCMAKE_Fortran_COMPILER=ifx` to this Visual Studio configuration. CMake 3.29+ selects Intel oneAPI Fortran through `-T fortran=ifx`.
 
-### 6. Explore Advanced Capabilities
-As you become more proficient, consider exploring:
-*   **Parallel Computation:** Running larger cases using MPI for distributed-memory parallel processing.
-*   **Custom Models:** Implementing user-defined source terms or new physical models within the modular framework.
+## 4. Build the interface and solver
 
-We hope this tutorial provided a solid foundation. Your feedback and contributions are welcome as the NRG project and its documentation continue to evolve.
+```cmd
+cmake --build build --target package_interface computing_module --config Release --parallel
+```
 
+The current CMake output layout puts both programs in:
+
+```text
+build\bin\Release\
+```
+
+You should find:
+
+```text
+build\bin\Release\package_interface_1D_laminar_velocity.exe
+build\bin\Release\computing_module.exe
+```
+
+## 5. Copy the master `task_setup` directory
+
+The 1D interface expects a directory named:
+
+```text
+task_setup
+```
+
+in its **current working directory**. Copy the repository template beside the executable:
+
+```cmd
+xcopy package_interface\task_setup build\bin\Release\task_setup /E /I /Y
+```
+
+After copying:
+
+```text
+build\bin\Release\
+├── package_interface_1D_laminar_velocity.exe
+├── computing_module.exe
+└── task_setup\
+    ├── chemical_mechanisms\
+    └── thermophysical_data\
+```
+
+The interface will copy these chemistry/thermophysical files into each generated case and then write case-specific `.inf` files there.
+
+## 6. Run the problem interface
+
+Change to the binary directory:
+
+```cmd
+cd build\bin\Release
+```
+
+Run:
+
+```cmd
+package_interface_1D_laminar_velocity.exe
+```
+
+### What the current source generates
+
+The hard-coded loop bounds in the present branch select exactly one combination:
+
+- setup: **near-wall flame** (`nw`);
+- coordinates: **Cartesian**;
+- gas-dynamic solver: **FDS low-Mach**;
+- chemical mechanism: **KEROMNES**;
+- hydrogen concentration: **17 vol.% H2 in air**;
+- grid spacing: **1.25e-5 m**.
+
+The generated directory is created under a hierarchy beginning with:
+
+```text
+1D_LBV_test\nw\cartesian\FDS\KEROMNES\...
+```
+
+The concentration/equivalence-ratio directory name and the final `dx_...` directory are generated by the interface itself. Rather than hard-coding the entire path in scripts, locate the case by its `problem_setup.log`, for example:
+
+```cmd
+dir /S /B 1D_LBV_test\problem_setup.log
+```
+
+## 7. Inspect the generated case
+
+A generated case contains the information required by `computing_module`. The important items are:
+
+```text
+<case>\
+├── problem_setup.log
+├── task_setup\
+│   ├── domain_data.inf
+│   ├── field_data.inf
+│   ├── chemical_data.inf
+│   ├── thermophysical_setup.inf
+│   ├── solver_setup.inf
+│   ├── boundary_conditions_setup.inf
+│   ├── data_save_setup.inf
+│   ├── data_io_setup.inf
+│   ├── post_processors_manager_setup.inf
+│   ├── post_processor*.inf
+│   ├── chemical_mechanisms\...
+│   └── thermophysical_data\...
+├── data_save\
+└── data_output\
+```
+
+The interface also writes the initial solution. With the default Tecplot setting, `data_save\` should already contain an initial `.plt` field file after case generation.
+
+The exact set of `.inf` files may evolve with the selected interface; `run_control.inf`, for example, is optional and older/generated cases remain valid without it.
+
+## 8. Run `computing_module`
+
+Change into the generated **leaf case directory** — the directory containing `problem_setup.log` and `task_setup\`.
+
+Then start the solver by absolute path or copy the executable into the case. Using an absolute path keeps the case directory cleaner:
+
+```cmd
+C:\path\to\NRG\build\bin\Release\computing_module.exe --num_threads=8
+```
+
+The current executable parses:
+
+```text
+--num_threads=<N>
+```
+
+and uses that value to configure OpenMP. If the option is omitted, the code initializes its requested thread count to **1**, so explicitly setting the thread count is important for a production OpenMP run.
+
+For a first functional test, a small value such as `--num_threads=4` is sufficient.
+
+## 9. What `computing_module` reads
+
+At startup the solver opens `problem_setup.log` and reconstructs the simulation from files under `task_setup\`, including:
+
+- domain and computational mesh;
+- chemistry and thermophysical data;
+- solver options and enabled physical processes;
+- boundary conditions;
+- data-save configuration;
+- checkpoint/data-I/O configuration;
+- post-processors;
+- optional run-control policy.
+
+This is why `computing_module.exe` must be launched **with the generated case as its current working directory**. Running it from `build\bin\Release` without a case there is not equivalent.
+
+## 10. Check the calculation
+
+A successful start should show solver/OpenMP initialization in the console and append configuration information to:
+
+```text
+problem_setup.log
+```
+
+During the run, inspect:
+
+```text
+data_save\
+data_output\
+```
+
+With the default Tecplot backend, full-field snapshots use names such as:
+
+```text
+000001ms.plt
+000002ms.plt
+...
+```
+
+The filename stem is derived from the simulation time and the configured output-time units.
+
+Post-processing `.dat` files (for example `proc1.dat` in this interface) are produced according to the generated post-processor configuration.
+
+## 11. Using CGNS instead of Tecplot
+
+To use CGNS/HDF5 instead of the default Tecplot output, set the relevant problem interface to:
+
+```fortran
+save_format = 'cgns'
+```
+
+and configure NRG with:
+
+```text
+NRG_ENABLE_CGNS=ON
+```
+
+For a preinstalled system library:
+
+```cmd
+cmake -S . -B build-cgns ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -T fortran=ifx ^
+  -DNRG_ENABLE_CGNS=ON ^
+  -DNRG_USE_SYSTEM_CGNS=ON
+```
+
+The CGNS writer creates:
+
+```text
+*.cgns
+```
+
+files and currently requires a single MPI rank.
+
+Do not use the bundled `NRG_ENABLE_CGNS=ON` path at branch tip `0270e5947d3ca2b80d005856c577188952170d99` until `cmake/hdf5-buildtree/hdf5-config.cmake.in` is added/restored.
+
+## 12. Change the physical/numerical case
+
+The current `1D_laminar_velocity.f90` interface is a source-driven campaign generator. Its six loop variables choose:
+
+```text
+task1  physical setup
+task2  coordinate system
+task3  gas-dynamic solver
+task4  chemical mechanism
+task5  H2 concentration
+task6  spatial resolution
+```
+
+For example, the current source contains loop bounds equivalent to one near-wall Cartesian FDS/KEROMNES case at 17% H2 and `dx=1.25e-5 m`.
+
+To create a different sweep:
+
+1. edit the relevant loop bounds/selections in `1D_laminar_velocity.f90`;
+2. rebuild only the interface:
+
+```cmd
+cmake --build build --target package_interface --config Release --parallel
+```
+
+3. run `package_interface_1D_laminar_velocity.exe` again from a directory containing the master `task_setup\` template.
+
+You do **not** need to rebuild `computing_module` when only case parameters in the interface are changed.
+
+## 13. Select a different interface
+
+Re-run CMake with another source, for example:
+
+```cmd
+cmake -S . -B build ^
+  -G "Visual Studio 17 2022" ^
+  -A x64 ^
+  -T fortran=ifx ^
+  -DPACKAGE_INTERFACE_SOURCE=src/tests/classic_tests/3D_droplet_evaporation.f90
+
+cmake --build build --target package_interface --config Release --parallel
+```
+
+Other current classic-test sources include:
+
+```text
+0D_ignition_delay_agent.f90
+0D_ignition_delay_campaign.f90
+1D_laminar_velocity.f90
+3D_droplet_evaporation.f90
+```
+
+Some interfaces have their own input contracts. For example, `0D_ignition_delay_campaign.f90` expects a campaign namelist (`setup_input.nml` by default, or a path supplied as its first command-line argument). Read the source header before treating every interface as a drop-in replacement for the 1D example.
+
+## 14. Run control
+
+The current library supports an optional:
+
+```text
+task_setup\run_control.inf
+```
+
+with termination modes:
+
+```text
+none
+simulation_time
+wall_time
+either
+```
+
+The same subsystem also checks for external request files in the case root:
+
+```text
+run_control.stop
+run_control.pause
+```
+
+A pause/wall-time termination can request a restart checkpoint. If `run_control.inf` is absent, the solver preserves the legacy behavior and does not impose a new run-control termination criterion.
+
+This mechanism is useful for long batch calculations and agent-driven campaigns, but it is not required for the basic 1D tutorial.
+
+## 15. Common problems
+
+### `ifx is not a full path and was not found in the PATH`
+
+Delete the old CMake cache/build directory and configure Visual Studio with CMake 3.29+ using:
+
+```cmd
+-T fortran=ifx
+```
+
+not `-DCMAKE_Fortran_COMPILER=ifx`.
+
+### `package_interface_1D_laminar_velocity.exe` cannot copy `task_setup`
+
+Run it from the directory that contains the copied master `task_setup\` directory. The present interface executes an `xcopy` command relative to its current working directory.
+
+### `computing_module.exe` cannot open `problem_setup.log` or `task_setup/*.inf`
+
+You started the solver from the wrong working directory. Change into the generated leaf case directory first.
+
+### Only one CPU thread is used
+
+Pass an explicit thread count:
+
+```cmd
+computing_module.exe --num_threads=8
+```
+
+### Result files are not directly under `build/bin/Release`
+
+They belong to the generated problem directory. `build/bin/Release` contains executables; simulation output is written relative to the case working directory.
+
+## 16. Next steps
+
+After this first run, the most useful next steps are:
+
+- enable and test the optional CGNS/HDF5 output backend when needed;
+- create smaller dedicated manual-research interfaces for individual validation studies rather than editing a large campaign sweep;
+- use `run_control.inf` for reproducible physical-time/wall-time termination;
+- use `package_utilities` for trajectory and field post-processing;
+- add platform-neutral filesystem helpers to the 1D interface so the same tutorial works with GNU Fortran on Linux/macOS.
+
+For build details and the current portability matrix, see [INSTALLATION.md](INSTALLATION.md).
