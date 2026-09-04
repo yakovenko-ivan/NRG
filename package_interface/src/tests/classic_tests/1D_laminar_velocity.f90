@@ -20,6 +20,7 @@
 !   - Multiple initial condition configurations
 !   - Comprehensive post-processing setup
 !   - Support for flamelet initialization from precomputed tables
+!   - Cross-platform Windows/Linux case-directory handling
 !
 ! PHYSICAL SYSTEM:
 !   Simulates 1D reactive flow with hydrogen-air mixtures
@@ -34,7 +35,7 @@ program package_interface
     !==========================================
     ! MODULE IMPORTS
     !==========================================
-    use ifport                     ! Intel Fortran portability routines
+    use iso_c_binding, only: c_int, c_size_t, c_char, c_ptr, c_null_char, c_associated
     use kind_parameters            ! Defines precision kinds (dp, sp, etc.)
     use global_data                ! Global constants and parameters
     use computational_domain_class ! Domain definition and management
@@ -53,6 +54,39 @@ program package_interface
     use supplementary_routines     ! Utility functions and helper routines
 
     implicit none
+
+    ! C runtime bindings used only for changing/querying the process working
+    ! directory.  File-tree creation/copy is delegated to portable `cmake -E`
+    ! commands below.
+    interface
+#ifdef WIN
+        function c_getcwd(buffer, maxlen) bind(C, name="_getcwd") result(ptr)
+            import :: c_ptr, c_char, c_int
+            character(kind=c_char) :: buffer(*)
+            integer(c_int), value :: maxlen
+            type(c_ptr) :: ptr
+        end function c_getcwd
+
+        function c_chdir(path) bind(C, name="_chdir") result(status)
+            import :: c_int, c_char
+            character(kind=c_char), intent(in) :: path(*)
+            integer(c_int) :: status
+        end function c_chdir
+#else
+        function c_getcwd(buffer, maxlen) bind(C, name="getcwd") result(ptr)
+            import :: c_ptr, c_char, c_size_t
+            character(kind=c_char) :: buffer(*)
+            integer(c_size_t), value :: maxlen
+            type(c_ptr) :: ptr
+        end function c_getcwd
+
+        function c_chdir(path) bind(C, name="chdir") result(status)
+            import :: c_int, c_char
+            character(kind=c_char), intent(in) :: path(*)
+            integer(c_int) :: status
+        end function c_chdir
+#endif
+    end interface
     
     !==========================================
     ! PRIMARY SIMULATION OBJECTS
@@ -127,9 +161,9 @@ program package_interface
     ! FILE AND DIRECTORY PATHS
     !==========================================
     character(len=10)           :: string              ! Temporary string buffer
-    character(len=500)          :: initial_work_dir    ! Initial working directory
-    character(len=200)          :: work_dir            ! Current working directory
-    character(len=200)          :: initials_file       ! Flamelet initialization file
+    character(len=4096)         :: initial_work_dir    ! Initial working directory
+    character(len=1024)         :: work_dir            ! Current working directory
+    character(len=1024)         :: initials_file       ! Flamelet initialization file
     character(len=20)           :: solver_name         ! Solver type identifier
     character(len=20)           :: coordinate_system   ! Coordinate system type
     character(len=30)           :: setup               ! Physical setup type
@@ -154,7 +188,7 @@ program package_interface
     !==========================================
     
     ! Get initial working directory for later return
-    ierr = getcwd(initial_work_dir)
+    call get_current_directory(initial_work_dir)
     
     !================================================================
     ! PARAMETRIC STUDY LOOPS
@@ -164,8 +198,8 @@ program package_interface
     ! task2: Coordinate system (1=Cartesian, 2=cylindrical, 3=spherical)
     ! task3: Solver type (1=FDS, 2=CPM, 3=CABARET)
     ! task4: Chemical mechanism (currently only KEROMNES)
-    ! task5: Hydrogen concentration (9=9% H2)
-    ! task6: Spatial resolution (2=dx=1.0e-04 m)
+    ! task5: Hydrogen concentration (currently 17% H2)
+    ! task6: Spatial resolution (currently dx=1.25e-05 m)
     !================================================================
     
     do task1 = 3, 3          ! Problem setups: Counter-flow flame (1), Counter-flow (precomputed flamelet) (2), Flame out from the wall (3)
@@ -181,7 +215,7 @@ program package_interface
         work_dir = '1D_LBV_test'  ! Main results directory
         
         ! Create directory tree based on parameter choices
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
         !------------------------------------------------
         ! TASK1: PHYSICAL SETUP SELECTION
@@ -201,7 +235,7 @@ program package_interface
                 domain_length = 0.1024_dp  ! Fixed domain length [m]
         end select
         
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
         !------------------------------------------------
         ! TASK2: COORDINATE SYSTEM SELECTION
@@ -218,7 +252,7 @@ program package_interface
                 coordinate_system = 'spherical'
         end select
         
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
         !------------------------------------------------
         ! TASK3: SOLVER TYPE SELECTION
@@ -235,7 +269,7 @@ program package_interface
                 solver_name = 'CABARET'
         end select
         
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
         !------------------------------------------------
         ! TASK4: CHEMICAL MECHANISM SELECTION
@@ -261,17 +295,17 @@ program package_interface
                 transdata_file = trim(mech_name) // '_TRANSDATA.txt'
         end select
         
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
         !------------------------------------------------
         ! TASK5: HYDROGEN CONCENTRATION
         !------------------------------------------------
-        X_H2		= task5 * 1.0_dp
-        phi			= 4.762_dp * 0.5_dp * X_H2 /100.0_dp / (1.0_dp - X_H2/100.0_dp)
-	    nu			= (100.0_dp - X_H2) / X_H2 / 4.762_dp     
-        work_dir	= trim(work_dir) // trim(fold_sep) //  trim(str_r(X_H2)) //'_pcnt_' // trim(str_r(phi)) //'_phi(fuel)'
+        X_H2        = task5 * 1.0_dp
+        phi         = 4.762_dp * 0.5_dp * X_H2 /100.0_dp / (1.0_dp - X_H2/100.0_dp)
+        nu          = (100.0_dp - X_H2) / X_H2 / 4.762_dp
+        work_dir    = trim(work_dir) // trim(fold_sep) // trim(str_r(X_H2)) //'_pcnt_' // trim(str_r(phi)) //'_phi(fuel)'
         
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
         !------------------------------------------------
         ! TASK6: SPATIAL RESOLUTION
@@ -300,11 +334,12 @@ program package_interface
                 delta_x  = 6.25e-06_dp
         end select
         
-        ierr = system('mkdir '// work_dir)
+        call ensure_directory(work_dir)
         
-        ! Copy setup files to working directory and change to it
-        ierr = system('echo d | xcopy .\' // trim(task_setup_folder) // ' .\' // trim(work_dir) // trim(fold_sep) // trim(task_setup_folder) // ' /E/K' )
-        ierr = chdir(work_dir)
+        ! Copy setup files to working directory and change to it.
+        call copy_directory_tree(trim(task_setup_folder), &
+                                 trim(work_dir) // trim(fold_sep) // trim(task_setup_folder))
+        call change_directory(work_dir)
         
         ! Open log file for this configuration
         open(newunit = log_unit, file = problem_setup_log_file, status = 'replace', form = 'formatted')
@@ -403,9 +438,9 @@ program package_interface
         
         ! Define post-processing operations:
         ! 1. Minimum temperature gradient in observation slice
-        ! 2-3. Pressure at ±5mm transducers
-        ! 4-5. Density at ±5mm transducers
-        ! 6-7. Temperature at ±5mm transducers
+        ! 2-3. Pressure at +/-5mm transducers
+        ! 4-5. Density at +/-5mm transducers
+        ! 6-7. Temperature at +/-5mm transducers
         call problem_post_proc_manager%create_post_processor_operation( &
             problem_data_manager, 1, 'temperature', 'min_grad', &
             operation_area = observation_slice, grad_projection = 1)
@@ -449,12 +484,12 @@ program package_interface
                 'energy_production_diffusion',    &
                 'energy_production_radiation'     &
             ], &
-            save_time         = 1.0_dp,       &   ! Save interval
-            save_time_units   = 'milliseconds', &   ! Time units for saving
-            save_format       = 'cgns',      &   ! Output format
-            data_save_folder  = 'data_save',    &   ! Output directory
+            save_time         = 1.0_dp,          &   ! Save interval
+            save_time_units   = 'milliseconds',  &   ! Time units for saving
+            save_format       = 'tecplot',       &   ! Default output format
+            data_save_folder  = 'data_save',     &   ! Output directory
             dataset_name      = '1D_LBV_Keromnes', &
-            debug_flag        = .false.)            ! Debug mode off
+            debug_flag        = .false.)              ! Debug mode off
         
         !================================================================
         ! DATA I/O CONFIGURATION
@@ -749,7 +784,7 @@ program package_interface
         call problem_data_save%save_all_data(0.0_dp, stop_flag, make_save   = .true.)
         
         ! Return to initial directory for next configuration
-        ierr = chdir(initial_work_dir)
+        call change_directory(initial_work_dir)
         
         ! Temporary pause/continue for debugging
         continue
@@ -760,6 +795,100 @@ program package_interface
     end do  ! task3 loop
     end do  ! task2 loop
     end do  ! task1 loop
+
+contains
+
+    !--------------------------------------------------------------------------
+    ! Return the process working directory without relying on compiler-specific
+    ! modules such as IFPORT.
+    !--------------------------------------------------------------------------
+    subroutine get_current_directory(directory)
+        character(len=*), intent(out) :: directory
+        character(kind=c_char) :: buffer(4096)
+        type(c_ptr) :: ptr
+        integer :: idx, max_copy
+
+        buffer = c_null_char
+#ifdef WIN
+        ptr = c_getcwd(buffer, int(size(buffer), c_int))
+#else
+        ptr = c_getcwd(buffer, int(size(buffer), c_size_t))
+#endif
+        if (.not. c_associated(ptr)) then
+            error stop 'Unable to obtain current working directory.'
+        end if
+
+        directory = ''
+        max_copy = min(len(directory), size(buffer))
+        do idx = 1, max_copy
+            if (buffer(idx) == c_null_char) exit
+            directory(idx:idx) = transfer(buffer(idx), directory(idx:idx))
+        end do
+
+        if (idx > len(directory) .and. buffer(min(idx,size(buffer))) /= c_null_char) then
+            error stop 'Current working directory path exceeds internal buffer.'
+        end if
+    end subroutine get_current_directory
+
+    !--------------------------------------------------------------------------
+    ! Change the process working directory through the platform C runtime.
+    !--------------------------------------------------------------------------
+    subroutine change_directory(directory)
+        character(len=*), intent(in) :: directory
+        character(kind=c_char), allocatable :: c_path(:)
+        integer(c_int) :: status
+        integer :: idx, path_length
+
+        path_length = len_trim(directory)
+        allocate(c_path(path_length + 1))
+        do idx = 1, path_length
+            c_path(idx) = transfer(directory(idx:idx), c_path(idx))
+        end do
+        c_path(path_length + 1) = c_null_char
+
+        status = c_chdir(c_path)
+        if (status /= 0_c_int) then
+            write(*,'(A)') 'Unable to change working directory to: ' // trim(directory)
+            error stop 'Directory change failed.'
+        end if
+    end subroutine change_directory
+
+    !--------------------------------------------------------------------------
+    ! Run a CMake -E filesystem command and fail immediately on errors.
+    ! CMake is already a build prerequisite and its -E commands are identical
+    ! on Windows and Unix-like systems.
+    !--------------------------------------------------------------------------
+    subroutine run_filesystem_command(command)
+        character(len=*), intent(in) :: command
+        integer :: cmdstat, exitstat
+
+        cmdstat = 0
+        exitstat = 0
+        call execute_command_line(command, wait=.true., exitstat=exitstat, cmdstat=cmdstat)
+        if (cmdstat /= 0 .or. exitstat /= 0) then
+            write(*,'(A)') 'Filesystem command failed: ' // trim(command)
+            write(*,'(A,I0,A,I0)') 'cmdstat=', cmdstat, ', exitstat=', exitstat
+            error stop 'Case-directory setup failed.'
+        end if
+    end subroutine run_filesystem_command
+
+    subroutine ensure_directory(directory)
+        character(len=*), intent(in) :: directory
+        character(len=:), allocatable :: command
+
+        command = 'cmake -E make_directory "' // trim(directory) // '"'
+        call run_filesystem_command(command)
+    end subroutine ensure_directory
+
+    subroutine copy_directory_tree(source_directory, destination_directory)
+        character(len=*), intent(in) :: source_directory
+        character(len=*), intent(in) :: destination_directory
+        character(len=:), allocatable :: command
+
+        command = 'cmake -E copy_directory "' // trim(source_directory) // '" "' // &
+                  trim(destination_directory) // '"'
+        call run_filesystem_command(command)
+    end subroutine copy_directory_tree
 
 end program package_interface
 !================================================================================
