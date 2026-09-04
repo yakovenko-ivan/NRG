@@ -30,6 +30,164 @@ set(LIBRARY_SRC
     ${SRC_LIB}/src/data_save_class.f90
 )
 
+
+# -----------------------------------------------------------------------------
+# NRG source revision and package-library compatibility metadata
+# -----------------------------------------------------------------------------
+# Both package_interface and computing_module link package_library.  Generate a
+# single build-info module here so setup generation and computation report the
+# same provenance fields.  The committed package_library tree is the primary
+# compatibility fingerprint; the dirty flag tells us whether local library
+# changes make that committed tree insufficient to describe the actual build.
+set(NRG_GIT_BRANCH "unknown")
+set(NRG_GIT_HEAD "unknown")
+set(NRG_PACKAGE_LIBRARY_TREE "unknown")
+set(NRG_PACKAGE_LIBRARY_DIRTY "unknown")
+
+find_package(Git QUIET)
+
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse --abbrev-ref HEAD
+        RESULT_VARIABLE NRG_GIT_BRANCH_RESULT
+        OUTPUT_VARIABLE NRG_GIT_BRANCH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT NRG_GIT_BRANCH_RESULT EQUAL 0)
+        set(NRG_GIT_BRANCH "unknown")
+    endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse HEAD
+        RESULT_VARIABLE NRG_GIT_HEAD_RESULT
+        OUTPUT_VARIABLE NRG_GIT_HEAD
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT NRG_GIT_HEAD_RESULT EQUAL 0)
+        set(NRG_GIT_HEAD "unknown")
+    endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse HEAD:package_library
+        RESULT_VARIABLE NRG_PACKAGE_LIBRARY_TREE_RESULT
+        OUTPUT_VARIABLE NRG_PACKAGE_LIBRARY_TREE
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT NRG_PACKAGE_LIBRARY_TREE_RESULT EQUAL 0)
+        set(NRG_PACKAGE_LIBRARY_TREE "unknown")
+    endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                status --porcelain --untracked-files=normal -- package_library
+        RESULT_VARIABLE NRG_PACKAGE_LIBRARY_STATUS_RESULT
+        OUTPUT_VARIABLE NRG_PACKAGE_LIBRARY_STATUS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NRG_PACKAGE_LIBRARY_STATUS_RESULT EQUAL 0)
+        if(NRG_PACKAGE_LIBRARY_STATUS STREQUAL "")
+            set(NRG_PACKAGE_LIBRARY_DIRTY "no")
+        else()
+            set(NRG_PACKAGE_LIBRARY_DIRTY "yes")
+        endif()
+    endif()
+
+    # Reconfigure after branch switches and new commits so the embedded Git HEAD
+    # follows the source revision used for a rebuilt executable.
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse --git-path HEAD
+        RESULT_VARIABLE NRG_GIT_HEAD_PATH_RESULT
+        OUTPUT_VARIABLE NRG_GIT_HEAD_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NRG_GIT_HEAD_PATH_RESULT EQUAL 0)
+        get_filename_component(
+            NRG_GIT_HEAD_PATH "${NRG_GIT_HEAD_PATH}"
+            ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}"
+        )
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${NRG_GIT_HEAD_PATH}")
+    endif()
+
+    if(NOT NRG_GIT_BRANCH STREQUAL "HEAD" AND
+       NOT NRG_GIT_BRANCH STREQUAL "unknown")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                    rev-parse --git-path "refs/heads/${NRG_GIT_BRANCH}"
+            RESULT_VARIABLE NRG_GIT_REF_PATH_RESULT
+            OUTPUT_VARIABLE NRG_GIT_REF_PATH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(NRG_GIT_REF_PATH_RESULT EQUAL 0)
+            get_filename_component(
+                NRG_GIT_REF_PATH "${NRG_GIT_REF_PATH}"
+                ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}"
+            )
+            if(EXISTS "${NRG_GIT_REF_PATH}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                    "${NRG_GIT_REF_PATH}")
+            endif()
+        endif()
+    endif()
+
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_SOURCE_DIR}"
+                rev-parse --git-path packed-refs
+        RESULT_VARIABLE NRG_GIT_PACKED_REFS_RESULT
+        OUTPUT_VARIABLE NRG_GIT_PACKED_REFS_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NRG_GIT_PACKED_REFS_RESULT EQUAL 0)
+        get_filename_component(
+            NRG_GIT_PACKED_REFS_PATH "${NRG_GIT_PACKED_REFS_PATH}"
+            ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}"
+        )
+        if(EXISTS "${NRG_GIT_PACKED_REFS_PATH}")
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                "${NRG_GIT_PACKED_REFS_PATH}")
+        endif()
+    endif()
+endif()
+
+message(STATUS "NRG Git branch: ${NRG_GIT_BRANCH}")
+message(STATUS "NRG Git HEAD: ${NRG_GIT_HEAD}")
+message(STATUS "NRG package_library tree: ${NRG_PACKAGE_LIBRARY_TREE}")
+message(STATUS "NRG package_library modified: ${NRG_PACKAGE_LIBRARY_DIRTY}")
+
+# Reconfigure if a package-library source changes locally so the dirty flag is
+# refreshed before the affected library is rebuilt.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${LIBRARY_SRC}
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/nrg_build_info.f90.in")
+
+string(REPLACE "'" "''" NRG_GIT_BRANCH_F90 "${NRG_GIT_BRANCH}")
+string(REPLACE "'" "''" NRG_GIT_HEAD_F90 "${NRG_GIT_HEAD}")
+string(REPLACE "'" "''" NRG_PACKAGE_LIBRARY_TREE_F90
+    "${NRG_PACKAGE_LIBRARY_TREE}")
+string(REPLACE "'" "''" NRG_PACKAGE_LIBRARY_DIRTY_F90
+    "${NRG_PACKAGE_LIBRARY_DIRTY}")
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(NRG_BUILD_INFO_SOURCE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/nrg_build_info.f90")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/nrg_build_info.f90.in"
+    "${NRG_BUILD_INFO_SOURCE}"
+    @ONLY
+)
+list(APPEND LIBRARY_SRC "${NRG_BUILD_INFO_SOURCE}")
+
 add_library(${LIBRARY_NAME} STATIC ${LIBRARY_SRC})
 
 target_include_directories(${LIBRARY_NAME}

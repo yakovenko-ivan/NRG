@@ -1,0 +1,37 @@
+module nrg_build_info
+
+    implicit none
+
+    private
+    public :: NRG_GIT_BRANCH
+    public :: NRG_GIT_HEAD
+    public :: NRG_PACKAGE_LIBRARY_TREE
+    public :: NRG_PACKAGE_LIBRARY_DIRTY
+    public :: write_nrg_source_revision
+
+    character(len=*), parameter :: NRG_GIT_BRANCH = '@NRG_GIT_BRANCH_F90@'
+    character(len=*), parameter :: NRG_GIT_HEAD = '@NRG_GIT_HEAD_F90@'
+    character(len=*), parameter :: NRG_PACKAGE_LIBRARY_TREE = &
+        '@NRG_PACKAGE_LIBRARY_TREE_F90@'
+    character(len=*), parameter :: NRG_PACKAGE_LIBRARY_DIRTY = &
+        '@NRG_PACKAGE_LIBRARY_DIRTY_F90@'
+
+contains
+
+    subroutine write_nrg_source_revision(log_unit, stage)
+        integer, intent(in) :: log_unit
+        character(len=*), intent(in) :: stage
+
+        write(log_unit,'(A)') repeat('*',85)
+        write(log_unit,'(A,A,A)') &
+            ' NRG source revision - ', trim(stage), ':'
+        write(log_unit,'(A,A)') ' Git branch: ', trim(NRG_GIT_BRANCH)
+        write(log_unit,'(A,A)') ' Git HEAD: ', trim(NRG_GIT_HEAD)
+        write(log_unit,'(A,A)') &
+            ' Package library tree: ', trim(NRG_PACKAGE_LIBRARY_TREE)
+        write(log_unit,'(A,A)') &
+            ' Package library modified: ', trim(NRG_PACKAGE_LIBRARY_DIRTY)
+        write(log_unit,'(A)') repeat('*',85)
+    end subroutine write_nrg_source_revision
+
+end module nrg_build_info

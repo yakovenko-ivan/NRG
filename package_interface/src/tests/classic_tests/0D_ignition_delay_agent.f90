@@ -26,6 +26,7 @@ program package_interface
     use, intrinsic :: iso_c_binding, only : c_char, c_int, c_null_char
     use kind_parameters
     use global_data
+    use nrg_build_info, only: write_nrg_source_revision
     use computational_domain_class
     use chemical_properties_class
     use thermophysical_properties_class
@@ -361,6 +362,7 @@ program package_interface
     !--------------------------------------------------------------------------
     open(newunit=log_unit, file=problem_setup_log_file,                &
          status='replace', form='formatted', action='write')
+    call write_nrg_source_revision(log_unit, 'problem setup generation')
     write(log_unit,'(A)') 'General description:'
     write(log_unit,'(A)') '  Homogeneous hydrogen-air ignition in a closed vessel.'
     write(log_unit,'(A)') 'Main aim:'

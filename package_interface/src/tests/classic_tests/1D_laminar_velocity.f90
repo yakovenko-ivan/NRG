@@ -38,6 +38,7 @@ program package_interface
     use iso_c_binding, only: c_int, c_size_t, c_char, c_ptr, c_null_char, c_associated
     use kind_parameters            ! Defines precision kinds (dp, sp, etc.)
     use global_data                ! Global constants and parameters
+    use nrg_build_info, only: write_nrg_source_revision
     use computational_domain_class ! Domain definition and management
     use chemical_properties_class  ! Chemical kinetics and species data
     use thermophysical_properties_class ! Thermodynamic and transport properties
@@ -343,6 +344,7 @@ program package_interface
         
         ! Open log file for this configuration
         open(newunit = log_unit, file = problem_setup_log_file, status = 'replace', form = 'formatted')
+        call write_nrg_source_revision(log_unit, 'problem setup generation')
         
         !================================================================
         ! DOMAIN DEFINITION

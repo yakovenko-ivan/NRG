@@ -3,6 +3,7 @@ program computing_module
 !	use IFPORT , only: SETENVQQ
 
 	use global_data
+    use nrg_build_info, only: write_nrg_source_revision
 	use kind_parameters
 	use computational_domain_class
 	use chemical_properties_class
@@ -223,6 +224,8 @@ program computing_module
 
 	processor_rank = problem_domain%get_processor_rank()
 	if (processor_rank == 0) then
+        call write_nrg_source_revision(log_unit, 'problem computation')
+
 		call problem_domain				%write_log(log_unit)													
 		call problem_chemistry			%write_log(log_unit)		
 		call problem_thermophysics		%write_log(log_unit)
