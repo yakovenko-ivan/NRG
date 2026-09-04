@@ -33,6 +33,7 @@ module post_processor_operation_class
         procedure :: set_point
         procedure :: process_operation
         procedure :: get_values_number
+        procedure :: get_output_variable_name
         procedure :: write_log
     end type post_processor_operation
 
@@ -381,7 +382,7 @@ contains
             end select
         end if
 
-        ! Vector operations are not currently implemented in this class.  Chemical
+        ! Vector operations are not currently implemented in this class. Chemical
         ! vector projections that are registered by long name are resolved by the
         ! data manager as scalar fields and therefore use the scalar path above.
 
@@ -495,6 +496,35 @@ contains
         class(post_processor_operation), intent(in) :: this
         get_values_number = 1
     end function get_values_number
+
+    function get_output_variable_name(this) result(variable_name)
+        class(post_processor_operation), intent(in) :: this
+        character(len=128) :: variable_name
+
+        character(len=5), dimension(3) :: axis_names
+        character(len=32) :: offset_text
+        integer :: dimensions
+        integer :: dim
+
+        dimensions = this%domain%get_domain_dimensions()
+        axis_names = this%domain%get_axis_names()
+
+        variable_name = trim(this%field_name) // '_' // trim(this%operation_type)
+
+        if ((trim(this%operation_type) == 'max_grad' .or. &
+             trim(this%operation_type) == 'min_grad') .and. &
+            this%grad_projection >= 1 .and. this%grad_projection <= dimensions) then
+            variable_name = trim(variable_name) // '_' // &
+                trim(axis_names(this%grad_projection))
+        end if
+
+        do dim = 1, dimensions
+            if (this%operation_area_distance(dim) == 0) cycle
+            write(offset_text,'(SP,I0)') this%operation_area_distance(dim)
+            variable_name = trim(variable_name) // '_d' // trim(axis_names(dim)) // &
+                trim(adjustl(offset_text))
+        end do
+    end function get_output_variable_name
 
     subroutine set_point(this, point_indexes)
         class(post_processor_operation), intent(inout) :: this

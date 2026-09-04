@@ -145,7 +145,8 @@ contains
     end subroutine write_output_counters
 
     subroutine create_post_processor( &
-        this, manager, post_processor_name, operations_number, save_time, save_time_units)
+        this, manager, post_processor_name, operations_number, save_time, &
+        save_time_units, post_processor_title)
 
         class(post_processor_manager), intent(inout) :: this
         type(data_manager), intent(in) :: manager
@@ -153,15 +154,28 @@ contains
         real(dp), intent(in) :: save_time
         character(len=*), intent(in) :: save_time_units
         character(len=*), intent(in) :: post_processor_name
+        character(len=*), intent(in), optional :: post_processor_title
 
         character(len=30) :: post_processor_output_file
+        character(len=100) :: post_processor_title_local
 
         this%post_processors_created = this%post_processors_created + 1
 
+        post_processor_title_local = 'NRG post-processor'
+        if (present(post_processor_title)) then
+            if (len_trim(post_processor_title) == 0) then
+                error stop 'Postprocessor: post_processor_title must not be empty'
+            end if
+            if (len_trim(post_processor_title) > len(post_processor_title_local)) then
+                error stop 'Postprocessor: post_processor_title is too long'
+            end if
+            post_processor_title_local = trim(adjustl(post_processor_title))
+        end if
+
         post_processor_output_file = post_processor_name // post_processor_data_format
         this%post_processors(this%post_processors_created) = post_processor_c( &
-            manager, post_processor_output_file, operations_number, save_time, &
-            save_time_units, &
+            manager, post_processor_output_file, post_processor_title_local, &
+            operations_number, save_time, save_time_units, &
             this%post_processors_setup_file_names(this%post_processors_created))
     end subroutine create_post_processor
 

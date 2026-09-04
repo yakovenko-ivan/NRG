@@ -31,7 +31,9 @@ get_property(NRG_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 if(NRG_MULTI_CONFIG)
     message(STATUS "Generator '${CMAKE_GENERATOR}' is multi-config")
-    message(STATUS "Select the configuration at build time with --config <Debug|Release>")
+    message(STATUS
+        "Select the configuration at build time with "
+        "--config <Debug|Release|RelWithDebInfo|MinSizeRel>")
 else()
     if(NOT CMAKE_BUILD_TYPE)
         set(CMAKE_BUILD_TYPE "Debug" CACHE STRING
@@ -54,9 +56,9 @@ message(STATUS "Fortran compiler version: ${CMAKE_Fortran_COMPILER_VERSION}")
 # -----------------------------------------------------------------------------
 option(NRG_ENABLE_OPENMP "Build NRG with OpenMP support" ON)
 
-# Interface target carrying all common compile definitions, compiler options,
-# link options, and optional OpenMP requirements. Linking package_library to
-# this target propagates the same configuration to all NRG executables.
+# Interface target carrying all common compile definitions/options and optional
+# OpenMP requirements. Linking package_library to this target propagates the
+# same configuration to all NRG executables.
 add_library(nrg_build_options INTERFACE)
 
 if(WIN32)
@@ -65,6 +67,25 @@ endif()
 
 if(NRG_ENABLE_OPENMP)
     find_package(OpenMP REQUIRED COMPONENTS Fortran)
+
+    # CMake's FindOpenMP publishes -Qiopenmp as both a compile option and an
+    # INTERFACE_LINK_OPTION for IntelLLVM. With Visual Studio generators,
+    # MSBuild performs the final link through the MSVC-compatible linker path.
+    # With ifx 2023.1 this produces a malformed Intel link warning even though
+    # the option is ignored and the executable links successfully.
+    #
+    # NRG uses host CPU OpenMP only, so preserve the imported target's compile
+    # options and runtime-library requirements while suppressing only this
+    # problematic IntelLLVM link-driver flag.
+    if(WIN32
+       AND CMAKE_GENERATOR MATCHES "^Visual Studio"
+       AND CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM")
+        set_property(TARGET OpenMP::OpenMP_Fortran
+            PROPERTY INTERFACE_LINK_OPTIONS "")
+        message(STATUS
+            "IntelLLVM/Visual Studio: suppressed redundant OpenMP link-driver flag")
+    endif()
+
     target_link_libraries(nrg_build_options INTERFACE OpenMP::OpenMP_Fortran)
     target_compile_definitions(nrg_build_options INTERFACE OMP)
     message(STATUS "OpenMP enabled: ${OpenMP_Fortran_VERSION}")
@@ -82,19 +103,30 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "^(IntelLLVM|Intel)$")
     # IntelLLVM is ifx. Intel is retained for compatibility with classic ifort.
+    #
+    # Traceback, checking and floating-point exception controls are compiler
+    # options. Do not forward them through target_link_options(): with Visual
+    # Studio the final linker is link.exe, which does not understand these
+    # Intel Fortran options.
     if(WIN32)
         target_compile_options(nrg_build_options INTERFACE
             /fpp
             /traceback
-            "$<$<CONFIG:Debug>:/Od;/debug:full;/check:all;/fpe:0>"
+
+            # Full runtime checking for correctness debugging, but suppress the
+            # extremely noisy informational message emitted whenever the
+            # compiler creates an argument temporary.
+            "$<$<CONFIG:Debug>:/Od;/debug:full;/check:all,noarg_temp_created;/fpe:0>"
+
+            # Production configuration.
             "$<$<CONFIG:Release>:/O2;/fpe:0>"
-            "$<$<CONFIG:RelWithDebInfo>:/O2;/debug:full;/fpe:0>"
+
+            # Release-like optimized code with symbols and traceback. Keep /O2
+            # after /debug:full so optimization remains enabled. This is the
+            # preferred configuration for optimization-sensitive failures.
+            "$<$<CONFIG:RelWithDebInfo>:/debug:full;/O2;/fpe:0>"
+
             "$<$<CONFIG:MinSizeRel>:/O1;/fpe:0>"
-        )
-        target_link_options(nrg_build_options INTERFACE
-            /traceback
-            "$<$<CONFIG:Debug>:/check:all;/fpe:0>"
-            "$<$<NOT:$<CONFIG:Debug>>:/fpe:0>"
         )
 
         if(NRG_STATIC_RUNTIME)
@@ -114,13 +146,8 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "^(IntelLLVM|Intel)$")
             -traceback
             "$<$<CONFIG:Debug>:-O0;-g;-check;all;-fpe0>"
             "$<$<CONFIG:Release>:-O2;-fpe0>"
-            "$<$<CONFIG:RelWithDebInfo>:-O2;-g;-fpe0>"
+            "$<$<CONFIG:RelWithDebInfo>:-g;-O2;-fpe0>"
             "$<$<CONFIG:MinSizeRel>:-O1;-fpe0>"
-        )
-        target_link_options(nrg_build_options INTERFACE
-            -traceback
-            "$<$<CONFIG:Debug>:-check;all;-fpe0>"
-            "$<$<NOT:$<CONFIG:Debug>>:-fpe0>"
         )
     endif()
 

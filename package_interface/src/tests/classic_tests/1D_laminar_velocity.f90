@@ -206,8 +206,8 @@ program package_interface
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 17, 17, 1     ! Hydrogen percent in mixture with air
-    do task6 = 5, 5          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
+    do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
+    do task6 = 1, 1          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
         
@@ -428,14 +428,15 @@ program package_interface
         ! POST-PROCESSING SETUP
         !================================================================
         problem_post_proc_manager = post_processor_manager_c(problem_data_manager, number_post_processors = 1)
-        
-        call problem_post_proc_manager%create_post_processor( &
-            problem_data_manager,                            &
-            post_processor_name = "proc1",                   &
-            operations_number   = 7,                         &
-            save_time           = 100.0_dp,                  &
-            save_time_units     = 'microseconds')
-        
+      
+		call problem_post_proc_manager%create_post_processor( &
+			problem_data_manager,                            &
+			post_processor_name  = 'proc1',                 &
+			operations_number    = 7,                       &
+			save_time            = 1.0_dp,                &
+			save_time_units      = 'milliseconds',           &
+			post_processor_title = 'Flame front diagnostics')
+	
         ! Define post-processing operations:
         ! 1. Minimum temperature gradient in observation slice
         ! 2-3. Pressure at +/-5mm transducers

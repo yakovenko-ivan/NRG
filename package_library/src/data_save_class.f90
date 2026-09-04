@@ -37,7 +37,8 @@ module data_save_class
         character(len=256) :: data_save_folder
         logical :: debug_flag
 
-        class(field_writer), allocatable :: writer
+        type(tecplot_writer) :: tecplot_backend
+        type(cgns_writer) :: cgns_backend
     contains
         procedure, private :: read_properties
         procedure, private :: write_properties
@@ -316,16 +317,18 @@ contains
     subroutine initialize_writer(this)
         class(data_save), intent(inout) :: this
 
-        if (allocated(this%writer)) deallocate(this%writer)
-
+        ! Validate the configured backend here, but do not dynamically allocate
+        ! a polymorphic writer object.  Intel ifx 2023.1 on Windows can fail
+        ! inside polymorphic allocation when data_save is reconstructed through
+        ! constructor_file().  Both backends are lightweight concrete components
+        ! of data_save; Tecplot allocates its scratch buffer lazily on first use.
         select case(trim(this%save_format))
             case('tecplot')
-                allocate(tecplot_writer :: this%writer)
+                continue
             case('cgns', 'cgns_hdf5', 'cgns/hdf5')
                 if (.not. cgns_backend_enabled) then
                     error stop 'Data save: CGNS requested but NRG was built with NRG_ENABLE_CGNS=OFF'
                 end if
-                allocate(cgns_writer :: this%writer)
             case default
                 write(*,'(A)') 'Unknown data save format: '//trim(this%save_format)
                 error stop 'Data save: unsupported output format'
@@ -399,7 +402,18 @@ contains
             end if
 
             call this%build_snapshot(time, display_time, debug, snapshot)
-            call this%writer%write_snapshot(snapshot, this%data_save_folder, file_stem)
+
+            select case(trim(this%save_format))
+                case('tecplot')
+                    call this%tecplot_backend%write_snapshot( &
+                        snapshot, this%data_save_folder, file_stem)
+                case('cgns', 'cgns_hdf5', 'cgns/hdf5')
+                    call this%cgns_backend%write_snapshot( &
+                        snapshot, this%data_save_folder, file_stem)
+                case default
+                    ! initialize_writer() already validates this value.
+                    error stop 'Data save: unsupported output format'
+            end select
 
             this%output_counter = this%output_counter + 1
         end if
