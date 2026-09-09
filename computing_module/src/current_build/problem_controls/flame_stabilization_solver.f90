@@ -19,6 +19,8 @@ module flame_stabilization_solver_class
     type :: flame_stabilization_runtime_state
         real(dp), allocatable :: time_hist(:), front_coord_hist(:)
         real(dp), allocatable :: diag_time_hist(:), diag_front_coord_hist(:)
+        real(dp), allocatable :: arm_metric_hist(:)
+        real(dp), allocatable :: stabilized_product_mass_fractions(:)
         character(len=200) :: data_table_filename = ''
         character(len=200) :: chem_table_filename = ''
         integer :: track_counter = 0
@@ -26,8 +28,13 @@ module flame_stabilization_solver_class
         integer :: stabilization_counter = 0
         integer :: hist_count = 0
         integer :: diag_hist_count = 0
+        integer :: arm_hist_count = 0
+        integer :: domain_invalid_counter = 0
+        integer :: hard_recovery_corrections = 0
+        integer :: hard_recovery_no_progress_count = 0
         integer :: same_sign_error_counter = 0
         integer :: post_flamelet_hold_counter = 0
+        integer :: structure_stationary_counter = 0
         integer :: measurement_attempt = 0
         integer :: flame_loc_unit = -1
         real(dp) :: previous_correction_time = -huge(1.0_dp)
@@ -39,10 +46,19 @@ module flame_stabilization_solver_class
         real(dp) :: ramp_start_time = 0.0_dp
         real(dp) :: ramp_start_velocity = 0.0_dp
         real(dp) :: active_inlet_ramp_time = 2.0e-03_dp
+        real(dp) :: active_response_settle_time = 5.0e-04_dp
         real(dp) :: previous_control_velocity = 0.0_dp
         real(dp) :: previous_control_inlet_velocity = 0.0_dp
         real(dp) :: front_reference_coord = 0.0_dp
         real(dp) :: heat_release_peak_save = 0.0_dp
+        real(dp) :: inlet_temperature = 0.0_dp
+        real(dp) :: inlet_pressure = 0.0_dp
+        real(dp) :: arm_metric_rel_trend = 1.0e30_dp
+        real(dp) :: final_thermal_thickness_reference = 0.0_dp
+        real(dp) :: final_reaction_thickness_reference = 0.0_dp
+        real(dp) :: hard_recovery_reference_deficit = huge(1.0_dp)
+        real(dp) :: hard_recovery_reference_velocity = huge(1.0_dp)
+        real(dp) :: hard_recovery_last_evaluation_time = -huge(1.0_dp)
         real(dp) :: bracket_u_a = 0.0_dp
         real(dp) :: bracket_v_a = 0.0_dp
         real(dp) :: bracket_u_b = 0.0_dp
@@ -55,6 +71,11 @@ module flame_stabilization_solver_class
         logical :: have_previous_control_point = .false.
         logical :: has_bracket = .false.
         logical :: front_reference_initialized = .false.
+        logical :: controller_armed = .false.
+        logical :: flame_established = .false.
+        logical :: hard_recovery_waiting_response = .false.
+        logical :: domain_failure = .false.
+        logical :: failure_report_written = .false.
         integer :: control_stage = 0
         real(dp) :: stabilized_inlet_velocity = 0.0_dp
         real(dp) :: measurement_inlet_velocity = 0.0_dp
@@ -66,6 +87,21 @@ module flame_stabilization_solver_class
         real(dp) :: measurement_rms_save = 0.0_dp
         real(dp) :: measurement_split_slope_diff_save = 0.0_dp
         real(dp) :: current_measurement_delta = 0.0_dp
+        real(dp) :: measurement_delta_sign_save = 1.0_dp
+        real(dp) :: scientific_time_stabilized = 0.0_dp
+        real(dp) :: scientific_u_anchor = 0.0_dp
+        real(dp) :: scientific_flame_thickness = 0.0_dp
+        real(dp) :: scientific_preheat_zone = 0.0_dp
+        real(dp) :: scientific_reaction_zone = 0.0_dp
+        real(dp) :: scientific_qint = 0.0_dp
+        real(dp) :: scientific_qmax = 0.0_dp
+        real(dp) :: scientific_rho_fresh = 0.0_dp
+        real(dp) :: scientific_rho_products = 0.0_dp
+        real(dp) :: scientific_t_products = 0.0_dp
+        real(dp) :: scientific_h2_percent = 0.0_dp
+        real(dp) :: scientific_d_inlet_preheat = 0.0_dp
+        real(dp) :: scientific_d_outlet_reaction = 0.0_dp
+        logical :: scientific_state_captured = .false.
     end type flame_stabilization_runtime_state
 
     type :: flame_stabilization_solver
@@ -78,6 +114,7 @@ module flame_stabilization_solver_class
         type(boundary_conditions_pointer) :: boundary
         type(chemical_properties_pointer) :: chem
         type(field_scalar_cons_pointer) :: T
+        type(field_scalar_cons_pointer) :: rho
         type(field_scalar_cons_pointer) :: E_f_prod_chem
         type(field_vector_cons_pointer) :: Y
 
@@ -151,6 +188,10 @@ contains
         constructor%T%s_ptr => scal_ptr%s_ptr
 
         call manager%get_cons_field_pointer_by_name( &
+            scal_ptr, vect_ptr, tens_ptr, 'density')
+        constructor%rho%s_ptr => scal_ptr%s_ptr
+
+        call manager%get_cons_field_pointer_by_name( &
             scal_ptr, vect_ptr, tens_ptr, 'specie_mass_fraction')
         constructor%Y%v_ptr => vect_ptr%v_ptr
 
@@ -203,15 +244,16 @@ contains
 
     !--------------------------------------------------------------------------
     ! One-dimensional flame anchoring / laminar-burning-velocity controller.
-    ! The numerical algorithm is intentionally kept equivalent to the former
-    ! FDS-owned flame-stabilization implementation.  This subsolver owns the
-    ! controller state and boundary intervention, while the gas solver remains
-    ! responsible for solver-specific flamelet/chemistry table output.
+    ! The feedback law is inherited from the former FDS-owned implementation.
+    ! Controller arming, ramp/response timing, stabilization tolerances, and
+    ! diagnostics are handled here so the intervention remains reproducible
+    ! across gas solvers.
     !--------------------------------------------------------------------------
-    subroutine solve(this, time, stabilized)
+    subroutine solve(this, time, stabilized, failed)
         class(flame_stabilization_solver), intent(inout) :: this
         real(dp), intent(in) :: time
         logical, intent(out) :: stabilized
+        logical, intent(out), optional :: failed
 
         integer, parameter :: max_hist_size = 120
         integer, parameter :: max_diag_hist_size = 200
@@ -220,6 +262,9 @@ contains
         integer, parameter :: stable_required_count = 50
         integer, parameter :: flamelet_required_count = 50
         integer, parameter :: post_flamelet_hold_required_count = 100
+        integer, parameter :: final_stationarity_required_count = 100
+        real(dp), parameter :: final_stationarity_relative_trend_tolerance = 2.0e-03_dp
+        real(dp), parameter :: final_thickness_tolerance_cells = 1.0_dp
 
         real(dp), parameter :: time_control_capture = 2.0e-04_dp
         real(dp), parameter :: response_settle_capture = 2.0e-04_dp
@@ -235,8 +280,29 @@ contains
         real(dp), parameter :: min_abs_velocity_step = 2.0e-05_dp
         real(dp), parameter :: min_abs_velocity_step_capture = 1.0e-03_dp
         real(dp), parameter :: emergency_min_fraction = 1.0e-01_dp
-        real(dp), parameter :: velocity_tolerance_on = 2.0e-05_dp
-        real(dp), parameter :: velocity_tolerance_off = 5.0e-06_dp
+        real(dp), parameter :: stabilization_displacement_off_cells = 5.0e-03_dp
+        real(dp), parameter :: stabilization_displacement_on_cells = 1.0e-02_dp
+        integer, parameter :: arming_min_window_samples = 50
+        integer, parameter :: arming_max_window_samples = 200
+        real(dp), parameter :: arming_grid_periods = 2.0_dp
+        real(dp), parameter :: arming_relative_trend_tolerance = 2.0e-02_dp
+        real(dp), parameter :: establishment_peak_fraction = 1.0e-03_dp
+        real(dp), parameter :: preheat_progress_threshold = 1.0e-02_dp
+        real(dp), parameter :: thermal_progress_low = 1.0e-01_dp
+        real(dp), parameter :: thermal_progress_high = 9.0e-01_dp
+        real(dp), parameter :: reaction_envelope_fraction = 1.0e-02_dp
+        real(dp), parameter :: preferred_margin_thicknesses = 3.0_dp
+        real(dp), parameter :: hard_margin_thicknesses = 2.0_dp
+        integer, parameter :: preferred_margin_cells = 10
+        integer, parameter :: hard_margin_cells = 5
+        integer, parameter :: inlet_probe_cells = 5
+        integer, parameter :: domain_invalid_required_count = 50
+        integer, parameter :: hard_recovery_max_no_progress = 10
+        real(dp), parameter :: hard_recovery_response_fraction = 1.0e-01_dp
+        real(dp), parameter :: hard_recovery_response_min = 2.0e-03_dp
+        real(dp), parameter :: hard_recovery_response_max = 2.0e-02_dp
+        real(dp), parameter :: hard_recovery_velocity_progress_fraction = 1.0e-01_dp
+        real(dp), parameter :: hard_recovery_deficit_progress_cells = 2.5e-01_dp
         real(dp), parameter :: filter_alpha = 1.0e-01_dp
         real(dp), parameter :: secant_relaxation = 2.0e-01_dp
         real(dp), parameter :: feedback_sign_default = -1.0_dp
@@ -252,7 +318,6 @@ contains
         real(dp), parameter :: min_secant_du = 5.0e-05_dp
         real(dp), parameter :: max_response_slope_abs = 1.0e+03_dp
         real(dp), parameter :: persistent_error_factor = 5.0_dp
-        real(dp), parameter :: ramp_settle_fraction = 1.0e-03_dp
         real(dp), parameter :: tiny_weight = tiny(1.0_dp)
         logical, parameter :: use_secant_control = .false.
 
@@ -269,14 +334,13 @@ contains
         integer, parameter :: stage_measurement_done = 4
         integer, parameter :: stage_measurement_failed = 5
         integer, parameter :: min_hist_for_sl_measurement = 40
-        real(dp), parameter :: measurement_delta_fraction = 3.0e-02_dp
-        real(dp), parameter :: measurement_delta_sign = 1.0_dp
-        real(dp), parameter :: measurement_delta_min = 5.0e-03_dp
-        real(dp), parameter :: measurement_delta_max_fraction = 3.0e-01_dp
-        real(dp), parameter :: measurement_delta_growth = 2.0_dp
+        real(dp), parameter :: measurement_delta_fraction = 1.0e-01_dp
+        real(dp), parameter :: measurement_delta_max_fraction = 2.0e-01_dp
+        real(dp), parameter :: measurement_delta_growth = 1.5_dp
+        real(dp), parameter :: measurement_duration_safety_factor = 1.5_dp
+        real(dp), parameter :: measurement_target_time = 2.0e-02_dp
         real(dp) :: measurement_max_duration
-        real(dp), parameter :: measurement_no_motion_displacement_cells = 0.5_dp
-        integer, parameter :: measurement_max_attempts = 5
+        integer, parameter :: measurement_max_attempts = 3
         real(dp), parameter :: measurement_ramp_time = 1.0e-03_dp
         real(dp), parameter :: measurement_settle_time = 1.0e-03_dp
         real(dp) :: measurement_min_displacement_cells
@@ -284,7 +348,7 @@ contains
         real(dp), parameter :: measurement_r2_min = 9.95e-01_dp
         real(dp), parameter :: measurement_split_slope_rel_tol = 2.5e-01_dp
         real(dp), parameter :: measurement_split_slope_abs_tol = 2.0e-04_dp
-        real(dp), parameter :: measurement_residual_cells = 1.0_dp
+        real(dp), parameter :: measurement_residual_cells = 5.0e-02_dp
 
         integer :: dimensions, species_number, boundary_types
         integer :: front_axis
@@ -292,6 +356,7 @@ contains
         integer :: H2_index, H_index
         integer :: cons_inner_loop(3,2)
         integer :: active_track_number
+        integer :: arming_window_samples_active
 
         real(dp) :: cell_size(3), cell_volume
         real(dp) :: current_flame_location(3)
@@ -304,19 +369,40 @@ contains
         real(dp) :: control_velocity, position_error, position_velocity, position_control_error
         real(dp) :: front_spread, heat_release_integral
         real(dp) :: heat_release_max, heat_release_valid_limit, H_max, Tgrad_max
+        real(dp) :: temperature_max, temperature_rise, thermal_progress
+        real(dp) :: x_preheat, x_thermal_low, x_thermal_high, thermal_thickness
+        real(dp) :: x_reaction_left, x_reaction_right, reaction_thickness
+        real(dp) :: domain_boundary_min, domain_boundary_max
+        real(dp) :: inlet_preheat_distance, outlet_reaction_distance
+        real(dp) :: inlet_theta_max, inlet_margin_ratio, outlet_margin_ratio
+        real(dp) :: preferred_inlet_margin, hard_inlet_margin
+        real(dp) :: preferred_outlet_margin, hard_outlet_margin
+        real(dp) :: inlet_margin_deficit, outlet_margin_deficit
+        real(dp) :: hard_inlet_deficit, hard_outlet_deficit
+        real(dp) :: preferred_shift_min, preferred_shift_max
+        real(dp) :: envelope_length, hard_required_length
+        real(dp) :: envelope_position_error, centroid_position_error
+        real(dp) :: correction_free_time
         real(dp) :: measured_inlet_velocity, proposed_inlet_velocity
         real(dp) :: du_raw, du_limited, max_velocity_step, X_H2
         real(dp) :: time_delay, time_track, time_control, response_settle_time, inlet_ramp_time
-        real(dp) :: time_control_effective, response_settle_effective
+        real(dp) :: time_control_effective, diagnostic_window_time
+        real(dp) :: velocity_tolerance_on, velocity_tolerance_off
         real(dp) :: coord(3), weight, qdot_cut, qdot, hval, tgrad
         real(dp) :: sum_weight, sum_s, sum_s2
         real(dp) :: sum_H_weight, sum_Tgrad_weight
-        real(dp) :: s_coord
-        real(dp) :: ramp_elapsed, ramp_fraction, ramp_residual, ramp_tolerance
+        real(dp) :: s_coord, arm_metric
+        real(dp) :: ramp_elapsed, ramp_fraction
         real(dp) :: target_step_for_log
         real(dp) :: sl_displacement, linear_r2, linear_rms, split_slope_diff
         real(dp) :: measurement_elapsed, measurement_displacement, measurement_delta
+        real(dp) :: measurement_attempt_duration
+        real(dp) :: measurement_target_displacement, measurement_delta_max
+        real(dp) :: inlet_measurement_room, outlet_measurement_room
+        logical :: measurement_direction_ok
         logical :: measurement_linear_ok
+        real(dp) :: hard_recovery_deficit, hard_recovery_danger_velocity
+        real(dp) :: hard_recovery_response_time
         real(dp) :: front_position_tolerance, capture_position_tolerance
         real(dp) :: domain_front_min, domain_front_max, domain_front_length
         real(dp) :: outlet_guard_distance, outlet_distance
@@ -325,15 +411,28 @@ contains
         character(len=10), allocatable :: farfield_species_names(:)
         character(len=5) :: axis_names(3)
         character(len=20) :: flame_data_file
-        character(len=500) :: av_header
+        character(len=1000) :: av_header
         character(len=100) :: chemical_mechanism
         logical :: found_inlet_farfield, trace_success, flame_detected, control_performed
-        logical :: measurement_enabled, ramp_settled, reset_history_after_log
-        logical :: capture_mode, emergency_mode
+        logical :: measurement_enabled, ramp_settled, response_settled, reset_history_after_log
+        logical :: capture_mode, emergency_mode, safety_control_active
+        logical :: containment_mode, hard_recovery_hold, hard_recovery_progress
+        logical :: thermal_envelope_found, reaction_envelope_found
+        logical :: inlet_contaminated, hard_envelope_violation
+        logical :: preferred_domain_fits, hard_domain_fits, domain_warning, domain_ok
+        logical :: physical_envelope_available, physical_boundary_violation
+        logical :: establishment_candidate
+        logical :: structure_stationary_candidate
+        logical :: final_structure_stationary, anchor_velocity_interior
 
 
         stabilized = .false.
+        if (present(failed)) failed = .false.
         if (.not. this%enabled) return
+        if (this%state%domain_failure) then
+            if (present(failed)) failed = .true.
+            return
+        end if
 
         if (this%flame_stabilization%is_anchor()) then
             active_workflow = workflow_anchor_observation
@@ -366,7 +465,9 @@ contains
             front_position_tolerance)
         domain_front_min = (real(cons_inner_loop(front_axis,1),dp) - 0.5_dp) * cell_size(front_axis)
         domain_front_max = (real(cons_inner_loop(front_axis,2),dp) - 0.5_dp) * cell_size(front_axis)
-        domain_front_length = max(domain_front_max - domain_front_min, cell_size(front_axis))
+        domain_boundary_min = domain_front_min - 0.5_dp * cell_size(front_axis)
+        domain_boundary_max = domain_front_max + 0.5_dp * cell_size(front_axis)
+        domain_front_length = max(domain_boundary_max - domain_boundary_min, cell_size(front_axis))
         outlet_guard_distance = max(outlet_guard_cells * cell_size(front_axis), &
             outlet_guard_fraction * domain_front_length)
 
@@ -385,6 +486,16 @@ contains
             this%state%diag_front_coord_hist = 0.0_dp
         end if
 
+        if (.not. allocated(this%state%arm_metric_hist)) then
+            allocate(this%state%arm_metric_hist(arming_max_window_samples))
+            this%state%arm_metric_hist = 0.0_dp
+        end if
+
+        if (.not. allocated(this%state%stabilized_product_mass_fractions)) then
+            allocate(this%state%stabilized_product_mass_fractions(species_number))
+            this%state%stabilized_product_mass_fractions = 0.0_dp
+        end if
+
         if (.not. this%state%initialized) then
             allocate(concs(species_number))
             concs = 0.0_dp
@@ -394,6 +505,10 @@ contains
                 if (this%boundary%bc_ptr%boundary_types(bound_number)%get_type_name() == 'inlet') then
                     call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_concentrations(farfield_concentrations)
                     call this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_species_names(farfield_species_names)
+                    this%state%inlet_temperature = &
+                        this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_temperature()
+                    this%state%inlet_pressure = &
+                        this%boundary%bc_ptr%boundary_types(bound_number)%get_farfield_pressure()
                     found_inlet_farfield = .true.
                     exit
                 end if
@@ -414,6 +529,7 @@ contains
                 X_H2 = 0.0_dp
             end if
 
+            this%state%scientific_h2_percent = X_H2
             chemical_mechanism = trim(this%chem%chem_ptr%get_chemical_mechanism())
             this%state%data_table_filename = 'H2-Air_flamelet_' // trim(chemical_mechanism) // '_' // &
                 trim(str_r(X_H2)) // '_pcnt_' // trim(str_e(cell_size(1))) // '_dx.dat'
@@ -442,6 +558,17 @@ contains
             this%flame_stabilization%get_measurement_min_displacement_cells()
         inlet_ramp_time = this%state%active_inlet_ramp_time
 
+        if (this%state%correction_counter == 0 .and. &
+            this%state%control_stage == stage_anchor_control) then
+            this%state%active_response_settle_time = response_settle_time
+        end if
+
+        diagnostic_window_time = max(real(max_diag_hist_size - 1, dp) * time_track, time_track)
+        velocity_tolerance_off = max(stabilization_displacement_off_cells * &
+            cell_size(front_axis) / diagnostic_window_time, 1.0e-12_dp)
+        velocity_tolerance_on = max(stabilization_displacement_on_cells * &
+            cell_size(front_axis) / diagnostic_window_time, 2.0_dp * velocity_tolerance_off)
+
         if (inlet_ramp_time > 0.0_dp) then
             ramp_elapsed = max(time - this%state%ramp_start_time, 0.0_dp)
             ramp_fraction = min(ramp_elapsed / inlet_ramp_time, 1.0_dp)
@@ -452,10 +579,7 @@ contains
             ramp_fraction * (this%state%inlet_velocity_target - this%state%ramp_start_velocity)
         call this%set_inlet_velocity(this%state%inlet_velocity_applied)
 
-        ramp_residual = abs(this%state%inlet_velocity_target - this%state%inlet_velocity_applied)
-        ramp_tolerance = max(ramp_settle_fraction * max(abs(this%state%inlet_velocity_target), min_abs_velocity_step), &
-            1.0e-12_dp)
-        ramp_settled = (ramp_residual <= ramp_tolerance .or. ramp_fraction >= 1.0_dp)
+        ramp_settled = (ramp_fraction >= 1.0_dp)
 
         if ((time - time_delay) / time_track <= real(this%state%track_counter + 1, dp)) return
 
@@ -469,6 +593,7 @@ contains
             heat_release_max = 0.0_dp
             H_max = 0.0_dp
             Tgrad_max = 0.0_dp
+            temperature_max = this%state%inlet_temperature
             do k = cons_inner_loop(3,1), cons_inner_loop(3,2)
             do j = cons_inner_loop(2,1), cons_inner_loop(2,2)
             do i = cons_inner_loop(1,1), cons_inner_loop(1,2)
@@ -476,6 +601,7 @@ contains
 
                 qdot = max(E_f_prod_chem%cells(i,j,k), 0.0_dp)
                 heat_release_max = max(heat_release_max, qdot)
+                temperature_max = max(temperature_max, T%cells(i,j,k))
 
                 if (H_index >= 1 .and. H_index <= species_number) then
                     hval = abs(Y%pr(H_index)%cells(i,j,k))
@@ -502,6 +628,14 @@ contains
             sum_s2 = 0.0_dp
             heat_release_integral = 0.0_dp
 
+            temperature_rise = max(temperature_max - this%state%inlet_temperature, 1.0e-12_dp)
+            x_preheat = huge(1.0_dp)
+            x_thermal_low = huge(1.0_dp)
+            x_thermal_high = huge(1.0_dp)
+            x_reaction_left = huge(1.0_dp)
+            x_reaction_right = -huge(1.0_dp)
+            inlet_theta_max = 0.0_dp
+
             qdot_cut = heat_release_cut_fraction * heat_release_max
 
             do k = cons_inner_loop(3,1), cons_inner_loop(3,2)
@@ -513,6 +647,26 @@ contains
                 s_coord = coord(front_axis)
 
                 qdot = max(E_f_prod_chem%cells(i,j,k), 0.0_dp)
+                thermal_progress = min(max((T%cells(i,j,k) - this%state%inlet_temperature) / &
+                    temperature_rise, 0.0_dp), 1.0_dp)
+
+                if (thermal_progress >= preheat_progress_threshold) &
+                    x_preheat = min(x_preheat, s_coord)
+                if (thermal_progress >= thermal_progress_low) &
+                    x_thermal_low = min(x_thermal_low, s_coord)
+                if (thermal_progress >= thermal_progress_high) &
+                    x_thermal_high = min(x_thermal_high, s_coord)
+
+                if (i <= cons_inner_loop(1,1) + inlet_probe_cells - 1) then
+                    inlet_theta_max = max(inlet_theta_max, thermal_progress)
+                end if
+
+                if (heat_release_max > 0.0_dp .and. &
+                    qdot >= reaction_envelope_fraction * heat_release_max) then
+                    x_reaction_left = min(x_reaction_left, s_coord)
+                    x_reaction_right = max(x_reaction_right, s_coord)
+                end if
+
                 if (qdot > qdot_cut) then
                     weight = qdot * cell_volume
                     heat_release_centroid = heat_release_centroid + weight * coord
@@ -540,6 +694,99 @@ contains
             end do
             end do
             end do
+
+            thermal_envelope_found = (x_preheat < 0.5_dp * huge(1.0_dp)) .and. &
+                (x_thermal_low < 0.5_dp * huge(1.0_dp)) .and. &
+                (x_thermal_high < 0.5_dp * huge(1.0_dp))
+            reaction_envelope_found = (x_reaction_left < 0.5_dp * huge(1.0_dp)) .and. &
+                (x_reaction_right > -0.5_dp * huge(1.0_dp))
+
+            if (thermal_envelope_found) then
+                thermal_thickness = max(x_thermal_high - x_thermal_low, cell_size(front_axis))
+                inlet_preheat_distance = x_preheat - domain_boundary_min
+            else
+                thermal_thickness = 0.0_dp
+                inlet_preheat_distance = 0.0_dp
+            end if
+
+            if (reaction_envelope_found) then
+                reaction_thickness = max(x_reaction_right - x_reaction_left, cell_size(front_axis))
+                outlet_reaction_distance = domain_boundary_max - x_reaction_right
+            else
+                reaction_thickness = 0.0_dp
+                outlet_reaction_distance = 0.0_dp
+            end if
+
+            preferred_inlet_margin = max(preferred_margin_thicknesses * thermal_thickness, &
+                real(preferred_margin_cells, dp) * cell_size(front_axis))
+            hard_inlet_margin = max(hard_margin_thicknesses * thermal_thickness, &
+                real(hard_margin_cells, dp) * cell_size(front_axis))
+            preferred_outlet_margin = max(preferred_margin_thicknesses * reaction_thickness, &
+                real(preferred_margin_cells, dp) * cell_size(front_axis))
+            hard_outlet_margin = max(hard_margin_thicknesses * reaction_thickness, &
+                real(hard_margin_cells, dp) * cell_size(front_axis))
+
+            if (thermal_thickness > 0.0_dp) then
+                inlet_margin_ratio = inlet_preheat_distance / thermal_thickness
+            else
+                inlet_margin_ratio = 0.0_dp
+            end if
+            if (reaction_thickness > 0.0_dp) then
+                outlet_margin_ratio = outlet_reaction_distance / reaction_thickness
+            else
+                outlet_margin_ratio = 0.0_dp
+            end if
+
+            inlet_contaminated = inlet_theta_max >= preheat_progress_threshold
+            inlet_margin_deficit = max(preferred_inlet_margin - inlet_preheat_distance, 0.0_dp)
+            outlet_margin_deficit = max(preferred_outlet_margin - outlet_reaction_distance, 0.0_dp)
+            hard_inlet_deficit = max(hard_inlet_margin - inlet_preheat_distance, 0.0_dp)
+            hard_outlet_deficit = max(hard_outlet_margin - outlet_reaction_distance, 0.0_dp)
+
+            if (thermal_envelope_found .and. reaction_envelope_found) then
+                envelope_length = max(x_reaction_right - x_preheat, 0.0_dp)
+                hard_required_length = hard_inlet_margin + envelope_length + hard_outlet_margin
+                hard_domain_fits = hard_required_length <= domain_front_length
+
+                preferred_shift_min = preferred_inlet_margin - inlet_preheat_distance
+                preferred_shift_max = outlet_reaction_distance - preferred_outlet_margin
+                preferred_domain_fits = preferred_shift_min <= preferred_shift_max
+            else
+                envelope_length = 0.0_dp
+                hard_required_length = huge(1.0_dp)
+                preferred_shift_min = 0.0_dp
+                preferred_shift_max = 0.0_dp
+                preferred_domain_fits = .false.
+                hard_domain_fits = .false.
+            end if
+
+            physical_envelope_available = thermal_envelope_found .and. reaction_envelope_found
+
+            hard_envelope_violation = physical_envelope_available .and. &
+                (inlet_contaminated .or. (.not. hard_domain_fits) .or. &
+                 hard_inlet_deficit > 0.0_dp .or. hard_outlet_deficit > 0.0_dp)
+
+            domain_ok = physical_envelope_available .and. &
+                (.not. inlet_contaminated) .and. hard_domain_fits .and. &
+                (inlet_preheat_distance >= hard_inlet_margin) .and. &
+                (outlet_reaction_distance >= hard_outlet_margin)
+
+            domain_warning = thermal_envelope_found .and. reaction_envelope_found .and. &
+                preferred_domain_fits .and. &
+                (preferred_shift_min > 0.0_dp .or. preferred_shift_max < 0.0_dp)
+
+            physical_boundary_violation = physical_envelope_available .and. &
+                (inlet_preheat_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp .or. &
+                 outlet_reaction_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp)
+
+            envelope_position_error = 0.0_dp
+            if (preferred_domain_fits) then
+                if (preferred_shift_min > 0.0_dp) then
+                    envelope_position_error = -preferred_shift_min
+                else if (preferred_shift_max < 0.0_dp) then
+                    envelope_position_error = -preferred_shift_max
+                end if
+            end if
 
             trace_success = .false.
             flame_detected = .false.
@@ -596,13 +843,36 @@ contains
                 this%state%diag_filtered_velocity_save = 0.0_dp
             end if
 
+            ! A translating discrete flame can carry a periodic grid-phase
+            ! modulation in Qint.  Average over approximately two cell-passage
+            ! periods, but bound the history so slowly translating flames do not
+            ! impose an excessive fixed delay.
+            arming_window_samples_active = arming_max_window_samples
+            if (flame_detected .and. this%state%diag_hist_count >= 2) then
+                arming_window_samples_active = ceiling( &
+                    arming_grid_periods * cell_size(front_axis) / &
+                    max(abs(diag_flame_velocity_filtered), velocity_tolerance_on) / &
+                    max(time_track, tiny_weight))
+                arming_window_samples_active = max(arming_min_window_samples, &
+                    min(arming_max_window_samples, arming_window_samples_active))
+            end if
+
+            if (flame_detected .and. physical_envelope_available .and. &
+                heat_release_max >= establishment_peak_fraction * &
+                    max(this%state%heat_release_peak_save, heat_release_valid_absolute)) then
+                arm_metric = heat_release_integral
+                call append_arming_history(arm_metric, arming_window_samples_active)
+            else
+                call clear_arming_history()
+            end if
+
             control_performed = .false.
             reset_history_after_log = .false.
             du_raw = 0.0_dp
             du_limited = 0.0_dp
             target_step_for_log = 0.0_dp
-            flame_velocity_lsq = diag_flame_velocity_lsq
-            flame_velocity_filtered = diag_flame_velocity_filtered
+            flame_velocity_lsq = 0.0_dp
+            flame_velocity_filtered = 0.0_dp
             position_error = 0.0_dp
             position_control_error = 0.0_dp
             position_velocity = 0.0_dp
@@ -613,33 +883,186 @@ contains
             split_slope_diff = this%state%measurement_split_slope_diff_save
             measurement_elapsed = 0.0_dp
             measurement_displacement = 0.0_dp
+            measurement_target_displacement = &
+                measurement_min_displacement_cells * cell_size(front_axis)
+            measurement_delta = this%state%current_measurement_delta
+            measurement_delta_max = measurement_delta_max_fraction * &
+                max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step)
+            measurement_direction_ok = .false.
             measurement_linear_ok = .false.
             capture_mode = .false.
             emergency_mode = .false.
+            containment_mode = .false.
+            hard_recovery_hold = .false.
+            hard_recovery_progress = .false.
+            hard_recovery_deficit = 0.0_dp
+            hard_recovery_danger_velocity = 0.0_dp
+            hard_recovery_response_time = hard_recovery_response_min
 
             if (this%state%front_reference_initialized) then
                 position_error = current_front_coord - this%state%front_reference_coord
-                position_control_error = safe_window_error(current_front_coord, front_safe_min, front_safe_max)
+                if (physical_envelope_available) then
+                    ! Once the physical flame envelope exists, its preferred/hard
+                    ! margins supersede the legacy centroid safe window.  A thin
+                    ! flame may sit downstream of the fixed centroid guard while
+                    ! still having ample reaction-zone clearance.
+                    centroid_position_error = 0.0_dp
+                    position_control_error = envelope_position_error
+                else
+                    ! Startup fallback before a reliable thermal/reaction envelope
+                    ! can be constructed.
+                    centroid_position_error = safe_window_error( &
+                        current_front_coord, front_safe_min, front_safe_max)
+                    position_control_error = centroid_position_error
+                end if
                 position_velocity = position_control_error / max(position_relaxation_time, time_track)
                 outlet_distance = domain_front_max - current_front_coord
-                capture_mode = (position_control_error /= 0.0_dp) .or. &
-                    (outlet_distance < outlet_guard_distance)
-                emergency_mode = (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
-                    (abs(position_control_error) > capture_position_tolerance)
+                capture_mode = hard_envelope_violation
+                if (.not. physical_envelope_available) then
+                    capture_mode = capture_mode .or. &
+                        (centroid_position_error /= 0.0_dp) .or. &
+                        (outlet_distance < outlet_guard_distance)
+                end if
+                emergency_mode = hard_envelope_violation
+                if (.not. physical_envelope_available) then
+                    emergency_mode = emergency_mode .or. &
+                        (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
+                        (abs(centroid_position_error) > capture_position_tolerance)
+                end if
+            end if
+
+            establishment_candidate = flame_detected .and. physical_envelope_available .and. &
+                (heat_release_max >= establishment_peak_fraction * &
+                    max(this%state%heat_release_peak_save, heat_release_valid_absolute)) .and. &
+                (this%state%arm_hist_count >= arming_window_samples_active) .and. &
+                (this%state%arm_metric_rel_trend <= arming_relative_trend_tolerance)
+
+            if (.not. this%state%flame_established .and. establishment_candidate) then
+                this%state%flame_established = .true.
+                this%state%controller_armed = .true.
+                this%state%previous_correction_time = time
+                this%state%has_bracket = .false.
+                this%state%have_previous_control_point = .false.
+                call clear_control_history()
+            end if
+
+            ! A developing flame may be repositioned before it is scientifically
+            ! established.  Preferred-envelope containment is deliberately
+            ! position-only and uses the fine controller limits.
+            containment_mode = (.not. this%state%flame_established) .and. &
+                physical_envelope_available .and. domain_warning .and. domain_ok
+
+            ! For a recoverable hard-margin violation, wait long enough after
+            ! each correction for the broad flame structure to respond before
+            ! spending another correction.
+            hard_recovery_deficit = max(hard_inlet_deficit, 0.0_dp) + &
+                max(hard_outlet_deficit, 0.0_dp)
+            if (hard_outlet_deficit >= hard_inlet_deficit .and. &
+                hard_outlet_deficit > 0.0_dp) then
+                hard_recovery_danger_velocity = max(diag_flame_velocity_filtered, 0.0_dp)
+            else if (hard_inlet_deficit > 0.0_dp) then
+                hard_recovery_danger_velocity = max(-diag_flame_velocity_filtered, 0.0_dp)
+            else
+                hard_recovery_danger_velocity = 0.0_dp
+            end if
+
+            if (thermal_envelope_found) then
+                hard_recovery_response_time = hard_recovery_response_fraction * &
+                    thermal_thickness / max(abs(diag_flame_velocity_filtered), &
+                        velocity_tolerance_on)
+                hard_recovery_response_time = max(hard_recovery_response_min, &
+                    min(hard_recovery_response_max, hard_recovery_response_time))
+            else
+                hard_recovery_response_time = hard_recovery_response_min
+            end if
+
+            hard_recovery_hold = .false.
+            if (physical_envelope_available .and. hard_domain_fits .and. &
+                (.not. domain_ok) .and. this%state%hard_recovery_waiting_response) then
+                if ((time - this%state%hard_recovery_last_evaluation_time) < &
+                    hard_recovery_response_time) then
+                    hard_recovery_hold = .true.
+                else
+                    hard_recovery_progress = &
+                        (this%state%hard_recovery_reference_deficit - &
+                            hard_recovery_deficit >= &
+                            hard_recovery_deficit_progress_cells * cell_size(front_axis))
+                    if (this%state%hard_recovery_reference_velocity > &
+                        velocity_tolerance_on) then
+                        hard_recovery_progress = hard_recovery_progress .or. &
+                            (hard_recovery_danger_velocity <= &
+                                (1.0_dp - hard_recovery_velocity_progress_fraction) * &
+                                this%state%hard_recovery_reference_velocity)
+                    end if
+
+                    if (hard_recovery_progress) then
+                        this%state%hard_recovery_no_progress_count = 0
+                        this%state%hard_recovery_reference_deficit = &
+                            hard_recovery_deficit
+                        this%state%hard_recovery_reference_velocity = &
+                            hard_recovery_danger_velocity
+                        this%state%hard_recovery_last_evaluation_time = time
+                        hard_recovery_hold = .true.
+                    else
+                        this%state%hard_recovery_no_progress_count = &
+                            this%state%hard_recovery_no_progress_count + 1
+                        this%state%hard_recovery_waiting_response = .false.
+                    end if
+                end if
+            end if
+
+            ! Safety intervention is transient and does not itself declare the
+            ! ignition/development transient complete.
+            safety_control_active = capture_mode .or. emergency_mode .or. containment_mode
+
+            if (physical_boundary_violation) then
+                this%state%domain_failure = .true.
+                this%state%domain_invalid_counter = 0
+                call reset_hard_recovery_state()
+            else if (physical_envelope_available .and. (.not. hard_domain_fits)) then
+                ! During ignition/development the envelope can transiently be
+                ! broader than the final flame.  Do not classify geometric
+                ! impossibility until the flame has actually been established.
+                call reset_hard_recovery_state()
+                if (this%state%flame_established) then
+                    this%state%domain_invalid_counter = &
+                        this%state%domain_invalid_counter + 1
+                    if (this%state%domain_invalid_counter >= &
+                        domain_invalid_required_count) then
+                        this%state%domain_failure = .true.
+                    end if
+                else
+                    this%state%domain_invalid_counter = 0
+                end if
+            else if (physical_envelope_available .and. (.not. domain_ok)) then
+                ! Recoverable hard-margin violation.  Failure is based on
+                ! repeated corrections that fail to produce a measurable
+                ! response, not on the total number of useful corrections.
+                this%state%domain_invalid_counter = 0
+                if (this%state%hard_recovery_no_progress_count >= &
+                    hard_recovery_max_no_progress) then
+                    this%state%domain_failure = .true.
+                end if
+            else
+                this%state%domain_invalid_counter = 0
+                call reset_hard_recovery_state()
             end if
 
             if (capture_mode) then
-                response_settle_effective = response_settle_capture
                 time_control_effective = time_control_capture
             else
-                response_settle_effective = response_settle_time
                 time_control_effective = time_control
             end if
 
-            measurement_enabled = flame_detected .and. this%state%front_reference_initialized .and. ramp_settled .and. &
+            response_settled = ramp_settled .and. &
+                (time >= this%state%ramp_start_time + inlet_ramp_time + &
+                    this%state%active_response_settle_time)
+
+            measurement_enabled = (this%state%controller_armed .or. safety_control_active) .and. &
+                flame_detected .and. this%state%front_reference_initialized .and. &
+                response_settled .and. &
                 ((this%state%control_stage == stage_anchor_control) .or. &
-                 (this%state%control_stage == stage_flamelet_ready)) .and. &
-                ((time - this%state%previous_correction_time) >= response_settle_effective)
+                 (this%state%control_stage == stage_flamelet_ready))
 
             if (measurement_enabled) then
                 call append_front_history(time, current_front_coord)
@@ -655,15 +1078,43 @@ contains
                 end if
 
                 position_error = current_front_coord - this%state%front_reference_coord
-                position_control_error = safe_window_error(current_front_coord, front_safe_min, front_safe_max)
+                if (physical_envelope_available) then
+                    ! Once the physical flame envelope exists, its preferred/hard
+                    ! margins supersede the legacy centroid safe window.  A thin
+                    ! flame may sit downstream of the fixed centroid guard while
+                    ! still having ample reaction-zone clearance.
+                    centroid_position_error = 0.0_dp
+                    position_control_error = envelope_position_error
+                else
+                    ! Startup fallback before a reliable thermal/reaction envelope
+                    ! can be constructed.
+                    centroid_position_error = safe_window_error( &
+                        current_front_coord, front_safe_min, front_safe_max)
+                    position_control_error = centroid_position_error
+                end if
                 position_velocity = position_control_error / max(position_relaxation_time, time_track)
-                control_velocity = flame_velocity_filtered + position_velocity
+                if (containment_mode) then
+                    control_velocity = position_velocity
+                else
+                    control_velocity = flame_velocity_filtered + position_velocity
+                end if
                 outlet_distance = domain_front_max - current_front_coord
-                capture_mode = (position_control_error /= 0.0_dp) .or. &
-                    (abs(flame_velocity_filtered) > capture_velocity_threshold) .or. &
-                    (outlet_distance < outlet_guard_distance)
-                emergency_mode = (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
-                    (abs(position_control_error) > capture_position_tolerance)
+                capture_mode = hard_envelope_violation .or. &
+                    (this%state%flame_established .and. &
+                     abs(flame_velocity_filtered) > capture_velocity_threshold)
+                if (.not. physical_envelope_available) then
+                    capture_mode = capture_mode .or. &
+                        (centroid_position_error /= 0.0_dp) .or. &
+                        (outlet_distance < outlet_guard_distance)
+                end if
+                emergency_mode = hard_envelope_violation
+                if (.not. physical_envelope_available) then
+                    emergency_mode = emergency_mode .or. &
+                        (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
+                        (abs(centroid_position_error) > capture_position_tolerance)
+                end if
+                containment_mode = (.not. this%state%flame_established) .and. &
+                    physical_envelope_available .and. domain_warning .and. domain_ok
                 if (capture_mode) then
                     time_control_effective = time_control_capture
                 else
@@ -677,9 +1128,18 @@ contains
                 this%state%has_bracket = .false.
             end if
 
+            measurement_attempt_duration = measurement_max_duration
+            if (abs(this%state%current_measurement_delta) > tiny_weight) then
+                measurement_attempt_duration = measurement_duration_safety_factor * &
+                    measurement_min_displacement_cells * cell_size(front_axis) / &
+                    abs(this%state%current_measurement_delta)
+                measurement_attempt_duration = max(measurement_min_duration, &
+                    min(measurement_max_duration, measurement_attempt_duration))
+            end if
+
             if (this%state%control_stage == stage_measurement_ramp) then
                 if (flame_detected .and. ramp_settled .and. &
-                    (time - this%state%ramp_start_time) >= measurement_settle_time) then
+                    time >= this%state%ramp_start_time + inlet_ramp_time + measurement_settle_time) then
                     call clear_control_history()
                     this%state%measurement_start_time = time
                     this%state%measurement_start_coord = current_front_coord
@@ -700,28 +1160,45 @@ contains
                     this%state%measurement_split_slope_diff_save = split_slope_diff
                     sl_displacement = this%state%inlet_velocity_target - flame_velocity_lsq
                     this%state%sl_displacement_save = sl_displacement
-                    measurement_linear_ok = (this%state%hist_count >= min_hist_for_sl_measurement) .and. &
+                    measurement_direction_ok = &
+                        flame_velocity_lsq * this%state%measurement_delta_sign_save > 0.0_dp
+                    measurement_linear_ok = domain_ok .and. &
+                        measurement_direction_ok .and. &
+                        (this%state%hist_count >= min_hist_for_sl_measurement) .and. &
                         (measurement_elapsed >= measurement_min_duration) .and. &
-                        (abs(measurement_displacement) >= measurement_min_displacement_cells * cell_size(front_axis)) .and. &
+                        (abs(measurement_displacement) >= measurement_target_displacement) .and. &
                         (linear_r2 >= measurement_r2_min) .and. &
                         (linear_rms <= measurement_residual_cells * cell_size(front_axis)) .and. &
                         (split_slope_diff <= max(measurement_split_slope_abs_tol, &
-                            measurement_split_slope_rel_tol * max(abs(flame_velocity_lsq), velocity_tolerance_on)))
+                            measurement_split_slope_rel_tol * &
+                            max(abs(flame_velocity_lsq), velocity_tolerance_on)))
+
                     if (measurement_linear_ok) then
                         this%state%measurement_velocity_save = flame_velocity_lsq
                         this%state%control_stage = stage_measurement_done
                         this%state%stabilization_counter = stable_required_count
                         call write_laminar_velocity_once()
-                    else if (measurement_elapsed >= measurement_max_duration .and. &
-                        abs(measurement_displacement) < measurement_no_motion_displacement_cells * cell_size(front_axis)) then
-                        if (this%state%measurement_attempt < measurement_max_attempts) then
+
+                    else if (measurement_elapsed >= measurement_attempt_duration) then
+                        measurement_delta_max = measurement_delta_max_fraction * &
+                            max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step)
+
+                        if (abs(measurement_displacement) < measurement_target_displacement .and. &
+                            this%state%measurement_attempt < measurement_max_attempts .and. &
+                            this%state%current_measurement_delta < &
+                                (1.0_dp - 1.0e-06_dp) * measurement_delta_max) then
+
                             this%state%measurement_attempt = this%state%measurement_attempt + 1
-                            this%state%current_measurement_delta = min(measurement_delta_growth * max(this%state%current_measurement_delta, &
-                                measurement_delta_min), measurement_delta_max_fraction * &
-                                max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step))
-                            this%state%measurement_inlet_velocity = max(this%state%stabilized_inlet_velocity + &
-                                measurement_delta_sign * this%state%current_measurement_delta, 0.0_dp)
-                            this%state%inlet_velocity_target = this%state%measurement_inlet_velocity
+                            this%state%current_measurement_delta = min( &
+                                measurement_delta_growth * this%state%current_measurement_delta, &
+                                measurement_delta_max)
+
+                            this%state%measurement_inlet_velocity = max( &
+                                this%state%stabilized_inlet_velocity + &
+                                this%state%measurement_delta_sign_save * &
+                                    this%state%current_measurement_delta, 0.0_dp)
+                            this%state%inlet_velocity_target = &
+                                this%state%measurement_inlet_velocity
                             this%state%ramp_start_velocity = this%state%inlet_velocity_applied
                             this%state%ramp_start_time = time
                             this%state%active_inlet_ramp_time = measurement_ramp_time
@@ -741,7 +1218,7 @@ contains
                 end if
             end if
 
-            if (measurement_enabled .and. &
+            if (measurement_enabled .and. (.not. hard_recovery_hold) .and. &
                 this%state%hist_count >= merge(min_hist_for_capture, min_hist_for_control, capture_mode)) then
                 if ((time - this%state%previous_correction_time) >= time_control_effective) then
                     if (control_action_needed()) then
@@ -757,13 +1234,25 @@ contains
                             target_step_for_log = this%state%inlet_velocity_target - measured_inlet_velocity
                             if (capture_mode) then
                                 this%state%active_inlet_ramp_time = inlet_ramp_time_capture
+                                this%state%active_response_settle_time = response_settle_capture
                             else
                                 this%state%active_inlet_ramp_time = inlet_ramp_time_fine
+                                this%state%active_response_settle_time = response_settle_time
                             end if
                             this%state%ramp_start_velocity = this%state%inlet_velocity_applied
                             this%state%ramp_start_time = time
                             this%state%previous_correction_time = time
                             this%state%correction_counter = this%state%correction_counter + 1
+                            if (hard_envelope_violation .and. hard_domain_fits) then
+                                this%state%hard_recovery_corrections = &
+                                    this%state%hard_recovery_corrections + 1
+                                this%state%hard_recovery_waiting_response = .true.
+                                this%state%hard_recovery_reference_deficit = &
+                                    hard_recovery_deficit
+                                this%state%hard_recovery_reference_velocity = &
+                                    hard_recovery_danger_velocity
+                                this%state%hard_recovery_last_evaluation_time = time
+                            end if
                             control_performed = .true.
                             reset_history_after_log = .true.
                         end if
@@ -775,8 +1264,61 @@ contains
                 end if
             end if
 
+            correction_free_time = max(time - this%state%previous_correction_time, 0.0_dp)
+
+            ! Scientific convergence is stricter than flame establishment.
+            ! A slowly evolving lean flame must not advance merely because Vfl
+            ! passes transiently through zero.
+            structure_stationary_candidate = this%state%flame_established .and. &
+                flame_detected .and. physical_envelope_available .and. domain_ok .and. &
+                (.not. domain_warning) .and. response_settled .and. &
+                (.not. control_performed) .and. &
+                (this%state%arm_metric_rel_trend <= &
+                    final_stationarity_relative_trend_tolerance)
+
+            if (structure_stationary_candidate) then
+                if (this%state%structure_stationary_counter == 0) then
+                    this%state%final_thermal_thickness_reference = thermal_thickness
+                    this%state%final_reaction_thickness_reference = reaction_thickness
+                    this%state%structure_stationary_counter = 1
+                else if (abs(thermal_thickness - &
+                    this%state%final_thermal_thickness_reference) <= &
+                        final_thickness_tolerance_cells * cell_size(front_axis) .and. &
+                    abs(reaction_thickness - &
+                    this%state%final_reaction_thickness_reference) <= &
+                        final_thickness_tolerance_cells * cell_size(front_axis)) then
+                    this%state%structure_stationary_counter = &
+                        this%state%structure_stationary_counter + 1
+                else
+                    ! Start a new structural-stationarity interval from the
+                    ! current envelope instead of accumulating slow drift.
+                    this%state%final_thermal_thickness_reference = thermal_thickness
+                    this%state%final_reaction_thickness_reference = reaction_thickness
+                    this%state%structure_stationary_counter = 1
+                end if
+            else
+                this%state%structure_stationary_counter = 0
+                this%state%final_thermal_thickness_reference = thermal_thickness
+                this%state%final_reaction_thickness_reference = reaction_thickness
+            end if
+
+            final_structure_stationary = &
+                (this%state%structure_stationary_counter >= &
+                    final_stationarity_required_count)
+
+            ! U=0 is the lower actuator limit, not a scientifically validated
+            ! anchor.  If Vfl merely crosses zero there, continue observing;
+            ! a subsequently negative Vfl will drive U positive again.
+            anchor_velocity_interior = &
+                (this%state%inlet_velocity_target > min_abs_velocity_step)
+
             if (this%state%control_stage == stage_anchor_control) then
-                if (measurement_enabled .and. ramp_settled .and. this%state%hist_count >= min_hist_for_control .and. &
+                if (this%state%flame_established .and. final_structure_stationary .and. &
+                    anchor_velocity_interior .and. measurement_enabled .and. &
+                    this%state%hist_count >= min_hist_for_control .and. &
+                    this%state%diag_hist_count >= max_diag_hist_size .and. &
+                    correction_free_time >= diagnostic_window_time .and. &
+                    domain_ok .and. (.not. domain_warning) .and. &
                     abs(diag_flame_velocity_filtered) < velocity_tolerance_off .and. &
                     position_control_error == 0.0_dp) then
                     this%state%stabilization_counter = this%state%stabilization_counter + 1
@@ -786,7 +1328,12 @@ contains
                     this%state%stabilization_counter = 0
                 end if
             else if (this%state%control_stage == stage_flamelet_ready) then
-                if (measurement_enabled .and. ramp_settled .and. this%state%hist_count >= min_hist_for_control .and. &
+                if (this%state%flame_established .and. final_structure_stationary .and. &
+                    anchor_velocity_interior .and. measurement_enabled .and. &
+                    this%state%hist_count >= min_hist_for_control .and. &
+                    this%state%diag_hist_count >= max_diag_hist_size .and. &
+                    correction_free_time >= diagnostic_window_time .and. &
+                    domain_ok .and. (.not. domain_warning) .and. &
                     abs(diag_flame_velocity_filtered) < velocity_tolerance_off .and. &
                     position_control_error == 0.0_dp) then
                     this%state%post_flamelet_hold_counter = this%state%post_flamelet_hold_counter + 1
@@ -801,10 +1348,7 @@ contains
                 this%state%stabilization_counter = stable_required_count
             end if
 
-            if (this%state%control_stage == stage_anchor_control .or. this%state%control_stage == stage_flamelet_ready) then
-                flame_velocity_lsq = diag_flame_velocity_lsq
-                flame_velocity_filtered = diag_flame_velocity_filtered
-            else if (this%state%control_stage == stage_measurement_done) then
+            if (this%state%control_stage == stage_measurement_done) then
                 flame_velocity_lsq = this%state%measurement_velocity_save
                 flame_velocity_filtered = this%state%measurement_velocity_save
                 control_velocity = this%state%measurement_velocity_save
@@ -817,6 +1361,20 @@ contains
             active_track_number = this%state%track_counter
             call write_tracking_line()
 
+            if (this%state%domain_failure) then
+                call write_domain_failure_once()
+                this%state%track_counter = this%state%track_counter + 1
+                if (present(failed)) failed = .true.
+                return
+            end if
+
+            if (this%state%control_stage == stage_measurement_failed) then
+                call write_measurement_failure_once()
+                this%state%track_counter = this%state%track_counter + 1
+                if (present(failed)) failed = .true.
+                return
+            end if
+
             if (reset_history_after_log) call clear_control_history()
 
             this%state%track_counter = this%state%track_counter + 1
@@ -824,7 +1382,6 @@ contains
             if (this%state%control_stage == stage_anchor_control .and. &
                 this%state%stabilization_counter >= flamelet_required_count) then
                 if (active_workflow == workflow_flamelet_sl) then
-                    if (enable_flamelet_output) call request_flamelet_tables_once()
                     this%state%control_stage = stage_flamelet_ready
                     this%state%stabilization_counter = 0
                     this%state%post_flamelet_hold_counter = 0
@@ -835,7 +1392,9 @@ contains
 
             else if (this%state%control_stage == stage_flamelet_ready .and. &
                 this%state%post_flamelet_hold_counter >= post_flamelet_hold_required_count) then
+                if (enable_flamelet_output) call request_flamelet_tables_once()
                 if (enable_drift_measurement .and. dimensions == 1) then
+                    call capture_stabilized_scientific_state()
                     call start_drift_measurement_ramp(time)
                 else if (pause_after_sl_measurement) then
                     stabilized = .true.
@@ -855,18 +1414,29 @@ contains
             write(flame_data_file,'(A,I0,A)') 'av_flame_data_', this%load_counter, '.dat'
             open(newunit = this%state%flame_loc_unit, file = flame_data_file, status = 'replace', form = 'formatted')
 
-            av_header = 'VARIABLES="time" '
+            av_header = 'VARIABLES = "time"'
             do local_dim = 1, dimensions
-                av_header = trim(av_header) // '"xf_' // trim(axis_names(local_dim)) // '" '
+                av_header = trim(av_header) // ' "xf_' // trim(axis_names(local_dim)) // '"'
             end do
             av_header = trim(av_header) // &
-                '"Vfl_lsq" "Vfl_filtered" "Vfl_diag_lsq" "Vfl_diag_filtered" "Vfl_measurement_lsq" "Vcontrol" "pos_error" "x_ref" '
-            av_header = trim(av_header) // '"U_in_applied" "U_in_target" '
-            av_header = trim(av_header) // '"dU_target" "adaptive_gain" "hist_count" ' // &
-                '"measurement_on" "bracket_on" "capture_on" "emergency_on" "flame_detected" '
-            av_header = trim(av_header) // '"front_spread" "Qint" "Qmax" "Qvalid" "Hmax" "Tgradmax" '
-            av_header = trim(av_header) // '"stage" "SL_disp" "lin_R2" "lin_RMS" "split_dV" '
-            av_header = trim(av_header) // '"corr_count" "stab_count" "track_count"'
+                ' "Vfl_lsq" "Vfl_filtered" "Vfl_diag_lsq" "Vfl_diag_filtered"' // &
+                ' "Vfl_measurement_lsq" "Vcontrol" "pos_error" "x_ref"'
+            av_header = trim(av_header) // ' "U_in_applied" "U_in_target"'
+            av_header = trim(av_header) // ' "dU_target" "adaptive_gain" "hist_count"' // &
+                ' "measurement_on" "bracket_on" "capture_on" "emergency_on" "flame_detected"'
+            av_header = trim(av_header) // ' "front_spread" "Qint" "Qmax" "Qvalid" "Hmax" "Tgradmax"'
+            av_header = trim(av_header) // ' "stage" "SL_disp" "lin_R2" "lin_RMS" "split_dV"'
+            av_header = trim(av_header) // ' "corr_count" "stab_count" "track_count"' // &
+                ' "controller_armed" "ramp_settled" "response_settled"' // &
+                ' "vel_tol_on" "vel_tol_off" "Qint_rel_trend"' // &
+                ' "flame_established" "establish_window_samples" "hard_recovery_corrections"' // &
+                ' "containment_on" "hard_recovery_hold" "hard_recovery_no_progress"' // &
+                ' "final_stationary" "structure_stab_count" "anchor_interior"' // &
+                ' "x_preheat" "x_T10" "x_T90" "delta_T"' // &
+                ' "x_reaction_left" "x_reaction_right" "delta_reaction"' // &
+                ' "d_inlet_preheat" "d_outlet_reaction"' // &
+                ' "inlet_theta_max" "inlet_margin_ratio" "outlet_margin_ratio"' // &
+                ' "domain_warning" "domain_ok" "domain_failure" "correction_free_time"'
 
             write(this%state%flame_loc_unit,'(A)') trim(av_header)
             this%state%output_initialized = .true.
@@ -938,6 +1508,58 @@ contains
                 this%state%diag_front_coord_hist(max_diag_hist_size) = s_new
             end if
         end subroutine append_diagnostic_history
+
+        subroutine append_arming_history(metric_new, window_samples)
+            real(dp), intent(in) :: metric_new
+            integer, intent(in) :: window_samples
+
+            integer :: window_use, half_samples
+            integer :: first_old, first_new
+            real(dp) :: mean_old, mean_new, metric_scale
+
+            if (this%state%arm_hist_count < arming_max_window_samples) then
+                this%state%arm_hist_count = this%state%arm_hist_count + 1
+                this%state%arm_metric_hist(this%state%arm_hist_count) = metric_new
+            else
+                this%state%arm_metric_hist(1:arming_max_window_samples-1) = &
+                    this%state%arm_metric_hist(2:arming_max_window_samples)
+                this%state%arm_metric_hist(arming_max_window_samples) = metric_new
+            end if
+
+            window_use = max(arming_min_window_samples, &
+                min(arming_max_window_samples, window_samples))
+
+            if (this%state%arm_hist_count >= window_use) then
+                half_samples = max(window_use / 2, 1)
+                first_old = this%state%arm_hist_count - window_use + 1
+                first_new = this%state%arm_hist_count - half_samples + 1
+
+                mean_old = sum(this%state%arm_metric_hist( &
+                    first_old:first_old + half_samples - 1)) / real(half_samples, dp)
+                mean_new = sum(this%state%arm_metric_hist( &
+                    first_new:this%state%arm_hist_count)) / real(half_samples, dp)
+
+                metric_scale = max(abs(mean_old), abs(mean_new), tiny_weight)
+                this%state%arm_metric_rel_trend = abs(mean_new - mean_old) / metric_scale
+            else
+                this%state%arm_metric_rel_trend = 1.0e30_dp
+            end if
+        end subroutine append_arming_history
+
+        subroutine clear_arming_history()
+            this%state%arm_hist_count = 0
+            this%state%arm_metric_hist = 0.0_dp
+            this%state%arm_metric_rel_trend = 1.0e30_dp
+        end subroutine clear_arming_history
+
+        subroutine reset_hard_recovery_state()
+            this%state%hard_recovery_corrections = 0
+            this%state%hard_recovery_no_progress_count = 0
+            this%state%hard_recovery_reference_deficit = huge(1.0_dp)
+            this%state%hard_recovery_reference_velocity = huge(1.0_dp)
+            this%state%hard_recovery_last_evaluation_time = -huge(1.0_dp)
+            this%state%hard_recovery_waiting_response = .false.
+        end subroutine reset_hard_recovery_state
 
         subroutine clear_control_history()
             this%state%hist_count = 0
@@ -1081,6 +1703,17 @@ contains
             end if
         end function safe_window_error
 
+        pure function combined_position_error(centroid_error, envelope_error) result(error_out)
+            real(dp), intent(in) :: centroid_error, envelope_error
+            real(dp) :: error_out
+
+            if (envelope_error /= 0.0_dp) then
+                error_out = envelope_error
+            else
+                error_out = centroid_error
+            end if
+        end function combined_position_error
+
         logical function control_action_needed()
             control_action_needed = (abs(flame_velocity_filtered) > velocity_tolerance_on) .or. &
                 (abs(position_control_error) > 0.0_dp .and. abs(control_velocity) > velocity_tolerance_on)
@@ -1209,21 +1842,310 @@ contains
             end if
         end subroutine request_flamelet_tables_once
 
-        subroutine write_laminar_velocity_once()
-            integer :: sl_unit
-            character(len=200) :: sl_file_name
+        subroutine capture_stabilized_scientific_state()
+            integer, parameter :: plateau_half_width = 2
+            integer :: ii, i_fresh, i_products, i_first, i_last
+            integer :: sample_count, spec_local
+            real(dp) :: fresh_coord, products_coord
 
-            if (.not. this%state%sl_output_written) then
-                write(sl_file_name,'(A,I0,A)') 'laminar_flame_velocity_', this%load_counter, '.dat'
-                open(newunit = sl_unit, file = sl_file_name, status = 'replace', form = 'formatted')
-                write(sl_unit,'(A)') &
-                    'VARIABLES="time" "U_in" "Vfl_measurement" "SL_disp" "lin_R2" "lin_RMS" "split_dV" "attempt"'
-                write(sl_unit,'(100E20.12)') time, this%state%measurement_inlet_velocity, this%state%measurement_velocity_save, &
-                    this%state%sl_displacement_save, this%state%measurement_r2_save, this%state%measurement_rms_save, &
-                    this%state%measurement_split_slope_diff_save, real(this%state%measurement_attempt,dp)
-                close(sl_unit)
-                this%state%sl_output_written = .true.
+            if (.not. domain_ok .or. domain_warning) return
+            if (.not. thermal_envelope_found .or. .not. reaction_envelope_found) return
+
+            fresh_coord = 0.5_dp * (domain_boundary_min + x_preheat)
+            products_coord = 0.5_dp * (x_reaction_right + domain_boundary_max)
+
+            i_fresh = nint(fresh_coord / cell_size(front_axis) + 0.5_dp)
+            i_products = nint(products_coord / cell_size(front_axis) + 0.5_dp)
+            i_fresh = min(max(i_fresh, cons_inner_loop(1,1)), cons_inner_loop(1,2))
+            i_products = min(max(i_products, cons_inner_loop(1,1)), cons_inner_loop(1,2))
+
+            this%state%scientific_rho_fresh = 0.0_dp
+            i_first = max(i_fresh - plateau_half_width, cons_inner_loop(1,1))
+            i_last = min(i_fresh + plateau_half_width, cons_inner_loop(1,2))
+            sample_count = i_last - i_first + 1
+            do ii = i_first, i_last
+                this%state%scientific_rho_fresh = this%state%scientific_rho_fresh + &
+                    this%rho%s_ptr%cells(ii,1,1)
+            end do
+            this%state%scientific_rho_fresh = this%state%scientific_rho_fresh / real(sample_count,dp)
+
+            this%state%scientific_rho_products = 0.0_dp
+            this%state%scientific_t_products = 0.0_dp
+            this%state%stabilized_product_mass_fractions = 0.0_dp
+            i_first = max(i_products - plateau_half_width, cons_inner_loop(1,1))
+            i_last = min(i_products + plateau_half_width, cons_inner_loop(1,2))
+            sample_count = i_last - i_first + 1
+            do ii = i_first, i_last
+                this%state%scientific_rho_products = this%state%scientific_rho_products + &
+                    this%rho%s_ptr%cells(ii,1,1)
+                this%state%scientific_t_products = this%state%scientific_t_products + &
+                    this%T%s_ptr%cells(ii,1,1)
+                do spec_local = 1, species_number
+                    this%state%stabilized_product_mass_fractions(spec_local) = &
+                        this%state%stabilized_product_mass_fractions(spec_local) + &
+                        this%Y%v_ptr%pr(spec_local)%cells(ii,1,1)
+                end do
+            end do
+
+            this%state%scientific_rho_products = &
+                this%state%scientific_rho_products / real(sample_count,dp)
+            this%state%scientific_t_products = &
+                this%state%scientific_t_products / real(sample_count,dp)
+            this%state%stabilized_product_mass_fractions = &
+                this%state%stabilized_product_mass_fractions / real(sample_count,dp)
+
+            this%state%scientific_time_stabilized = time
+            this%state%scientific_u_anchor = this%state%inlet_velocity_target
+            this%state%scientific_flame_thickness = max(x_thermal_high - x_thermal_low, 0.0_dp)
+            this%state%scientific_preheat_zone = max(x_thermal_low - x_preheat, 0.0_dp)
+            this%state%scientific_reaction_zone = reaction_thickness
+            this%state%scientific_qint = heat_release_integral
+            this%state%scientific_qmax = heat_release_max
+            this%state%scientific_d_inlet_preheat = inlet_preheat_distance
+            this%state%scientific_d_outlet_reaction = outlet_reaction_distance
+            this%state%scientific_state_captured = .true.
+        end subroutine capture_stabilized_scientific_state
+
+        subroutine write_measurement_failure_once()
+            integer :: result_unit
+            character(len=240) :: result_title
+
+            if (this%state%failure_report_written) return
+            result_title = trim(this%flame_stabilization%get_scientific_result_title())
+            if (len_trim(result_title) == 0) result_title = 'NRG laminar flame result'
+
+            open(newunit = result_unit, file = 'laminar_flame_result.json', &
+                status = 'replace', form = 'formatted')
+            write(result_unit,'(A)') '{'
+            write(result_unit,'(A)') '  "schema": "nrg.laminar_flame_result.v1",'
+            write(result_unit,'(A)') '  "status": "measurement_failed",'
+            write(result_unit,'(A)') '  "title": "' // trim(result_title) // '",'
+            write(result_unit,'(A)') '  "provenance": {'
+            write(result_unit,'(A)') '    "solver": "fds_low_mach",'
+            write(result_unit,'(A)') '    "control_mode": "laminar_burning_velocity",'
+            write(result_unit,'(A)') '    "setup": "' // &
+                trim(this%flame_stabilization%get_case_setup()) // '",'
+            write(result_unit,'(A)') '    "coordinate_system": "' // &
+                trim(this%domain%get_coordinate_system_name()) // '",'
+            write(result_unit,'(A)') '    "chemical_mechanism": "' // &
+                trim(this%chem%chem_ptr%get_chemical_mechanism()) // '",'
+            write(result_unit,'(A,ES24.16,A)') '    "hydrogen_percent": ', &
+                this%state%scientific_h2_percent, ','
+            write(result_unit,'(A,ES24.16,A)') '    "fresh_temperature_K": ', &
+                this%state%inlet_temperature, ','
+            write(result_unit,'(A,ES24.16,A)') '    "pressure_Pa": ', &
+                this%state%inlet_pressure, ','
+            write(result_unit,'(A,ES24.16)') '    "grid_spacing_m": ', cell_size(front_axis)
+            write(result_unit,'(A)') '  },'
+            write(result_unit,'(A)') '  "failure": {'
+            write(result_unit,'(A,ES24.16,A)') '    "time_s": ', time, ','
+            write(result_unit,'(A,I0,A)') '    "measurement_attempt": ', this%state%measurement_attempt, ','
+            write(result_unit,'(A,ES24.16,A)') '    "measurement_delta_m_s": ', &
+                this%state%current_measurement_delta, ','
+            write(result_unit,'(A,ES24.16,A)') '    "measurement_delta_sign": ', &
+                this%state%measurement_delta_sign_save, ','
+            write(result_unit,'(A,ES24.16,A)') '    "measurement_elapsed_s": ', measurement_elapsed, ','
+            write(result_unit,'(A,ES24.16,A)') '    "measurement_displacement_m": ', measurement_displacement, ','
+            write(result_unit,'(A,ES24.16,A)') '    "measurement_target_displacement_m": ', &
+                measurement_target_displacement, ','
+            write(result_unit,'(A,ES24.16,A)') '    "measurement_velocity_m_s": ', &
+                this%state%measurement_velocity_save, ','
+            write(result_unit,'(A,ES24.16,A)') '    "r2": ', this%state%measurement_r2_save, ','
+            write(result_unit,'(A,ES24.16,A)') '    "rms_m": ', this%state%measurement_rms_save, ','
+            write(result_unit,'(A,ES24.16)') '    "split_velocity_difference_m_s": ', &
+                this%state%measurement_split_slope_diff_save
+            write(result_unit,'(A)') '  }'
+            write(result_unit,'(A)') '}'
+            close(result_unit)
+            this%state%failure_report_written = .true.
+        end subroutine write_measurement_failure_once
+
+        subroutine write_domain_failure_once()
+            integer :: result_unit
+            character(len=240) :: result_title
+            character(len=40) :: failure_status
+
+            if (this%state%failure_report_written) return
+            result_title = trim(this%flame_stabilization%get_scientific_result_title())
+            if (len_trim(result_title) == 0) result_title = 'NRG laminar flame result'
+
+            if (physical_boundary_violation) then
+                failure_status = 'physical_boundary_reached'
+            else if (.not. hard_domain_fits) then
+                failure_status = 'hard_envelope_does_not_fit'
+            else
+                failure_status = 'hard_domain_recovery_failed'
             end if
+
+            open(newunit = result_unit, file = 'laminar_flame_result.json', &
+                status = 'replace', form = 'formatted')
+            write(result_unit,'(A)') '{'
+            write(result_unit,'(A)') '  "schema": "nrg.laminar_flame_result.v1",'
+            write(result_unit,'(A)') '  "status": "' // trim(failure_status) // '",'
+            write(result_unit,'(A)') '  "title": "' // trim(result_title) // '",'
+            write(result_unit,'(A)') '  "provenance": {'
+            write(result_unit,'(A)') '    "solver": "fds_low_mach",'
+            write(result_unit,'(A)') '    "control_mode": "laminar_burning_velocity",'
+            write(result_unit,'(A)') '    "setup": "' // &
+                trim(this%flame_stabilization%get_case_setup()) // '",'
+            write(result_unit,'(A)') '    "coordinate_system": "' // &
+                trim(this%domain%get_coordinate_system_name()) // '",'
+            write(result_unit,'(A)') '    "chemical_mechanism": "' // &
+                trim(this%chem%chem_ptr%get_chemical_mechanism()) // '",'
+            write(result_unit,'(A,ES24.16,A)') '    "hydrogen_percent": ', &
+                this%state%scientific_h2_percent, ','
+            write(result_unit,'(A,ES24.16,A)') '    "fresh_temperature_K": ', &
+                this%state%inlet_temperature, ','
+            write(result_unit,'(A,ES24.16,A)') '    "pressure_Pa": ', &
+                this%state%inlet_pressure, ','
+            write(result_unit,'(A,ES24.16)') '    "grid_spacing_m": ', cell_size(front_axis)
+            write(result_unit,'(A)') '  },'
+            write(result_unit,'(A)') '  "failure": {'
+            write(result_unit,'(A,ES24.16,A)') '    "time_s": ', time, ','
+            write(result_unit,'(A,I0,A)') '    "hard_recovery_corrections": ', &
+                this%state%hard_recovery_corrections, ','
+            write(result_unit,'(A,I0,A)') '    "hard_recovery_no_progress": ', &
+                this%state%hard_recovery_no_progress_count, ','
+            write(result_unit,'(A,ES24.16,A)') '    "establishment_relative_trend": ', &
+                this%state%arm_metric_rel_trend, ','
+            write(result_unit,'(A,ES24.16,A)') '    "x_preheat_m": ', x_preheat, ','
+            write(result_unit,'(A,ES24.16,A)') '    "thermal_thickness_m": ', &
+                thermal_thickness, ','
+            write(result_unit,'(A,ES24.16,A)') '    "x_reaction_left_m": ', &
+                x_reaction_left, ','
+            write(result_unit,'(A,ES24.16,A)') '    "x_reaction_right_m": ', &
+                x_reaction_right, ','
+            write(result_unit,'(A,ES24.16,A)') '    "reaction_thickness_m": ', &
+                reaction_thickness, ','
+            write(result_unit,'(A,ES24.16,A)') '    "inlet_preheat_distance_m": ', &
+                inlet_preheat_distance, ','
+            write(result_unit,'(A,ES24.16,A)') '    "outlet_reaction_distance_m": ', &
+                outlet_reaction_distance, ','
+            write(result_unit,'(A,ES24.16,A)') '    "inlet_theta_max": ', &
+                inlet_theta_max, ','
+            write(result_unit,'(A,ES24.16)') '    "hard_required_length_m": ', &
+                hard_required_length
+            write(result_unit,'(A)') '  }'
+            write(result_unit,'(A)') '}'
+            close(result_unit)
+
+            this%state%failure_report_written = .true.
+        end subroutine write_domain_failure_once
+
+        subroutine write_laminar_velocity_once()
+            integer :: result_unit, spec_local
+            real(dp) :: expansion_ratio
+            character(len=240) :: result_title
+            character(len=20) :: specie_name
+            character(len=20) :: mechanism_name
+            character(len=20) :: coordinate_name
+            character(len=80) :: case_setup_name
+
+            if (this%state%sl_output_written) return
+            if (.not. this%state%scientific_state_captured) then
+                error stop 'flame stabilization: scientific state was not captured before LBV measurement'
+            end if
+
+            result_title = trim(this%flame_stabilization%get_scientific_result_title())
+            if (len_trim(result_title) == 0) result_title = 'NRG laminar flame result'
+            mechanism_name = trim(this%chem%chem_ptr%get_chemical_mechanism())
+            coordinate_name = trim(this%domain%get_coordinate_system_name())
+            case_setup_name = trim(this%flame_stabilization%get_case_setup())
+
+            expansion_ratio = this%state%scientific_rho_fresh / &
+                max(this%state%scientific_rho_products, tiny_weight)
+
+            open(newunit = result_unit, file = 'laminar_flame_result.json', &
+                status = 'replace', form = 'formatted')
+
+            write(result_unit,'(A)') '{'
+            write(result_unit,'(A)') '  "schema": "nrg.laminar_flame_result.v1",'
+            write(result_unit,'(A)') '  "status": "success",'
+            write(result_unit,'(A)') '  "title": "' // trim(result_title) // '",'
+            write(result_unit,'(A)') '  "provenance": {'
+            write(result_unit,'(A)') '    "solver": "fds_low_mach",'
+            write(result_unit,'(A)') '    "control_mode": "laminar_burning_velocity",'
+            write(result_unit,'(A)') '    "setup": "' // trim(case_setup_name) // '",'
+            write(result_unit,'(A)') '    "coordinate_system": "' // trim(coordinate_name) // '",'
+            write(result_unit,'(A)') '    "chemical_mechanism": "' // trim(mechanism_name) // '",'
+            write(result_unit,'(A,ES24.16,A)') '    "hydrogen_percent": ', &
+                this%state%scientific_h2_percent, ','
+            write(result_unit,'(A,ES24.16,A)') '    "fresh_temperature_K": ', &
+                this%state%inlet_temperature, ','
+            write(result_unit,'(A,ES24.16,A)') '    "pressure_Pa": ', &
+                this%state%inlet_pressure, ','
+            write(result_unit,'(A,ES24.16)') '    "grid_spacing_m": ', cell_size(front_axis)
+            write(result_unit,'(A)') '  },'
+
+            write(result_unit,'(A)') '  "result": {'
+            write(result_unit,'(A,ES24.16,A)') '    "laminar_burning_velocity_m_s": ', &
+                this%state%sl_displacement_save, ','
+            write(result_unit,'(A,ES24.16,A)') '    "anchor_velocity_m_s": ', &
+                this%state%scientific_u_anchor, ','
+            write(result_unit,'(A,ES24.16,A)') '    "flame_thickness_mm": ', &
+                1.0e3_dp * this%state%scientific_flame_thickness, ','
+            write(result_unit,'(A,ES24.16,A)') '    "preheat_zone_mm": ', &
+                1.0e3_dp * this%state%scientific_preheat_zone, ','
+            write(result_unit,'(A,ES24.16,A)') '    "energy_release_zone_mm": ', &
+                1.0e3_dp * this%state%scientific_reaction_zone, ','
+            write(result_unit,'(A,ES24.16,A)') '    "integrated_heat_release_W_m2": ', &
+                this%state%scientific_qint, ','
+            write(result_unit,'(A,ES24.16,A)') '    "peak_heat_release_W_m3": ', &
+                this%state%scientific_qmax, ','
+            write(result_unit,'(A,ES24.16)') '    "product_temperature_K": ', &
+                this%state%scientific_t_products
+            write(result_unit,'(A)') '  },'
+
+            write(result_unit,'(A)') '  "states": {'
+            write(result_unit,'(A,ES24.16,A)') '    "fresh_density_kg_m3": ', &
+                this%state%scientific_rho_fresh, ','
+            write(result_unit,'(A,ES24.16,A)') '    "product_density_kg_m3": ', &
+                this%state%scientific_rho_products, ','
+            write(result_unit,'(A,ES24.16,A)') '    "expansion_ratio": ', expansion_ratio, ','
+            write(result_unit,'(A)') '    "product_mass_fractions": {'
+            do spec_local = 1, species_number
+                specie_name = this%chem%chem_ptr%get_chemical_specie_name(spec_local)
+                if (spec_local < species_number) then
+                    write(result_unit,'(A,A,A,ES24.16,A)') '      "', &
+                        trim(specie_name), '": ', &
+                        this%state%stabilized_product_mass_fractions(spec_local), ','
+                else
+                    write(result_unit,'(A,A,A,ES24.16)') '      "', &
+                        trim(specie_name), '": ', &
+                        this%state%stabilized_product_mass_fractions(spec_local)
+                end if
+            end do
+            write(result_unit,'(A)') '    }'
+            write(result_unit,'(A)') '  },'
+
+            write(result_unit,'(A)') '  "stabilization": {'
+            write(result_unit,'(A,ES24.16,A)') '    "time_stabilized_s": ', &
+                this%state%scientific_time_stabilized, ','
+            write(result_unit,'(A,ES24.16,A)') '    "time_result_s": ', time, ','
+            write(result_unit,'(A,ES24.16,A)') '    "inlet_preheat_distance_mm": ', &
+                1.0e3_dp * this%state%scientific_d_inlet_preheat, ','
+            write(result_unit,'(A,ES24.16)') '    "outlet_reaction_distance_mm": ', &
+                1.0e3_dp * this%state%scientific_d_outlet_reaction
+            write(result_unit,'(A)') '  },'
+
+            write(result_unit,'(A)') '  "measurement": {'
+            write(result_unit,'(A,I0,A)') '    "attempt": ', this%state%measurement_attempt, ','
+            write(result_unit,'(A,ES24.16,A)') '    "inlet_velocity_m_s": ', &
+                this%state%measurement_inlet_velocity, ','
+            write(result_unit,'(A,ES24.16,A)') '    "flame_velocity_m_s": ', &
+                this%state%measurement_velocity_save, ','
+            write(result_unit,'(A,ES24.16,A)') '    "perturbation_m_s": ', &
+                this%state%measurement_delta_sign_save * this%state%current_measurement_delta, ','
+            write(result_unit,'(A,ES24.16,A)') '    "r2": ', this%state%measurement_r2_save, ','
+            write(result_unit,'(A,ES24.16,A)') '    "rms_mm": ', &
+                1.0e3_dp * this%state%measurement_rms_save, ','
+            write(result_unit,'(A,ES24.16)') '    "split_velocity_difference_m_s": ', &
+                this%state%measurement_split_slope_diff_save
+            write(result_unit,'(A)') '  }'
+            write(result_unit,'(A)') '}'
+
+            close(result_unit)
+            this%state%sl_output_written = .true.
         end subroutine write_laminar_velocity_once
 
         subroutine start_drift_measurement_ramp(t_now)
@@ -1231,12 +2153,32 @@ contains
 
             this%state%stabilized_inlet_velocity = this%state%inlet_velocity_target
             this%state%measurement_attempt = 1
-            this%state%current_measurement_delta = max(measurement_delta_fraction * &
-                max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step), measurement_delta_min)
-            this%state%current_measurement_delta = min(this%state%current_measurement_delta, measurement_delta_max_fraction * &
-                max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step))
-            this%state%measurement_inlet_velocity = max(this%state%stabilized_inlet_velocity + &
-                measurement_delta_sign * this%state%current_measurement_delta, 0.0_dp)
+
+            measurement_target_displacement = &
+                measurement_min_displacement_cells * cell_size(front_axis)
+            measurement_delta_max = measurement_delta_max_fraction * &
+                max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step)
+
+            this%state%current_measurement_delta = measurement_delta_fraction * &
+                max(abs(this%state%stabilized_inlet_velocity), min_abs_velocity_step)
+            this%state%current_measurement_delta = min( &
+                this%state%current_measurement_delta, measurement_delta_max)
+
+            inlet_measurement_room = max( &
+                inlet_preheat_distance - hard_inlet_margin, 0.0_dp)
+            outlet_measurement_room = max( &
+                outlet_reaction_distance - hard_outlet_margin, 0.0_dp)
+
+            if (outlet_measurement_room >= inlet_measurement_room) then
+                this%state%measurement_delta_sign_save = 1.0_dp
+            else
+                this%state%measurement_delta_sign_save = -1.0_dp
+            end if
+
+            this%state%measurement_inlet_velocity = max( &
+                this%state%stabilized_inlet_velocity + &
+                this%state%measurement_delta_sign_save * &
+                    this%state%current_measurement_delta, 0.0_dp)
             this%state%inlet_velocity_target = this%state%measurement_inlet_velocity
             this%state%ramp_start_velocity = this%state%inlet_velocity_applied
             this%state%ramp_start_time = t_now
@@ -1254,6 +2196,11 @@ contains
 
         subroutine write_tracking_line()
             real(dp) :: measurement_flag, bracket_flag, capture_flag, emergency_flag, flame_detected_flag
+            real(dp) :: controller_armed_flag, ramp_settled_flag, response_settled_flag
+            real(dp) :: flame_established_flag
+            real(dp) :: containment_flag, hard_recovery_hold_flag
+            real(dp) :: final_stationary_flag, anchor_interior_flag
+            real(dp) :: domain_warning_flag, domain_ok_flag, domain_failure_flag
 
             if (measurement_enabled) then
                 measurement_flag = 1.0_dp
@@ -1285,6 +2232,18 @@ contains
                 flame_detected_flag = 0.0_dp
             end if
 
+            controller_armed_flag = merge(1.0_dp, 0.0_dp, this%state%controller_armed)
+            ramp_settled_flag = merge(1.0_dp, 0.0_dp, ramp_settled)
+            response_settled_flag = merge(1.0_dp, 0.0_dp, response_settled)
+            flame_established_flag = merge(1.0_dp, 0.0_dp, this%state%flame_established)
+            containment_flag = merge(1.0_dp, 0.0_dp, containment_mode)
+            hard_recovery_hold_flag = merge(1.0_dp, 0.0_dp, hard_recovery_hold)
+            final_stationary_flag = merge(1.0_dp, 0.0_dp, final_structure_stationary)
+            anchor_interior_flag = merge(1.0_dp, 0.0_dp, anchor_velocity_interior)
+            domain_warning_flag = merge(1.0_dp, 0.0_dp, domain_warning)
+            domain_ok_flag = merge(1.0_dp, 0.0_dp, domain_ok)
+            domain_failure_flag = merge(1.0_dp, 0.0_dp, this%state%domain_failure)
+
             write(this%state%flame_loc_unit,'(100E20.12)') &
                 time, current_flame_location(1:dimensions), &
                 flame_velocity_lsq, flame_velocity_filtered, diag_flame_velocity_lsq, &
@@ -1295,7 +2254,20 @@ contains
                 capture_flag, emergency_flag, flame_detected_flag, &
                 front_spread, heat_release_integral, heat_release_max, heat_release_valid_limit, H_max, Tgrad_max, &
                 real(this%state%control_stage,dp), sl_displacement, linear_r2, linear_rms, split_slope_diff, &
-                real(this%state%correction_counter,dp), real(this%state%stabilization_counter,dp), real(active_track_number,dp)
+                real(this%state%correction_counter,dp), real(this%state%stabilization_counter,dp), real(active_track_number,dp), &
+                controller_armed_flag, ramp_settled_flag, response_settled_flag, &
+                velocity_tolerance_on, velocity_tolerance_off, this%state%arm_metric_rel_trend, &
+                flame_established_flag, real(arming_window_samples_active, dp), &
+                real(this%state%hard_recovery_corrections, dp), &
+                containment_flag, hard_recovery_hold_flag, &
+                real(this%state%hard_recovery_no_progress_count, dp), &
+                final_stationary_flag, real(this%state%structure_stationary_counter, dp), &
+                anchor_interior_flag, &
+                x_preheat, x_thermal_low, x_thermal_high, thermal_thickness, &
+                x_reaction_left, x_reaction_right, reaction_thickness, &
+                inlet_preheat_distance, outlet_reaction_distance, inlet_theta_max, &
+                inlet_margin_ratio, outlet_margin_ratio, domain_warning_flag, domain_ok_flag, &
+                domain_failure_flag, correction_free_time
         end subroutine write_tracking_line
 
     end subroutine solve

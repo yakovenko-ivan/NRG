@@ -184,6 +184,7 @@ module chemical_kinetics_solver_class
     contains
         procedure :: solve_chemical_kinetics
         procedure :: write_chemical_kinetics_table
+        procedure :: can_write_chemical_kinetics_table
         procedure :: set_activation_temperature
         procedure :: set_slatec_controls
         procedure :: configure_table_approximated
@@ -1426,6 +1427,14 @@ contains
                 time_step=time_step)
         end if
     end subroutine assemble_cell_sources
+
+
+    logical function can_write_chemical_kinetics_table(this)
+        class(chemical_kinetics_solver), intent(in) :: this
+
+        can_write_chemical_kinetics_table = this%record_concentration_increment .and. &
+            allocated(this%concentration_increment)
+    end function can_write_chemical_kinetics_table
 
 
     subroutine write_chemical_kinetics_table(this, table_file)

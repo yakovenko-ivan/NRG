@@ -175,6 +175,7 @@ program package_interface
     character(len=30)           :: mech_file           ! Chemical mechanism file
     character(len=30)           :: thermo_file         ! Thermodynamic data file
     character(len=30)           :: transdata_file      ! Transport data file
+    character(len=240)          :: scientific_result_title
     
     !==========================================
     ! CONTROL AND STATUS VARIABLES
@@ -210,8 +211,8 @@ program package_interface
     do task2 = 1, 1          ! Coordinate systems: Cartesian (1), Cylindrical (2), Spherical (3). 
     do task3 = 1, 1          ! Numerical solver: FDS solver (1), CPM solver (2), CABARET solver (3). 
     do task4 = 1, 1          ! Chemical kinetics scheme: KEROMNES mechanism (1)
-    do task5 = 10, 10, 1     ! Hydrogen percent in mixture with air
-    do task6 = 1, 1          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
+    do task5 = 8, 8, 2      ! Hydrogen percent in mixture with air
+    do task6 = 1, 3          ! Computational cell:  dx=4.0e-04 (0), dx=2.0e-04 (1), dx=1.0e-04 (2),
                              !                      dx=5.0e-05 (3), dx=2.5e-05 (4), dx=1.25e-05 (5),
                              !                      dx=6.25e-06 (6)
         
@@ -228,7 +229,7 @@ program package_interface
             case(1)
                 work_dir = trim(work_dir) // trim(fold_sep) //'cf'
                 setup = 'counter_flow'
-                domain_length = 0.0256_dp  ! Fixed domain length [m]
+                domain_length = 0.1024_dp  ! Fixed domain length [m]
             case(2)
                 work_dir = trim(work_dir) // trim(fold_sep) //'cf_prcInc'
                 setup = 'counter_flow_precInc'
@@ -392,13 +393,19 @@ program package_interface
             CFL_coefficient             = 0.25_dp, &     ! CFL safety factor
             initial_time_step           = 1e-06_dp)      ! Initial Δt [s]
         
+        scientific_result_title = 'NRG LBV: ' // trim(solver_name) // ', ' // &
+            trim(setup) // ', ' // trim(coordinate_system) // ', ' // trim(mech_name) // &
+            ', H2=' // trim(str_r(X_H2)) // '%, dx=' // trim(str_e(delta_x)) // ' m'
+
         ! Active flame stabilization belongs to the physical problem setup.
         ! Near-wall propagation has no inlet and therefore requests no active
         ! inlet stabilization.
         select case (setup)
         case ('counter_flow', 'counter_flow_precInc')
             problem_flame_stabilization = flame_stabilization_control_c( &
-                mode = 'laminar_burning_velocity')
+                mode = 'laminar_burning_velocity', &
+                scientific_result_title = trim(scientific_result_title), &
+                case_setup = trim(setup))
         case default
             problem_flame_stabilization = flame_stabilization_control_c( &
                 mode = 'none')
@@ -548,7 +555,7 @@ program package_interface
                 do i = utter_loop(1,1), utter_loop(1,2)
                         ! Set products beyond ignition zone
                         if (i > int(2.0_dp * domain_length / delta_x / 4.0_dp)) then
-                            if (i < int(2.0_dp * domain_length / delta_x / 4.0_dp) + (0.001_dp / delta_x)) then
+                            if (i < int(2.0_dp * domain_length / delta_x / 4.0_dp) + (0.002_dp / delta_x)) then
                                 T%cells(i,:,:) = 1700.0_dp  ! Ignition temperature
                             else
                                 T%cells(i,:,:)        = 300.0_dp          ! Cool products

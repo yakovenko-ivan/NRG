@@ -919,7 +919,7 @@ contains
     end function get_chemical_specie_index
 
 
-    character function get_chemical_specie_name(this, index)
+    character(len=20) function get_chemical_specie_name(this, index)
 
         class(chemical_properties), intent(inout) :: this
         integer, intent(in) :: index

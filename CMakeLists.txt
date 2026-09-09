@@ -19,7 +19,7 @@ else()
         "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
-project(NRG VERSION 1.0
+project(NRG VERSION 1.1.0
     DESCRIPTION "Numerical Reactive Gasdynamics JIHT RAS package"
     LANGUAGES Fortran
 )

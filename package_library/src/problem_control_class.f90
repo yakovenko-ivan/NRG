@@ -16,17 +16,22 @@ module problem_control_class
     public :: problem_controls_c
 
     integer, parameter :: mode_length = 40
+    integer, parameter :: scientific_title_length = 240
+    integer, parameter :: case_setup_length = 80
 
     real(dp), parameter :: default_time_delay = 1.0e-03_dp
     real(dp), parameter :: default_time_track = 1.0e-04_dp
     real(dp), parameter :: default_time_control = 5.0e-04_dp
     real(dp), parameter :: default_response_settle_time = 5.0e-04_dp
-    real(dp), parameter :: default_measurement_max_duration = 2.0e-02_dp
-    real(dp), parameter :: default_measurement_min_displacement_cells = 6.0_dp
+    real(dp), parameter :: default_measurement_max_duration = 1.0_dp
+    real(dp), parameter :: default_measurement_min_displacement_cells = 2.5e-01_dp
 
     type :: flame_stabilization_control
         private
         character(len=mode_length) :: mode = 'none'
+        character(len=scientific_title_length) :: scientific_result_title = &
+            'NRG laminar flame result'
+        character(len=case_setup_length) :: case_setup = 'unspecified'
         real(dp) :: time_delay = default_time_delay
         real(dp) :: time_track = default_time_track
         real(dp) :: time_control = default_time_control
@@ -41,6 +46,9 @@ module problem_control_class
         procedure :: is_laminar_burning_velocity => &
             flame_stabilization_is_laminar_burning_velocity
         procedure :: get_mode => get_flame_stabilization_mode
+        procedure :: get_scientific_result_title => &
+            get_flame_stabilization_scientific_result_title
+        procedure :: get_case_setup => get_flame_stabilization_case_setup
         procedure :: get_time_delay => get_flame_stabilization_time_delay
         procedure :: get_time_track => get_flame_stabilization_time_track
         procedure :: get_time_control => get_flame_stabilization_time_control
@@ -146,9 +154,12 @@ contains
 
     type(flame_stabilization_control) function flame_stabilization_constructor( &
             mode, time_delay, time_track, time_control, response_settle_time, &
-            measurement_max_duration, measurement_min_displacement_cells)
+            measurement_max_duration, measurement_min_displacement_cells, &
+            scientific_result_title, case_setup)
 
         character(len=*), intent(in) :: mode
+        character(len=*), intent(in), optional :: scientific_result_title
+        character(len=*), intent(in), optional :: case_setup
         real(dp), intent(in), optional :: time_delay
         real(dp), intent(in), optional :: time_track
         real(dp), intent(in), optional :: time_control
@@ -159,6 +170,8 @@ contains
         real(dp) :: time_delay_set, time_track_set, time_control_set
         real(dp) :: response_settle_time_set, measurement_max_duration_set
         real(dp) :: measurement_min_displacement_cells_set
+        character(len=scientific_title_length) :: scientific_result_title_set
+        character(len=case_setup_length) :: case_setup_set
 
         time_delay_set = default_time_delay
         time_track_set = default_time_track
@@ -167,7 +180,12 @@ contains
         measurement_max_duration_set = default_measurement_max_duration
         measurement_min_displacement_cells_set = &
             default_measurement_min_displacement_cells
+        scientific_result_title_set = 'NRG laminar flame result'
+        case_setup_set = 'unspecified'
 
+        if (present(scientific_result_title)) &
+            scientific_result_title_set = trim(scientific_result_title)
+        if (present(case_setup)) case_setup_set = trim(case_setup)
         if (present(time_delay)) time_delay_set = time_delay
         if (present(time_track)) time_track_set = time_track
         if (present(time_control)) time_control_set = time_control
@@ -182,7 +200,8 @@ contains
         call flame_stabilization_constructor%set_properties( &
             mode, time_delay_set, time_track_set, time_control_set, &
             response_settle_time_set, measurement_max_duration_set, &
-            measurement_min_displacement_cells_set)
+            measurement_min_displacement_cells_set, scientific_result_title_set, &
+            case_setup_set)
     end function flame_stabilization_constructor
 
 
@@ -309,9 +328,12 @@ contains
 
     subroutine set_flame_stabilization_properties(this, mode, time_delay, &
             time_track, time_control, response_settle_time, &
-            measurement_max_duration, measurement_min_displacement_cells)
+            measurement_max_duration, measurement_min_displacement_cells, &
+            scientific_result_title, case_setup)
         class(flame_stabilization_control), intent(inout) :: this
         character(len=*), intent(in) :: mode
+        character(len=*), intent(in) :: scientific_result_title
+        character(len=*), intent(in) :: case_setup
         real(dp), intent(in) :: time_delay, time_track, time_control
         real(dp), intent(in) :: response_settle_time, measurement_max_duration
         real(dp), intent(in) :: measurement_min_displacement_cells
@@ -337,7 +359,14 @@ contains
         if (measurement_min_displacement_cells <= 0.0_dp) &
             error stop 'problem_controls: measurement displacement must be positive'
 
+        if (len_trim(scientific_result_title) == 0) &
+            error stop 'problem_controls: scientific result title cannot be empty'
+        if (len_trim(case_setup) == 0) &
+            error stop 'problem_controls: case setup cannot be empty'
+
         this%mode = normalized_mode
+        this%scientific_result_title = trim(scientific_result_title)
+        this%case_setup = trim(case_setup)
         this%time_delay = time_delay
         this%time_track = time_track
         this%time_control = time_control
@@ -435,6 +464,8 @@ contains
         integer, intent(in) :: io_unit
 
         character(len=mode_length) :: flame_stabilization_mode
+        character(len=scientific_title_length) :: scientific_result_title
+        character(len=case_setup_length) :: case_setup
         real(dp) :: time_delay, time_track, time_control, response_settle_time
         real(dp) :: measurement_max_duration, measurement_min_displacement_cells
         character(len=mode_length) :: energy_ignition_mode
@@ -449,6 +480,7 @@ contains
         integer :: turbulence_random_seed
 
         namelist /problem_controls_parameters/ flame_stabilization_mode, &
+            scientific_result_title, case_setup, &
             time_delay, time_track, time_control, response_settle_time, &
             measurement_max_duration, measurement_min_displacement_cells
         namelist /energy_ignition_parameters/ energy_ignition_mode, &
@@ -461,6 +493,9 @@ contains
             turbulence_random_seed
 
         flame_stabilization_mode = this%flame_stabilization%get_mode()
+        scientific_result_title = &
+            this%flame_stabilization%get_scientific_result_title()
+        case_setup = this%flame_stabilization%get_case_setup()
         time_delay = this%flame_stabilization%get_time_delay()
         time_track = this%flame_stabilization%get_time_track()
         time_control = this%flame_stabilization%get_time_control()
@@ -500,6 +535,8 @@ contains
         integer, intent(in) :: io_unit
 
         character(len=mode_length) :: flame_stabilization_mode
+        character(len=scientific_title_length) :: scientific_result_title
+        character(len=case_setup_length) :: case_setup
         real(dp) :: time_delay, time_track, time_control, response_settle_time
         real(dp) :: measurement_max_duration, measurement_min_displacement_cells
         character(len=mode_length) :: energy_ignition_mode
@@ -515,6 +552,7 @@ contains
         integer :: io_status
 
         namelist /problem_controls_parameters/ flame_stabilization_mode, &
+            scientific_result_title, case_setup, &
             time_delay, time_track, time_control, response_settle_time, &
             measurement_max_duration, measurement_min_displacement_cells
         namelist /energy_ignition_parameters/ energy_ignition_mode, &
@@ -527,6 +565,8 @@ contains
             turbulence_random_seed
 
         flame_stabilization_mode = 'none'
+        scientific_result_title = 'NRG laminar flame result'
+        case_setup = 'unspecified'
         time_delay = default_time_delay
         time_track = default_time_track
         time_control = default_time_control
@@ -545,7 +585,9 @@ contains
             response_settle_time=response_settle_time, &
             measurement_max_duration=measurement_max_duration, &
             measurement_min_displacement_cells= &
-                measurement_min_displacement_cells)
+                measurement_min_displacement_cells, &
+            scientific_result_title=trim(scientific_result_title), &
+            case_setup=trim(case_setup))
 
         energy_ignition_mode = 'none'
         ignition_start_time = 0.0_dp
@@ -716,6 +758,16 @@ contains
         character(len=mode_length) :: value
         value = this%mode
     end function get_flame_stabilization_mode
+    function get_flame_stabilization_scientific_result_title(this) result(value)
+        class(flame_stabilization_control), intent(in) :: this
+        character(len=scientific_title_length) :: value
+        value = this%scientific_result_title
+    end function get_flame_stabilization_scientific_result_title
+    function get_flame_stabilization_case_setup(this) result(value)
+        class(flame_stabilization_control), intent(in) :: this
+        character(len=case_setup_length) :: value
+        value = this%case_setup
+    end function get_flame_stabilization_case_setup
     real(dp) function get_flame_stabilization_time_delay(this)
         class(flame_stabilization_control), intent(in) :: this
         get_flame_stabilization_time_delay = this%time_delay

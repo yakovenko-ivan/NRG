@@ -517,6 +517,7 @@ contains
         integer    :: particles_phase_counter
 
         logical    :: stabilized_flag
+        logical    :: stabilization_failed_flag
         logical    :: flamelet_output_requested
         character(len=200) :: flamelet_data_filename, flamelet_chem_filename
 
@@ -605,17 +606,21 @@ contains
         call fds_gas_dynamics_timer%toc(new_iter=.true.)
 
         if (this%stabilization_solver%is_enabled()) then
-            call this%stabilization_solver%solve(this%time, stabilized_flag)
+            call this%stabilization_solver%solve( &
+                this%time, stabilized_flag, stabilization_failed_flag)
             this%inlet_velocity = this%stabilization_solver%get_inlet_velocity()
 
             call this%stabilization_solver%consume_flamelet_output_request( &
                 flamelet_output_requested, flamelet_data_filename, flamelet_chem_filename)
             if (flamelet_output_requested) then
-                call this%chem_kin_solver%write_chemical_kinetics_table(flamelet_chem_filename)
+                if (this%chem_kin_solver%can_write_chemical_kinetics_table()) then
+                    call this%chem_kin_solver%write_chemical_kinetics_table( &
+                        flamelet_chem_filename)
+                end if
                 call this%write_data_table(flamelet_data_filename)
             end if
 
-            if (stabilized_flag) stop_flag = .true.
+            if (stabilized_flag .or. stabilization_failed_flag) stop_flag = .true.
         end if
 
         call fds_timer%toc(new_iter=.true.)
@@ -3914,12 +3919,13 @@ contains
 
         open(newunit=unit_id, file=trim(table_file), status='replace', &
             action='write', form='formatted')
-        write(unit_id,'(A)',advance='no') '# x T rho'
+        write(unit_id,'(A)',advance='no') '# x[m] T[K] rho[kg/m3]'
         do dim = 1, dimensions
-            write(unit_id,'(A,I0)',advance='no') ' u', dim
+            write(unit_id,'(A,I0,A)',advance='no') ' u', dim, '[m/s]'
         end do
         do spec = 1, species_number
-            write(unit_id,'(A,I0)',advance='no') ' Y', spec
+            write(unit_id,'(A,A)',advance='no') ' Y_', &
+                trim(this%chem%chem_ptr%get_chemical_specie_name(spec))
         end do
         write(unit_id,*)
 
