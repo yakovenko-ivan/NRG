@@ -12,6 +12,8 @@ module chemical_kinetics_solver_class
     use computational_domain_class
     use thermophysical_properties_class
     use chemical_properties_class
+    use chemical_kinetics_core_class, only: chemical_kinetics_core, &
+        chemical_kinetics_core_c, chemical_rate_state
 
     implicit none
 
@@ -41,6 +43,8 @@ module chemical_kinetics_solver_class
         integer :: species_number = 0
         integer :: reactions_number = 0
         type(chemical_properties), pointer :: chemistry => null()
+        type(chemical_kinetics_core) :: kinetics_core
+        type(chemical_rate_state) :: rate_state
         real(dp) :: temperature = 0.0_dp
         real(dp) :: default_third_body_efficiency = 0.0_dp
         logical :: has_any_third_body_reaction = .false.
@@ -115,6 +119,7 @@ module chemical_kinetics_solver_class
         type(computational_domain) :: domain
         type(thermophysical_properties_pointer) :: thermophysics
         type(chemical_properties_pointer) :: chemistry
+        type(chemical_kinetics_core) :: kinetics_core
         type(boundary_conditions_pointer) :: boundary
 
         integer :: species_number = 0
@@ -466,203 +471,8 @@ contains
     subroutine preprocess_mechanism(this)
         class(chemical_kinetics_solver), intent(inout) :: this
 
-        integer :: reaction, component, specie, index, position
-        integer :: left_raw_count, right_raw_count, sparse_count
-        integer :: net_position, net_value, reaction_kind
-        real(dp) :: efficiency
-
-        allocate(this%reaction_type(this%reactions_number))
-        allocate(this%reaction_uses_third_body(this%reactions_number))
-        allocate(this%reaction_uses_falloff(this%reactions_number))
-        allocate(this%reaction_uses_troe(this%reactions_number))
-        allocate(this%reaction_reversible(this%reactions_number))
-        allocate(this%forward_third_body_power(this%reactions_number))
-        allocate(this%reverse_third_body_power(this%reactions_number))
-        allocate(this%reactant_count(this%reactions_number))
-        allocate(this%product_count(this%reactions_number))
-        allocate(this%net_count(this%reactions_number))
-        allocate(this%reactant_species(maximum_reaction_components, &
-            this%reactions_number))
-        allocate(this%reactant_multiplicity(maximum_reaction_components, &
-            this%reactions_number))
-        allocate(this%product_species(maximum_reaction_components, &
-            this%reactions_number))
-        allocate(this%product_multiplicity(maximum_reaction_components, &
-            this%reactions_number))
-        allocate(this%net_species(maximum_net_reaction_species, &
-            this%reactions_number))
-        allocate(this%net_stoichiometry(maximum_net_reaction_species, &
-            this%reactions_number))
-        allocate(this%third_body_offset(0:this%reactions_number))
-
-        this%default_third_body_efficiency = &
-            this%chemistry%chem_ptr%default_enhanced_efficiencies
-        this%reaction_type = this%chemistry%chem_ptr%reactions_type
-        this%reaction_uses_third_body = .false.
-        this%reaction_uses_falloff = .false.
-        this%reaction_uses_troe = .false.
-        this%reaction_reversible = .false.
-        this%forward_third_body_power = 0
-        this%reverse_third_body_power = 0
-        this%reactant_count = 0
-        this%product_count = 0
-        this%net_count = 0
-        this%reactant_species = 0
-        this%reactant_multiplicity = 0
-        this%product_species = 0
-        this%product_multiplicity = 0
-        this%net_species = 0
-        this%net_stoichiometry = 0
-
-        associate(chemistry => this%chemistry%chem_ptr)
-        do reaction = 1, this%reactions_number
-            reaction_kind = this%reaction_type(reaction)
-            this%reaction_uses_falloff(reaction) = &
-                reaction_kind == 2 .or. reaction_kind == 3 .or. &
-                reaction_kind == 7
-            this%reaction_uses_troe(reaction) = &
-                reaction_kind == 3 .or. &
-                (reaction_kind == 7 .and. &
-                any(chemistry%Troe_coeffs(reaction,:) /= 0.0_dp))
-            this%reaction_reversible(reaction) = &
-                reaction_kind >= 0 .and. reaction_kind <= 4
-
-            left_raw_count = chemistry%chemical_coeffs(1,reaction,1)
-            right_raw_count = chemistry%chemical_coeffs(1,reaction,2)
-
-            do component = 2, left_raw_count + 1
-                specie = chemistry%chemical_coeffs(component,reaction,1)
-                if (specie == this%species_number + 1) then
-                    this%forward_third_body_power(reaction) = &
-                        this%forward_third_body_power(reaction) + 1
-                    cycle
-                end if
-                if (specie < 1 .or. specie > this%species_number) cycle
-                position = 0
-                do index = 1, this%reactant_count(reaction)
-                    if (this%reactant_species(index,reaction) == specie) then
-                        position = index
-                        exit
-                    end if
-                end do
-                if (position == 0) then
-                    this%reactant_count(reaction) = &
-                        this%reactant_count(reaction) + 1
-                    position = this%reactant_count(reaction)
-                    if (position > maximum_reaction_components) then
-                        error stop 'Chemical kinetics: too many reactants'
-                    end if
-                    this%reactant_species(position,reaction) = specie
-                end if
-                this%reactant_multiplicity(position,reaction) = &
-                    this%reactant_multiplicity(position,reaction) + 1
-            end do
-
-            do component = 2, right_raw_count + 1
-                specie = chemistry%chemical_coeffs(component,reaction,2)
-                if (specie == this%species_number + 1) then
-                    this%reverse_third_body_power(reaction) = &
-                        this%reverse_third_body_power(reaction) + 1
-                    cycle
-                end if
-                if (specie < 1 .or. specie > this%species_number) cycle
-                position = 0
-                do index = 1, this%product_count(reaction)
-                    if (this%product_species(index,reaction) == specie) then
-                        position = index
-                        exit
-                    end if
-                end do
-                if (position == 0) then
-                    this%product_count(reaction) = &
-                        this%product_count(reaction) + 1
-                    position = this%product_count(reaction)
-                    if (position > maximum_reaction_components) then
-                        error stop 'Chemical kinetics: too many products'
-                    end if
-                    this%product_species(position,reaction) = specie
-                end if
-                this%product_multiplicity(position,reaction) = &
-                    this%product_multiplicity(position,reaction) + 1
-            end do
-
-            do index = 1, this%reactant_count(reaction)
-                specie = this%reactant_species(index,reaction)
-                net_value = -this%reactant_multiplicity(index,reaction)
-                net_position = 0
-                do position = 1, this%net_count(reaction)
-                    if (this%net_species(position,reaction) == specie) then
-                        net_position = position
-                        exit
-                    end if
-                end do
-                if (net_position == 0) then
-                    this%net_count(reaction) = this%net_count(reaction) + 1
-                    net_position = this%net_count(reaction)
-                    this%net_species(net_position,reaction) = specie
-                end if
-                this%net_stoichiometry(net_position,reaction) = &
-                    this%net_stoichiometry(net_position,reaction) + net_value
-            end do
-            do index = 1, this%product_count(reaction)
-                specie = this%product_species(index,reaction)
-                net_value = this%product_multiplicity(index,reaction)
-                net_position = 0
-                do position = 1, this%net_count(reaction)
-                    if (this%net_species(position,reaction) == specie) then
-                        net_position = position
-                        exit
-                    end if
-                end do
-                if (net_position == 0) then
-                    this%net_count(reaction) = this%net_count(reaction) + 1
-                    net_position = this%net_count(reaction)
-                    this%net_species(net_position,reaction) = specie
-                end if
-                this%net_stoichiometry(net_position,reaction) = &
-                    this%net_stoichiometry(net_position,reaction) + net_value
-            end do
-
-            this%reaction_uses_third_body(reaction) = &
-                this%reaction_uses_falloff(reaction) .or. &
-                this%forward_third_body_power(reaction) > 0 .or. &
-                this%reverse_third_body_power(reaction) > 0 .or. &
-                reaction_kind == 1 .or. reaction_kind == 6
-        end do
-
-        this%has_any_third_body_reaction = &
-            any(this%reaction_uses_third_body)
-        sparse_count = 0
-        this%third_body_offset(0) = 1
-        do reaction = 1, this%reactions_number
-            if (this%reaction_uses_third_body(reaction)) then
-                do specie = 1, this%species_number
-                    efficiency = chemistry%enhanced_efficiencies( &
-                        reaction,specie)
-                    if (efficiency /= &
-                        this%default_third_body_efficiency) then
-                        sparse_count = sparse_count + 1
-                    end if
-                end do
-            end if
-            this%third_body_offset(reaction) = sparse_count + 1
-        end do
-
-        allocate(this%third_body_species(sparse_count))
-        allocate(this%third_body_efficiency_delta(sparse_count))
-        sparse_count = 0
-        do reaction = 1, this%reactions_number
-            if (.not. this%reaction_uses_third_body(reaction)) cycle
-            do specie = 1, this%species_number
-                efficiency = chemistry%enhanced_efficiencies(reaction,specie)
-                if (efficiency == this%default_third_body_efficiency) cycle
-                sparse_count = sparse_count + 1
-                this%third_body_species(sparse_count) = specie
-                this%third_body_efficiency_delta(sparse_count) = &
-                    efficiency-this%default_third_body_efficiency
-            end do
-        end do
-        end associate
+        this%kinetics_core = chemical_kinetics_core_c( &
+            this%chemistry%chem_ptr,this%thermophysics%thermo_ptr)
     end subroutine preprocess_mechanism
 
 
@@ -901,6 +711,8 @@ contains
             thread_workspace%reactions_number /= this%reactions_number
         if (.not. associated(thread_workspace%chemistry, &
             this%chemistry%chem_ptr)) rebuild = .true.
+        if (.not. associated(thread_workspace%kinetics_core%thermophysics, &
+            this%thermophysics%thermo_ptr)) rebuild = .true.
 
         if (.not. rebuild) return
 
@@ -908,67 +720,9 @@ contains
         thread_workspace%species_number = this%species_number
         thread_workspace%reactions_number = this%reactions_number
         thread_workspace%chemistry => this%chemistry%chem_ptr
-        thread_workspace%default_third_body_efficiency = &
-            this%default_third_body_efficiency
-        thread_workspace%has_any_third_body_reaction = &
-            this%has_any_third_body_reaction
-
+        thread_workspace%kinetics_core = this%kinetics_core
         allocate(thread_workspace%concentration_initial(this%species_number))
         allocate(thread_workspace%concentration_final(this%species_number))
-        allocate(thread_workspace%high_pressure_rate(this%reactions_number))
-        allocate(thread_workspace%low_pressure_rate(this%reactions_number))
-        allocate(thread_workspace%reverse_factor(this%reactions_number))
-        allocate(thread_workspace%troe_f_center(this%reactions_number))
-        allocate(thread_workspace%troe_c(this%reactions_number))
-        allocate(thread_workspace%troe_n(this%reactions_number))
-        allocate(thread_workspace%entropy(this%species_number))
-        allocate(thread_workspace%enthalpy(this%species_number))
-
-        allocate(thread_workspace%reaction_type(this%reactions_number), &
-            source=this%reaction_type)
-        allocate(thread_workspace%reaction_uses_third_body( &
-            this%reactions_number),source=this%reaction_uses_third_body)
-        allocate(thread_workspace%reaction_uses_falloff( &
-            this%reactions_number),source=this%reaction_uses_falloff)
-        allocate(thread_workspace%reaction_uses_troe( &
-            this%reactions_number),source=this%reaction_uses_troe)
-        allocate(thread_workspace%reaction_reversible( &
-            this%reactions_number),source=this%reaction_reversible)
-        allocate(thread_workspace%forward_third_body_power( &
-            this%reactions_number),source=this%forward_third_body_power)
-        allocate(thread_workspace%reverse_third_body_power( &
-            this%reactions_number),source=this%reverse_third_body_power)
-        allocate(thread_workspace%reactant_count(this%reactions_number), &
-            source=this%reactant_count)
-        allocate(thread_workspace%product_count(this%reactions_number), &
-            source=this%product_count)
-        allocate(thread_workspace%net_count(this%reactions_number), &
-            source=this%net_count)
-        allocate(thread_workspace%reactant_species( &
-            maximum_reaction_components,this%reactions_number), &
-            source=this%reactant_species)
-        allocate(thread_workspace%reactant_multiplicity( &
-            maximum_reaction_components,this%reactions_number), &
-            source=this%reactant_multiplicity)
-        allocate(thread_workspace%product_species( &
-            maximum_reaction_components,this%reactions_number), &
-            source=this%product_species)
-        allocate(thread_workspace%product_multiplicity( &
-            maximum_reaction_components,this%reactions_number), &
-            source=this%product_multiplicity)
-        allocate(thread_workspace%net_species( &
-            maximum_net_reaction_species,this%reactions_number), &
-            source=this%net_species)
-        allocate(thread_workspace%net_stoichiometry( &
-            maximum_net_reaction_species,this%reactions_number), &
-            source=this%net_stoichiometry)
-        allocate(thread_workspace%third_body_offset( &
-            0:this%reactions_number),source=this%third_body_offset)
-        allocate(thread_workspace%third_body_species( &
-            size(this%third_body_species)),source=this%third_body_species)
-        allocate(thread_workspace%third_body_efficiency_delta( &
-            size(this%third_body_efficiency_delta)), &
-            source=this%third_body_efficiency_delta)
 
         allocate(thread_workspace%mass_fraction_cell(this%species_number))
         allocate(thread_workspace%species_source_cell(this%species_number))
@@ -981,14 +735,6 @@ contains
 
         thread_workspace%concentration_initial = 0.0_dp
         thread_workspace%concentration_final = 0.0_dp
-        thread_workspace%high_pressure_rate = 0.0_dp
-        thread_workspace%low_pressure_rate = 0.0_dp
-        thread_workspace%reverse_factor = 0.0_dp
-        thread_workspace%troe_f_center = 1.0_dp
-        thread_workspace%troe_c = 0.0_dp
-        thread_workspace%troe_n = 1.0_dp
-        thread_workspace%entropy = 0.0_dp
-        thread_workspace%enthalpy = 0.0_dp
         thread_workspace%mass_fraction_cell = 0.0_dp
         thread_workspace%species_source_cell = 0.0_dp
         thread_workspace%concentration_increment_cell = 0.0_dp
@@ -998,6 +744,8 @@ contains
 
 
     subroutine clear_thread_workspace()
+        call thread_workspace%rate_state%clear()
+        call thread_workspace%kinetics_core%clear()
         if (allocated(thread_workspace%concentration_initial)) &
             deallocate(thread_workspace%concentration_initial)
         if (allocated(thread_workspace%concentration_final)) &
@@ -1218,122 +966,11 @@ contains
         class(chemical_kinetics_solver), intent(in) :: this
         real(dp), intent(in) :: input_temperature
 
-        integer :: reaction, component, specie
-        real(dp) :: temperature, entropy_change, enthalpy_change
-        real(dp) :: mole_change, equilibrium_pressure, equilibrium_concentration
-        real(dp) :: exponent_argument, alpha, temperature_1
-        real(dp) :: temperature_2, temperature_3, f_center, log_f_center
-
-        temperature = min(input_temperature,maximum_rate_temperature)
-        if (temperature <= 0.0_dp) then
-            error stop 'Chemical kinetics: invalid rate temperature'
+        if (this%species_number /= thread_workspace%kinetics_core%species_number) then
+            error stop 'Chemical kinetics: shared-core species-count mismatch'
         end if
-
-        do specie = 1, this%species_number
-            thread_workspace%entropy(specie) = &
-                this%thermophysics%thermo_ptr%specie_entropy_molar( &
-                    temperature,specie)
-            thread_workspace%enthalpy(specie) = &
-                this%thermophysics%thermo_ptr%specie_enthalpy_molar( &
-                    temperature,specie)
-        end do
-
-        associate(chemistry => this%chemistry%chem_ptr)
-        do reaction = 1, this%reactions_number
-            thread_workspace%high_pressure_rate(reaction) = &
-                chemistry%A(reaction)*temperature**chemistry%beta(reaction)* &
-                exp(-chemistry%E_act(reaction)/(r_gase_J*temperature))
-            thread_workspace%low_pressure_rate(reaction) = 0.0_dp
-            if (chemistry%A_low(reaction) > 0.0_dp) then
-                thread_workspace%low_pressure_rate(reaction) = &
-                    chemistry%A_low(reaction)* &
-                    temperature**chemistry%beta_low(reaction)* &
-                    exp(-chemistry%E_act_low(reaction)/ &
-                    (r_gase_J*temperature))
-            end if
-
-            entropy_change = 0.0_dp
-            enthalpy_change = 0.0_dp
-            mole_change = 0.0_dp
-            do component = 1, this%reactant_count(reaction)
-                specie = this%reactant_species(component,reaction)
-                entropy_change = entropy_change - real( &
-                    this%reactant_multiplicity(component,reaction),dp)* &
-                    thread_workspace%entropy(specie)
-                enthalpy_change = enthalpy_change - real( &
-                    this%reactant_multiplicity(component,reaction),dp)* &
-                    thread_workspace%enthalpy(specie)
-                mole_change = mole_change - real( &
-                    this%reactant_multiplicity(component,reaction),dp)
-            end do
-            do component = 1, this%product_count(reaction)
-                specie = this%product_species(component,reaction)
-                entropy_change = entropy_change + real( &
-                    this%product_multiplicity(component,reaction),dp)* &
-                    thread_workspace%entropy(specie)
-                enthalpy_change = enthalpy_change + real( &
-                    this%product_multiplicity(component,reaction),dp)* &
-                    thread_workspace%enthalpy(specie)
-                mole_change = mole_change + real( &
-                    this%product_multiplicity(component,reaction),dp)
-            end do
-
-            thread_workspace%reverse_factor(reaction) = 0.0_dp
-            if (this%reaction_reversible(reaction)) then
-                exponent_argument = entropy_change/r_gase_J - &
-                    enthalpy_change/(r_gase_J*temperature)
-                equilibrium_pressure = exp(exponent_argument)
-                equilibrium_concentration = equilibrium_pressure* &
-                    (P_atm/(r_gase_J*temperature))**mole_change
-                if (.not. ieee_is_finite(equilibrium_concentration) .or. &
-                    equilibrium_concentration <= 0.0_dp) then
-                    error stop 'Chemical kinetics: invalid equilibrium constant'
-                end if
-                thread_workspace%reverse_factor(reaction) = &
-                    1.0_dp/equilibrium_concentration
-            end if
-
-            thread_workspace%troe_f_center(reaction) = 1.0_dp
-            thread_workspace%troe_c(reaction) = 0.0_dp
-            thread_workspace%troe_n(reaction) = 1.0_dp
-            if (this%reaction_uses_troe(reaction)) then
-                alpha = chemistry%Troe_coeffs(reaction,1)
-                temperature_1 = chemistry%Troe_coeffs(reaction,2)
-                temperature_2 = chemistry%Troe_coeffs(reaction,3)
-                temperature_3 = chemistry%Troe_coeffs(reaction,4)
-                f_center = 0.0_dp
-                if (temperature_1 > 0.0_dp) then
-                    f_center = f_center + (1.0_dp-alpha)* &
-                        exp(-temperature/temperature_1)
-                end if
-                if (temperature_2 > 0.0_dp) then
-                    f_center = f_center + alpha* &
-                        exp(-temperature/temperature_2)
-                end if
-                if (temperature_3 > 0.0_dp) then
-                    f_center = f_center + exp(-temperature_3/temperature)
-                end if
-                f_center = min(max(f_center,tiny(1.0_dp)),1.0_dp)
-                log_f_center = log10(f_center)
-                thread_workspace%troe_f_center(reaction) = f_center
-                thread_workspace%troe_c(reaction) = &
-                    -0.4_dp-0.67_dp*log_f_center
-                thread_workspace%troe_n(reaction) = &
-                    0.75_dp-1.27_dp*log_f_center
-            end if
-
-            if (.not. ieee_is_finite( &
-                thread_workspace%high_pressure_rate(reaction)) .or. &
-                thread_workspace%high_pressure_rate(reaction) < 0.0_dp) then
-                error stop 'Chemical kinetics: invalid high-pressure rate'
-            end if
-            if (.not. ieee_is_finite( &
-                thread_workspace%low_pressure_rate(reaction)) .or. &
-                thread_workspace%low_pressure_rate(reaction) < 0.0_dp) then
-                error stop 'Chemical kinetics: invalid low-pressure rate'
-            end if
-        end do
-        end associate
+        call thread_workspace%kinetics_core%prepare_rate_state( &
+            input_temperature,thread_workspace%rate_state)
     end subroutine prepare_cell_rate_coefficients
 
 
@@ -1643,12 +1280,6 @@ contains
         real(dp), dimension(*), intent(in) :: concentration
         real(dp), dimension(*), intent(out) :: concentration_rate
 
-        integer :: reaction, specie, component, multiplicity, index
-        integer :: specie_index, stoichiometry
-        real(dp) :: forward_rate, reverse_rate, net_rate
-        real(dp) :: forward_constant, reverse_constant
-        real(dp) :: third_body, total_concentration, positive_concentration
-
         if (.not. associated(thread_workspace%chemistry)) then
             error stop 'Chemical kinetics RHS: thread workspace is not initialized'
         end if
@@ -1656,151 +1287,15 @@ contains
             error stop 'Chemical kinetics RHS: species-count mismatch'
         end if
 
-        total_concentration = 0.0_dp
-        do specie = 1, n
-            concentration_rate(specie) = 0.0_dp
-            if (thread_workspace%has_any_third_body_reaction) then
-                total_concentration = total_concentration + &
-                    max(concentration(specie),0.0_dp)
-            end if
-        end do
-
-        do reaction = 1, thread_workspace%reactions_number
-            third_body = 0.0_dp
-            if (thread_workspace%reaction_uses_third_body(reaction)) then
-                third_body = thread_workspace%default_third_body_efficiency* &
-                    total_concentration
-                do index = thread_workspace%third_body_offset(reaction-1), &
-                        thread_workspace%third_body_offset(reaction)-1
-                    specie_index = &
-                        thread_workspace%third_body_species(index)
-                    third_body = third_body + &
-                        thread_workspace%third_body_efficiency_delta(index)* &
-                        max(concentration(specie_index),0.0_dp)
-                end do
-            end if
-
-            call effective_rate_constants(reaction,third_body, &
-                forward_constant,reverse_constant)
-
-            forward_rate = forward_constant
-            do component = 1, thread_workspace%reactant_count(reaction)
-                specie_index = &
-                    thread_workspace%reactant_species(component,reaction)
-                positive_concentration = max(concentration(specie_index),0.0_dp)
-                do multiplicity = 1, &
-                        thread_workspace%reactant_multiplicity( &
-                        component,reaction)
-                    forward_rate = forward_rate*positive_concentration
-                end do
-            end do
-            do multiplicity = 1, &
-                    thread_workspace%forward_third_body_power(reaction)
-                forward_rate = forward_rate*third_body
-            end do
-
-            reverse_rate = reverse_constant
-            do component = 1, thread_workspace%product_count(reaction)
-                specie_index = &
-                    thread_workspace%product_species(component,reaction)
-                positive_concentration = max(concentration(specie_index),0.0_dp)
-                do multiplicity = 1, &
-                        thread_workspace%product_multiplicity( &
-                        component,reaction)
-                    reverse_rate = reverse_rate*positive_concentration
-                end do
-            end do
-            do multiplicity = 1, &
-                    thread_workspace%reverse_third_body_power(reaction)
-                reverse_rate = reverse_rate*third_body
-            end do
-
-            net_rate = forward_rate-reverse_rate
-#ifdef CHEMISTRY_STRICT_DIAGNOSTICS
-            if (.not. ieee_is_finite(net_rate)) then
-                error stop 'Chemical kinetics RHS: non-finite reaction rate'
-            end if
-#endif
-
-            do component = 1, thread_workspace%net_count(reaction)
-                specie_index = thread_workspace%net_species(component,reaction)
-                stoichiometry = &
-                    thread_workspace%net_stoichiometry(component,reaction)
-                concentration_rate(specie_index) = &
-                    concentration_rate(specie_index) + &
-                    real(stoichiometry,dp)*net_rate
-            end do
-        end do
+        call thread_workspace%kinetics_core%calculate_species_rates( &
+            thread_workspace%rate_state,concentration(1:n), &
+            concentration_rate(1:n))
 
         if (time < -huge(1.0_dp)) concentration_rate(1) = &
             concentration_rate(1)
     end subroutine kinetics_rhs
 
 
-    subroutine effective_rate_constants(reaction, third_body, &
-            forward_constant, reverse_constant)
-        integer, intent(in) :: reaction
-        real(dp), intent(in) :: third_body
-        real(dp), intent(out) :: forward_constant, reverse_constant
-
-        real(dp) :: high_rate, low_rate, reduced_pressure
-
-        high_rate = thread_workspace%high_pressure_rate(reaction)
-        low_rate = thread_workspace%low_pressure_rate(reaction)
-
-        if (thread_workspace%reaction_uses_falloff(reaction)) then
-            if (high_rate <= 0.0_dp .or. low_rate <= 0.0_dp .or. &
-                third_body <= 0.0_dp) then
-                forward_constant = 0.0_dp
-            else
-                reduced_pressure = low_rate*third_body/high_rate
-                forward_constant = high_rate*reduced_pressure/ &
-                    (1.0_dp+reduced_pressure)
-                if (thread_workspace%reaction_uses_troe(reaction)) then
-                    forward_constant = forward_constant* &
-                        troe_falloff_factor(reaction,reduced_pressure)
-                end if
-            end if
-        else
-            forward_constant = high_rate
-        end if
-
-        if (thread_workspace%reaction_reversible(reaction)) then
-            reverse_constant = forward_constant* &
-                thread_workspace%reverse_factor(reaction)
-        else
-            reverse_constant = 0.0_dp
-        end if
-    end subroutine effective_rate_constants
-
-
-    real(dp) function troe_falloff_factor(reaction, reduced_pressure) &
-            result(factor)
-        integer, intent(in) :: reaction
-        real(dp), intent(in) :: reduced_pressure
-
-        real(dp) :: f_center, c_troe, n_troe, d_troe, log_pressure
-        real(dp) :: denominator, exponent
-
-        if (reduced_pressure <= 0.0_dp) then
-            factor = 1.0_dp
-            return
-        end if
-
-        f_center = thread_workspace%troe_f_center(reaction)
-        c_troe = thread_workspace%troe_c(reaction)
-        n_troe = thread_workspace%troe_n(reaction)
-        d_troe = 0.14_dp
-        log_pressure = log10(reduced_pressure)
-        denominator = n_troe-d_troe*(log_pressure+c_troe)
-        if (abs(denominator) <= tiny(1.0_dp)) then
-            factor = f_center
-            return
-        end if
-        exponent = 1.0_dp/(1.0_dp+ &
-            ((log_pressure+c_troe)/denominator)**2)
-        factor = f_center**exponent
-    end function troe_falloff_factor
 
 
 #ifdef CHEMISTRY_PROFILE

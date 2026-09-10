@@ -21,6 +21,9 @@ set(LIBRARY_SRC
     ${SRC_LIB}/src/supplementary_routines.f90
     ${SRC_LIB}/src/benchmarking_module.f90
     ${SRC_LIB}/src/thermophysical_properties_class.f90
+    ${SRC_LIB}/src/chemical_kinetics_core_class.f90
+    ${SRC_LIB}/src/chemical_equilibrium_class.f90
+    ${SRC_LIB}/src/chemical_kinetics_diagnostics.f90
     ${SRC_LIB}/src/run_control_class.f90
 
     # Format-independent full-field output layer.

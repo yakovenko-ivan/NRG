@@ -9,6 +9,11 @@ module thermophysical_properties_class
 
     implicit none
 
+    integer, parameter :: chemical_elements_number = 24
+    character(len=2), parameter :: chemical_element_names(chemical_elements_number) = &
+        [character(len=2) :: 'H','D','HE','LI','BE','B','C','N','O','F','NE','NA', &
+                             'MG','AL','SI','P','S','CL','AR','K','CA','FE','BR','I']
+
     private
     public thermophysical_properties, thermophysical_properties_pointer, &
            thermophysical_properties_c
@@ -30,6 +35,14 @@ module thermophysical_properties_class
         real(dp), dimension(:), allocatable :: potential_well_depth
         real(dp), dimension(:), allocatable :: collision_diameter
         real(dp), dimension(:), allocatable :: molar_masses
+
+        ! Elemental composition comes from the same fixed-width NASA/CHEMKIN
+        ! species header already used to derive molar masses.  It is retained
+        ! so equilibrium/validation code consumes exactly the thermochemical
+        ! data parsed by the production thermophysical infrastructure.
+        integer :: elements_number = 0
+        character(len=2), allocatable :: element_names(:)
+        real(dp), allocatable :: species_element_counts(:,:)
         real(dp), dimension(:,:), allocatable :: binary_diffusivity_constant
         real(dp), dimension(:,:,:), allocatable :: a_coeffs
         real(dp), dimension(2,2,8) :: omega_c
@@ -42,6 +55,8 @@ module thermophysical_properties_class
         procedure :: specie_entropy_molar
         procedure :: specie_enthalpy_molar
         procedure :: specie_internal_energy_molar
+        procedure :: get_element_index
+        procedure :: get_species_element_count
 
         procedure :: mixture_cp_molar
         procedure :: mixture_enthalpy_molar
@@ -185,6 +200,11 @@ contains
         this%molar_masses_data_file_name = molar_masses_data_file_name
 
         allocate(this%molar_masses(species_number))
+        this%elements_number = chemical_elements_number
+        allocate(this%element_names(this%elements_number))
+        allocate(this%species_element_counts(this%elements_number,species_number))
+        this%element_names = chemical_element_names
+        this%species_element_counts = 0.0_dp
         allocate(this%potential_well_depth(species_number), &
                  this%collision_diameter(species_number))
         allocate(this%binary_diffusivity_constant(species_number,species_number))
@@ -224,7 +244,8 @@ contains
 
             this%molar_masses(spec_num) = &
                 get_specie_molar_mass_from_thermo( &
-                    chemistry%species_names(spec_num),thermo_data_file_unit)
+                    chemistry%species_names(spec_num),thermo_data_file_unit, &
+                    this%species_element_counts(:,spec_num))
         end do
 
         do spec_num=1,chemistry%species_number
@@ -285,6 +306,37 @@ contains
         write(log_unit,'(A)') &
             '************************************************************************************* '
     end subroutine write_log
+
+
+    integer function get_element_index(this,element_name) result(element_index)
+        class(thermophysical_properties), intent(in) :: this
+        character(len=*), intent(in) :: element_name
+        integer :: element
+        character(len=2) :: requested
+
+        requested = to_upper_ascii(adjustl(element_name))
+        element_index = 0
+        do element = 1, this%elements_number
+            if (trim(this%element_names(element)) == trim(requested)) then
+                element_index = element
+                return
+            end if
+        end do
+    end function get_element_index
+
+
+    real(dp) function get_species_element_count(this,element,specie) result(atom_count)
+        class(thermophysical_properties), intent(in) :: this
+        integer, intent(in) :: element,specie
+
+        if (element < 1 .or. element > this%elements_number) then
+            error stop 'thermophysical_properties: invalid element index'
+        end if
+        if (specie < 1 .or. specie > size(this%molar_masses)) then
+            error stop 'thermophysical_properties: invalid species index'
+        end if
+        atom_count = this%species_element_counts(element,specie)
+    end function get_species_element_count
 
 
     pure real(dp) function specie_cp_molar(this,temperature,specie_number) result(cp_molar)
@@ -1217,7 +1269,7 @@ contains
 
 
     real(dp) function get_specie_molar_mass_from_thermo( &
-            specie_name,thermo_data_file_unit) result(molar_mass)
+            specie_name,thermo_data_file_unit,element_counts) result(molar_mass)
         ! Derive M_k from the standard NASA/CHEMKIN elemental-composition
         ! fields in columns 25:44 of the species header.  The species token is
         ! used only as an identifier.  Therefore aliases/state labels such as
@@ -1225,6 +1277,7 @@ contains
         ! molecular formulae.
         character(len=*), intent(in) :: specie_name
         integer, intent(in) :: thermo_data_file_unit
+        real(dp), dimension(:), intent(out), optional :: element_counts
 
         integer, parameter :: thermo_line_length=256
         integer, parameter :: composition_slots=4
@@ -1233,12 +1286,18 @@ contains
         character(len=5) :: composition_field
         character(len=2) :: element_symbol
         real(dp) :: atom_count,element_mass
-        integer :: io_status,slot,first,last
+        integer :: io_status,slot,first,last,element_index
         logical :: record_found,composition_found
 
         molar_mass=0.0_dp
         record_found=.false.
         composition_found=.false.
+        if (present(element_counts)) then
+            if (size(element_counts) /= chemical_elements_number) then
+                error stop 'thermophysical_properties: elemental-count size mismatch'
+            end if
+            element_counts = 0.0_dp
+        end if
 
         rewind(thermo_data_file_unit)
         do
@@ -1289,6 +1348,13 @@ contains
                 end if
 
                 molar_mass=molar_mass+atom_count*element_mass
+                if (present(element_counts)) then
+                    element_index = chemical_element_index(element_symbol)
+                    if (element_index > 0) then
+                        element_counts(element_index) = &
+                            element_counts(element_index)+atom_count
+                    end if
+                end if
                 composition_found=.true.
             end do
 
@@ -1311,6 +1377,22 @@ contains
             error stop 'thermophysical_properties: empty NASA elemental composition'
         end if
     end function get_specie_molar_mass_from_thermo
+
+
+    pure integer function chemical_element_index(element_symbol) result(element_index)
+        character(len=*), intent(in) :: element_symbol
+        character(len=2) :: requested
+        integer :: element
+
+        requested = to_upper_ascii(adjustl(element_symbol))
+        element_index = 0
+        do element = 1, chemical_elements_number
+            if (trim(chemical_element_names(element)) == trim(requested)) then
+                element_index = element
+                return
+            end if
+        end do
+    end function chemical_element_index
 
 
     real(dp) function atomic_molar_mass(element_symbol) result(mass)
