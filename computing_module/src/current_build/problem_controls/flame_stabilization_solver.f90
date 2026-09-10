@@ -37,6 +37,7 @@ module flame_stabilization_solver_class
         integer :: structure_stationary_counter = 0
         integer :: measurement_attempt = 0
         integer :: flame_loc_unit = -1
+        integer :: physics_output_unit = -1
         real(dp) :: previous_correction_time = -huge(1.0_dp)
         real(dp) :: filtered_velocity_save = 0.0_dp
         real(dp) :: diag_filtered_velocity_save = 0.0_dp
@@ -97,11 +98,16 @@ module flame_stabilization_solver_class
         real(dp) :: scientific_qmax = 0.0_dp
         real(dp) :: scientific_rho_fresh = 0.0_dp
         real(dp) :: scientific_rho_products = 0.0_dp
+        real(dp) :: scientific_y_h2_fresh = 0.0_dp
+        real(dp) :: scientific_y_h2_products = 0.0_dp
+        real(dp) :: scientific_h2_consumption_flux = 0.0_dp
+        real(dp) :: scientific_consumption_speed = 0.0_dp
         real(dp) :: scientific_t_products = 0.0_dp
         real(dp) :: scientific_h2_percent = 0.0_dp
         real(dp) :: scientific_d_inlet_preheat = 0.0_dp
         real(dp) :: scientific_d_outlet_reaction = 0.0_dp
         logical :: scientific_state_captured = .false.
+        logical :: scientific_consumption_speed_valid = .false.
     end type flame_stabilization_runtime_state
 
     type :: flame_stabilization_solver
@@ -117,6 +123,7 @@ module flame_stabilization_solver_class
         type(field_scalar_cons_pointer) :: rho
         type(field_scalar_cons_pointer) :: E_f_prod_chem
         type(field_vector_cons_pointer) :: Y
+        type(field_vector_cons_pointer) :: Y_prod_chem
 
         integer :: load_counter = 0
         real(dp) :: inlet_velocity = 0.0_dp
@@ -194,6 +201,10 @@ contains
         call manager%get_cons_field_pointer_by_name( &
             scal_ptr, vect_ptr, tens_ptr, 'specie_mass_fraction')
         constructor%Y%v_ptr => vect_ptr%v_ptr
+
+        call manager%get_cons_field_pointer_by_name( &
+            scal_ptr, vect_ptr, tens_ptr, 'specie_production_chemistry')
+        constructor%Y_prod_chem%v_ptr => vect_ptr%v_ptr
 
         call manager%get_cons_field_pointer_by_name( &
             scal_ptr, vect_ptr, tens_ptr, 'energy_production_chemistry')
@@ -410,7 +421,8 @@ contains
         real(dp), allocatable :: farfield_concentrations(:), concs(:)
         character(len=10), allocatable :: farfield_species_names(:)
         character(len=5) :: axis_names(3)
-        character(len=20) :: flame_data_file
+        character(len=200) :: flame_debug_file
+        character(len=200) :: flame_physics_file
         character(len=1000) :: av_header
         character(len=100) :: chemical_mechanism
         logical :: found_inlet_farfield, trace_success, flame_detected, control_performed
@@ -1360,6 +1372,7 @@ contains
 
             active_track_number = this%state%track_counter
             call write_tracking_line()
+            call write_physics_line()
 
             if (this%state%domain_failure) then
                 call write_domain_failure_once()
@@ -1408,39 +1421,84 @@ contains
 
     contains
 
-        subroutine initialize_output_file()
+                subroutine initialize_output_file()
             integer :: local_dim
 
-            write(flame_data_file,'(A,I0,A)') 'av_flame_data_', this%load_counter, '.dat'
-            open(newunit = this%state%flame_loc_unit, file = flame_data_file, status = 'replace', form = 'formatted')
+            if (this%load_counter == 1) then
+                flame_debug_file = 'flame_stabilization_debug.dat'
+                flame_physics_file = 'flame_physics.dat'
+            else
+                write(flame_debug_file,'(A,I0,A)') &
+                    'flame_stabilization_debug_', this%load_counter, '.dat'
+                write(flame_physics_file,'(A,I0,A)') &
+                    'flame_physics_', this%load_counter, '.dat'
+            end if
+
+            ! Internal stabilization/debug stream.
+            open(newunit = this%state%flame_loc_unit, &
+                file = trim(flame_debug_file), status = 'replace', &
+                form = 'formatted')
+
+            write(this%state%flame_loc_unit,'(A)') &
+                'TITLE = "NRG flame stabilization debug history"'
 
             av_header = 'VARIABLES = "time"'
             do local_dim = 1, dimensions
-                av_header = trim(av_header) // ' "xf_' // trim(axis_names(local_dim)) // '"'
+                av_header = trim(av_header) // &
+                    ' "xf_' // trim(axis_names(local_dim)) // '"'
             end do
             av_header = trim(av_header) // &
                 ' "Vfl_lsq" "Vfl_filtered" "Vfl_diag_lsq" "Vfl_diag_filtered"' // &
                 ' "Vfl_measurement_lsq" "Vcontrol" "pos_error" "x_ref"'
             av_header = trim(av_header) // ' "U_in_applied" "U_in_target"'
-            av_header = trim(av_header) // ' "dU_target" "adaptive_gain" "hist_count"' // &
-                ' "measurement_on" "bracket_on" "capture_on" "emergency_on" "flame_detected"'
-            av_header = trim(av_header) // ' "front_spread" "Qint" "Qmax" "Qvalid" "Hmax" "Tgradmax"'
-            av_header = trim(av_header) // ' "stage" "SL_disp" "lin_R2" "lin_RMS" "split_dV"'
-            av_header = trim(av_header) // ' "corr_count" "stab_count" "track_count"' // &
+            av_header = trim(av_header) // &
+                ' "dU_target" "adaptive_gain" "hist_count"' // &
+                ' "measurement_on" "bracket_on" "capture_on" "emergency_on"' // &
+                ' "flame_detected"'
+            av_header = trim(av_header) // &
+                ' "front_spread" "Qint" "Qmax" "Qvalid" "Hmax" "Tgradmax"'
+            av_header = trim(av_header) // &
+                ' "stage" "SL_disp" "lin_R2" "lin_RMS" "split_dV"'
+            av_header = trim(av_header) // &
+                ' "corr_count" "stab_count" "track_count"' // &
                 ' "controller_armed" "ramp_settled" "response_settled"' // &
                 ' "vel_tol_on" "vel_tol_off" "Qint_rel_trend"' // &
-                ' "flame_established" "establish_window_samples" "hard_recovery_corrections"' // &
-                ' "containment_on" "hard_recovery_hold" "hard_recovery_no_progress"' // &
+                ' "flame_established" "establish_window_samples"' // &
+                ' "hard_recovery_corrections"' // &
+                ' "containment_on" "hard_recovery_hold"' // &
+                ' "hard_recovery_no_progress"' // &
                 ' "final_stationary" "structure_stab_count" "anchor_interior"' // &
                 ' "x_preheat" "x_T10" "x_T90" "delta_T"' // &
                 ' "x_reaction_left" "x_reaction_right" "delta_reaction"' // &
                 ' "d_inlet_preheat" "d_outlet_reaction"' // &
                 ' "inlet_theta_max" "inlet_margin_ratio" "outlet_margin_ratio"' // &
-                ' "domain_warning" "domain_ok" "domain_failure" "correction_free_time"'
+                ' "domain_warning" "domain_ok" "domain_failure"' // &
+                ' "correction_free_time"'
 
             write(this%state%flame_loc_unit,'(A)') trim(av_header)
+
+            ! Stable physics / interpretation stream.
+            open(newunit = this%state%physics_output_unit, &
+                file = trim(flame_physics_file), status = 'replace', &
+                form = 'formatted')
+
+            write(this%state%physics_output_unit,'(A)') &
+                'TITLE = "NRG flame physics history"'
+            write(this%state%physics_output_unit,'(A)') &
+                'VARIABLES = ' // &
+                '"time_s" "xf_m" "Vfl_m_s" "U_in_m_s" "S_kinematic_m_s" ' // &
+                '"Qint_W_m2" "Qmax_W_m3" "Sc_m_s" "Sc_valid" ' // &
+                '"H2_consumption_flux_kg_m2_s" "H2_convective_flux_kg_m2_s" ' // &
+                '"H2_inventory_kg_m2" "total_mass_kg_m2" ' // &
+                '"rho_fresh_kg_m3" "YH2_fresh" "YH2_products" "Tmax_K" ' // &
+                '"x_preheat_m" "x_T10_m" "x_T90_m" "delta_T_m" ' // &
+                '"x_reaction_left_m" "x_reaction_right_m" ' // &
+                '"delta_reaction_m" "front_spread_m" "Hmax" ' // &
+                '"d_inlet_preheat_m" "d_outlet_reaction_m"'
+
             this%state%output_initialized = .true.
         end subroutine initialize_output_file
+
 
         function cell_center_coordinates(ii,jj,kk) result(xc)
             integer, intent(in) :: ii, jj, kk
@@ -1847,6 +1905,7 @@ contains
             integer :: ii, i_fresh, i_products, i_first, i_last
             integer :: sample_count, spec_local
             real(dp) :: fresh_coord, products_coord
+            real(dp) :: fuel_mass_fraction_drop, consumption_denominator
 
             if (.not. domain_ok .or. domain_warning) return
             if (.not. thermal_envelope_found .or. .not. reaction_envelope_found) return
@@ -1860,14 +1919,24 @@ contains
             i_products = min(max(i_products, cons_inner_loop(1,1)), cons_inner_loop(1,2))
 
             this%state%scientific_rho_fresh = 0.0_dp
+            this%state%scientific_y_h2_fresh = 0.0_dp
             i_first = max(i_fresh - plateau_half_width, cons_inner_loop(1,1))
             i_last = min(i_fresh + plateau_half_width, cons_inner_loop(1,2))
             sample_count = i_last - i_first + 1
             do ii = i_first, i_last
                 this%state%scientific_rho_fresh = this%state%scientific_rho_fresh + &
                     this%rho%s_ptr%cells(ii,1,1)
+                if (H2_index >= 1 .and. H2_index <= species_number) then
+                    this%state%scientific_y_h2_fresh = &
+                        this%state%scientific_y_h2_fresh + &
+                        this%Y%v_ptr%pr(H2_index)%cells(ii,1,1)
+                end if
             end do
             this%state%scientific_rho_fresh = this%state%scientific_rho_fresh / real(sample_count,dp)
+            if (H2_index >= 1 .and. H2_index <= species_number) then
+                this%state%scientific_y_h2_fresh = &
+                    this%state%scientific_y_h2_fresh / real(sample_count,dp)
+            end if
 
             this%state%scientific_rho_products = 0.0_dp
             this%state%scientific_t_products = 0.0_dp
@@ -1893,6 +1962,43 @@ contains
                 this%state%scientific_t_products / real(sample_count,dp)
             this%state%stabilized_product_mass_fractions = &
                 this%state%stabilized_product_mass_fractions / real(sample_count,dp)
+
+            this%state%scientific_h2_consumption_flux = 0.0_dp
+            this%state%scientific_consumption_speed = 0.0_dp
+            this%state%scientific_consumption_speed_valid = .false.
+            this%state%scientific_y_h2_products = 0.0_dp
+
+            if (H2_index >= 1 .and. H2_index <= species_number) then
+                this%state%scientific_y_h2_products = &
+                    this%state%stabilized_product_mass_fractions(H2_index)
+
+                ! The current diagnostic is deliberately restricted to the
+                ! planar 1D formulation. Curved flames require area weighting
+                ! and a flame-surface normalization.
+                if (dimensions == 1 .and. &
+                    trim(this%domain%get_coordinate_system_name()) == 'cartesian') then
+                    do ii = cons_inner_loop(1,1), cons_inner_loop(1,2)
+                        this%state%scientific_h2_consumption_flux = &
+                            this%state%scientific_h2_consumption_flux - &
+                            this%Y_prod_chem%v_ptr%pr(H2_index)%cells(ii,1,1) * &
+                            cell_size(front_axis)
+                    end do
+
+                    fuel_mass_fraction_drop = &
+                        this%state%scientific_y_h2_fresh - &
+                        this%state%scientific_y_h2_products
+                    consumption_denominator = &
+                        this%state%scientific_rho_fresh * fuel_mass_fraction_drop
+
+                    if (this%state%scientific_h2_consumption_flux > 0.0_dp .and. &
+                        consumption_denominator > tiny_weight) then
+                        this%state%scientific_consumption_speed = &
+                            this%state%scientific_h2_consumption_flux / &
+                            consumption_denominator
+                        this%state%scientific_consumption_speed_valid = .true.
+                    end if
+                end if
+            end if
 
             this%state%scientific_time_stabilized = time
             this%state%scientific_u_anchor = this%state%inlet_velocity_target
@@ -1954,6 +2060,23 @@ contains
             write(result_unit,'(A,ES24.16,A)') '    "rms_m": ', this%state%measurement_rms_save, ','
             write(result_unit,'(A,ES24.16)') '    "split_velocity_difference_m_s": ', &
                 this%state%measurement_split_slope_diff_save
+            write(result_unit,'(A)') '  },'
+            write(result_unit,'(A)') '  "diagnostics": {'
+            write(result_unit,'(A,ES24.16,A)') '    "anchor_velocity_m_s": ', &
+                this%state%scientific_u_anchor, ','
+            if (this%state%scientific_consumption_speed_valid) then
+                write(result_unit,'(A)') '    "consumption_speed_available": true,'
+                write(result_unit,'(A,ES24.16,A)') '    "consumption_speed_m_s": ', &
+                    this%state%scientific_consumption_speed, ','
+                write(result_unit,'(A,ES24.16)') &
+                    '    "integrated_h2_consumption_kg_m2_s": ', &
+                    this%state%scientific_h2_consumption_flux
+            else
+                write(result_unit,'(A)') '    "consumption_speed_available": false,'
+                write(result_unit,'(A)') '    "consumption_speed_m_s": null,'
+                write(result_unit,'(A)') &
+                    '    "integrated_h2_consumption_kg_m2_s": null'
+            end if
             write(result_unit,'(A)') '  }'
             write(result_unit,'(A)') '}'
             close(result_unit)
@@ -2035,6 +2158,9 @@ contains
         subroutine write_laminar_velocity_once()
             integer :: result_unit, spec_local
             real(dp) :: expansion_ratio
+            real(dp) :: consumption_to_lbv_ratio
+            real(dp) :: consumption_lbv_relative_difference
+            logical :: consumption_lbv_comparison_valid
             character(len=240) :: result_title
             character(len=20) :: specie_name
             character(len=20) :: mechanism_name
@@ -2054,6 +2180,21 @@ contains
 
             expansion_ratio = this%state%scientific_rho_fresh / &
                 max(this%state%scientific_rho_products, tiny_weight)
+
+            consumption_to_lbv_ratio = 0.0_dp
+            consumption_lbv_relative_difference = 0.0_dp
+            consumption_lbv_comparison_valid = &
+                this%state%scientific_consumption_speed_valid .and. &
+                abs(this%state%sl_displacement_save) > tiny_weight
+            if (consumption_lbv_comparison_valid) then
+                consumption_to_lbv_ratio = &
+                    this%state%scientific_consumption_speed / &
+                    this%state%sl_displacement_save
+                consumption_lbv_relative_difference = &
+                    abs(this%state%scientific_consumption_speed - &
+                        this%state%sl_displacement_save) / &
+                    abs(this%state%sl_displacement_save)
+            end if
 
             open(newunit = result_unit, file = 'laminar_flame_result.json', &
                 status = 'replace', form = 'formatted')
@@ -2080,6 +2221,12 @@ contains
             write(result_unit,'(A)') '  "result": {'
             write(result_unit,'(A,ES24.16,A)') '    "laminar_burning_velocity_m_s": ', &
                 this%state%sl_displacement_save, ','
+            if (this%state%scientific_consumption_speed_valid) then
+                write(result_unit,'(A,ES24.16,A)') '    "consumption_speed_m_s": ', &
+                    this%state%scientific_consumption_speed, ','
+            else
+                write(result_unit,'(A)') '    "consumption_speed_m_s": null,'
+            end if
             write(result_unit,'(A,ES24.16,A)') '    "anchor_velocity_m_s": ', &
                 this%state%scientific_u_anchor, ','
             write(result_unit,'(A,ES24.16,A)') '    "flame_thickness_mm": ', &
@@ -2126,6 +2273,40 @@ contains
                 1.0e3_dp * this%state%scientific_d_inlet_preheat, ','
             write(result_unit,'(A,ES24.16)') '    "outlet_reaction_distance_mm": ', &
                 1.0e3_dp * this%state%scientific_d_outlet_reaction
+            write(result_unit,'(A)') '  },'
+
+            write(result_unit,'(A)') '  "validation": {'
+            if (this%state%scientific_consumption_speed_valid) then
+                write(result_unit,'(A)') '    "consumption_speed_available": true,'
+                write(result_unit,'(A,ES24.16,A)') &
+                    '    "integrated_h2_consumption_kg_m2_s": ', &
+                    this%state%scientific_h2_consumption_flux, ','
+                write(result_unit,'(A,ES24.16,A)') &
+                    '    "fresh_h2_mass_fraction": ', &
+                    this%state%scientific_y_h2_fresh, ','
+                write(result_unit,'(A,ES24.16,A)') &
+                    '    "product_h2_mass_fraction": ', &
+                    this%state%scientific_y_h2_products, ','
+            else
+                write(result_unit,'(A)') '    "consumption_speed_available": false,'
+                write(result_unit,'(A)') &
+                    '    "integrated_h2_consumption_kg_m2_s": null,'
+                write(result_unit,'(A)') '    "fresh_h2_mass_fraction": null,'
+                write(result_unit,'(A)') '    "product_h2_mass_fraction": null,'
+            end if
+
+            if (consumption_lbv_comparison_valid) then
+                write(result_unit,'(A,ES24.16,A)') &
+                    '    "consumption_to_lbv_ratio": ', &
+                    consumption_to_lbv_ratio, ','
+                write(result_unit,'(A,ES24.16)') &
+                    '    "consumption_lbv_relative_difference": ', &
+                    consumption_lbv_relative_difference
+            else
+                write(result_unit,'(A)') '    "consumption_to_lbv_ratio": null,'
+                write(result_unit,'(A)') &
+                    '    "consumption_lbv_relative_difference": null'
+            end if
             write(result_unit,'(A)') '  },'
 
             write(result_unit,'(A)') '  "measurement": {'
@@ -2193,6 +2374,143 @@ contains
             this%state%post_flamelet_hold_counter = 0
             call clear_control_history()
         end subroutine start_drift_measurement_ramp
+
+        subroutine write_physics_line()
+            integer, parameter :: plateau_half_width = 2
+            integer :: ii, i_fresh, i_products, i_first, i_last
+            integer :: sample_count
+            real(dp) :: fresh_coord, products_coord
+            real(dp) :: physics_vfl, physics_kinematic_speed
+            real(dp) :: physics_h2_consumption_flux
+            real(dp) :: physics_h2_convective_flux
+            real(dp) :: physics_h2_inventory, physics_total_mass
+            real(dp) :: physics_rho_fresh
+            real(dp) :: physics_y_h2_fresh, physics_y_h2_products
+            real(dp) :: physics_consumption_speed
+            real(dp) :: fuel_mass_fraction_drop, consumption_denominator
+            real(dp) :: consumption_valid_flag
+            logical :: consumption_valid
+
+            physics_vfl = diag_flame_velocity_lsq
+            physics_kinematic_speed = &
+                this%state%inlet_velocity_applied - physics_vfl
+
+            physics_h2_consumption_flux = 0.0_dp
+            physics_h2_convective_flux = 0.0_dp
+            physics_h2_inventory = 0.0_dp
+            physics_total_mass = 0.0_dp
+            physics_rho_fresh = 0.0_dp
+            physics_y_h2_fresh = 0.0_dp
+            physics_y_h2_products = 0.0_dp
+            physics_consumption_speed = 0.0_dp
+            consumption_valid = .false.
+
+            do ii = cons_inner_loop(1,1), cons_inner_loop(1,2)
+                if (this%boundary%bc_ptr%bc_markers(ii,1,1) /= 0) cycle
+
+                physics_total_mass = physics_total_mass + &
+                    this%rho%s_ptr%cells(ii,1,1) * cell_size(front_axis)
+
+                if (H2_index >= 1 .and. H2_index <= species_number) then
+                    physics_h2_inventory = physics_h2_inventory + &
+                        this%rho%s_ptr%cells(ii,1,1) * &
+                        this%Y%v_ptr%pr(H2_index)%cells(ii,1,1) * &
+                        cell_size(front_axis)
+
+                    physics_h2_consumption_flux = &
+                        physics_h2_consumption_flux - &
+                        this%Y_prod_chem%v_ptr%pr(H2_index)%cells(ii,1,1) * &
+                        cell_size(front_axis)
+                end if
+            end do
+
+            if (physical_envelope_available .and. &
+                H2_index >= 1 .and. H2_index <= species_number) then
+
+                fresh_coord = 0.5_dp * (domain_boundary_min + x_preheat)
+                products_coord = &
+                    0.5_dp * (x_reaction_right + domain_boundary_max)
+
+                i_fresh = nint( &
+                    fresh_coord / cell_size(front_axis) + 0.5_dp)
+                i_products = nint( &
+                    products_coord / cell_size(front_axis) + 0.5_dp)
+
+                i_fresh = min(max(i_fresh, cons_inner_loop(1,1)), &
+                    cons_inner_loop(1,2))
+                i_products = min(max(i_products, cons_inner_loop(1,1)), &
+                    cons_inner_loop(1,2))
+
+                i_first = max(i_fresh - plateau_half_width, &
+                    cons_inner_loop(1,1))
+                i_last = min(i_fresh + plateau_half_width, &
+                    cons_inner_loop(1,2))
+                sample_count = i_last - i_first + 1
+
+                do ii = i_first, i_last
+                    physics_rho_fresh = physics_rho_fresh + &
+                        this%rho%s_ptr%cells(ii,1,1)
+                    physics_y_h2_fresh = physics_y_h2_fresh + &
+                        this%Y%v_ptr%pr(H2_index)%cells(ii,1,1)
+                end do
+
+                physics_rho_fresh = physics_rho_fresh / &
+                    real(sample_count, dp)
+                physics_y_h2_fresh = physics_y_h2_fresh / &
+                    real(sample_count, dp)
+
+                i_first = max(i_products - plateau_half_width, &
+                    cons_inner_loop(1,1))
+                i_last = min(i_products + plateau_half_width, &
+                    cons_inner_loop(1,2))
+                sample_count = i_last - i_first + 1
+
+                do ii = i_first, i_last
+                    physics_y_h2_products = physics_y_h2_products + &
+                        this%Y%v_ptr%pr(H2_index)%cells(ii,1,1)
+                end do
+                physics_y_h2_products = physics_y_h2_products / &
+                    real(sample_count, dp)
+
+                physics_h2_convective_flux = physics_rho_fresh * &
+                    this%state%inlet_velocity_applied * &
+                    physics_y_h2_fresh
+
+                fuel_mass_fraction_drop = &
+                    physics_y_h2_fresh - physics_y_h2_products
+                consumption_denominator = &
+                    physics_rho_fresh * fuel_mass_fraction_drop
+
+                if (dimensions == 1 .and. &
+                    trim(this%domain%get_coordinate_system_name()) == &
+                        'cartesian' .and. &
+                    physics_h2_consumption_flux > 0.0_dp .and. &
+                    consumption_denominator > tiny_weight) then
+                    physics_consumption_speed = &
+                        physics_h2_consumption_flux / &
+                        consumption_denominator
+                    consumption_valid = .true.
+                end if
+            end if
+
+            consumption_valid_flag = merge(1.0_dp, 0.0_dp, consumption_valid)
+
+            write(this%state%physics_output_unit,'(100E20.12)') &
+                time, current_front_coord, &
+                physics_vfl, this%state%inlet_velocity_applied, &
+                physics_kinematic_speed, &
+                heat_release_integral, heat_release_max, &
+                physics_consumption_speed, consumption_valid_flag, &
+                physics_h2_consumption_flux, physics_h2_convective_flux, &
+                physics_h2_inventory, physics_total_mass, &
+                physics_rho_fresh, physics_y_h2_fresh, &
+                physics_y_h2_products, temperature_max, &
+                x_preheat, x_thermal_low, x_thermal_high, thermal_thickness, &
+                x_reaction_left, x_reaction_right, reaction_thickness, &
+                front_spread, H_max, &
+                inlet_preheat_distance, outlet_reaction_distance
+        end subroutine write_physics_line
+
 
         subroutine write_tracking_line()
             real(dp) :: measurement_flag, bracket_flag, capture_flag, emergency_flag, flame_detected_flag
