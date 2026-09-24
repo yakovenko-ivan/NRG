@@ -55,6 +55,31 @@ message(STATUS "Fortran compiler version: ${CMAKE_Fortran_COMPILER_VERSION}")
 # Portable compiler and platform options
 # -----------------------------------------------------------------------------
 option(NRG_ENABLE_OPENMP "Build NRG with OpenMP support" ON)
+option(NRG_ENABLE_CVODE
+    "Enable the optional SUNDIALS CVODE chemistry backend" OFF)
+option(NRG_ENABLE_CHEMISTRY_PROFILE
+    "Enable chemical kinetics profiling instrumentation" OFF)
+	
+if(NRG_ENABLE_CVODE)
+    find_package(SUNDIALS CONFIG REQUIRED)
+
+    set(_nrg_required_sundials_targets
+        SUNDIALS::fcvode_mod
+        SUNDIALS::fnvecserial_mod
+        SUNDIALS::fsunmatrixdense_mod
+        SUNDIALS::fsunlinsoldense_mod
+    )
+    foreach(_target IN LISTS _nrg_required_sundials_targets)
+        if(NOT TARGET ${_target})
+            message(FATAL_ERROR
+                "NRG_ENABLE_CVODE=ON requires SUNDIALS with its Fortran "
+                "2003 interface and serial/dense modules. Missing target: "
+                "${_target}")
+        endif()
+    endforeach()
+
+    message(STATUS "SUNDIALS CVODE chemistry backend enabled")
+endif()
 
 # Interface target carrying all common compile definitions/options and optional
 # OpenMP requirements. Linking package_library to this target propagates the
@@ -63,6 +88,19 @@ add_library(nrg_build_options INTERFACE)
 
 if(WIN32)
     target_compile_definitions(nrg_build_options INTERFACE WIN)
+endif()
+
+if(NRG_ENABLE_CVODE)
+    target_compile_definitions(nrg_build_options INTERFACE NRG_ENABLE_CVODE)
+endif()
+
+if(NRG_ENABLE_CHEMISTRY_PROFILE)
+    target_compile_definitions(
+        nrg_build_options
+        INTERFACE
+        CHEMISTRY_PROFILE
+    )
+    message(STATUS "Chemistry profiling enabled")
 endif()
 
 if(NRG_ENABLE_OPENMP)

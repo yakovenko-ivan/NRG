@@ -2,6 +2,16 @@ module chemical_kinetics_solver_class
 
     use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use, intrinsic :: iso_fortran_env, only: error_unit, output_unit, int64
+#ifdef NRG_ENABLE_CVODE
+    use, intrinsic :: iso_c_binding, only: c_int, c_long, c_int64_t, &
+        c_double, c_ptr, c_funptr, c_funloc, c_associated, c_null_ptr, &
+        c_loc, c_f_pointer
+    use fsundials_core_mod
+    use fcvode_mod
+    use fnvector_serial_mod
+    use fsunmatrix_dense_mod
+    use fsunlinsol_dense_mod
+#endif
 
     use kind_parameters, only: dp
     use global_data, only: r_gase_J, P_atm, T_ref, task_setup_folder, &
@@ -14,6 +24,9 @@ module chemical_kinetics_solver_class
     use chemical_properties_class
     use chemical_kinetics_core_class, only: chemical_kinetics_core, &
         chemical_kinetics_core_c, chemical_rate_state
+#ifdef OMP
+    use omp_lib, only: omp_get_thread_num, omp_get_max_threads
+#endif
 
     implicit none
 
@@ -25,8 +38,15 @@ module chemical_kinetics_solver_class
     real(dp), parameter :: default_slatec_error_weight = 1.0e-4_dp
     real(dp), parameter :: default_slatec_max_internal_step = 1.0e-7_dp
     integer, parameter :: default_slatec_max_steps = 10000
+    real(dp), parameter :: default_cvode_relative_tolerance = 1.0e-8_dp
+    real(dp), parameter :: default_cvode_absolute_tolerance = 1.0e-12_dp
+    integer, parameter :: default_cvode_max_steps = 10000
     real(dp), parameter :: default_negative_concentration_tolerance = 1.0e-10_dp
     real(dp), parameter :: default_mass_balance_tolerance = 1.0e-6_dp
+#ifdef CHEMISTRY_PROFILE
+    ! Periodic profiling output cadence. Change to 500 for quieter long runs.
+    integer, parameter :: chemistry_profile_output_interval = 100
+#endif
     real(dp), parameter :: default_table_start_temperature = 300.5_dp
     real(dp), parameter :: default_table_start_temperature_max = 310.0_dp
     real(dp), parameter :: maximum_rate_temperature = 10000.0_dp
@@ -89,6 +109,111 @@ module chemical_kinetics_solver_class
 
     type(kinetics_thread_workspace), save :: thread_workspace
 !$omp threadprivate(thread_workspace)
+
+#ifdef NRG_ENABLE_CVODE
+    ! CVODE state is kept explicitly per OpenMP worker rather than in
+    ! THREADPRIVATE storage.  This follows the SUNDIALS multi-threading model:
+    ! one independent SUNContext and one complete solver object graph per thread.
+    type, bind(C) :: cvode_user_context
+        integer(c_int) :: worker_index = 0_c_int
+    end type cvode_user_context
+
+    type :: cvode_worker_workspace
+        integer :: species_number = 0
+        integer :: reactions_number = 0
+        type(chemical_kinetics_core) :: kinetics_core
+        type(chemical_rate_state) :: rate_state
+        real(dp), allocatable :: concentration_initial(:)
+        real(dp), allocatable :: concentration_final(:)
+        type(c_ptr) :: cvode_mem = c_null_ptr
+        type(c_ptr) :: sunctx = c_null_ptr
+        type(N_Vector), pointer :: cvode_y => null()
+        real(c_double), pointer :: cvode_y_data(:) => null()
+        type(SUNMatrix), pointer :: cvode_matrix => null()
+        type(SUNLinearSolver), pointer :: cvode_linear_solver => null()
+        logical :: initialized = .false.
+    end type cvode_worker_workspace
+
+    type(cvode_worker_workspace), allocatable, save :: cvode_workers(:)
+    type(cvode_user_context), allocatable, target, save :: cvode_user_contexts(:)
+#endif
+
+#ifdef NRG_ENABLE_CVODE
+    ! Direct interfaces to the native SUNDIALS C API used in the concurrent
+    ! chemistry hot path.  The generated F2003/SWIG wrappers remain useful for
+    ! one-time object construction, but are intentionally bypassed for calls
+    ! made concurrently by OpenMP workers.
+    interface
+        integer(c_int) function nrg_cvode_init_native( &
+                cvode_mem, rhs_function, t0, y0) bind(C,name='CVodeInit')
+            import :: c_int, c_double, c_ptr, c_funptr
+            type(c_ptr), value :: cvode_mem
+            type(c_funptr), value :: rhs_function
+            real(c_double), value :: t0
+            type(c_ptr), value :: y0
+        end function nrg_cvode_init_native
+
+        integer(c_int) function nrg_cvode_set_user_data_native( &
+                cvode_mem, user_data) bind(C,name='CVodeSetUserData')
+            import :: c_int, c_ptr
+            type(c_ptr), value :: cvode_mem
+            type(c_ptr), value :: user_data
+        end function nrg_cvode_set_user_data_native
+
+        integer(c_int) function nrg_cvode_reinit_native( &
+                cvode_mem, t0, y0) bind(C,name='CVodeReInit')
+            import :: c_int, c_double, c_ptr
+            type(c_ptr), value :: cvode_mem
+            real(c_double), value :: t0
+            type(c_ptr), value :: y0
+        end function nrg_cvode_reinit_native
+
+        integer(c_int) function nrg_cvode_step_native( &
+                cvode_mem, tout, yout, tret, itask) bind(C,name='CVode')
+            import :: c_int, c_double, c_ptr
+            type(c_ptr), value :: cvode_mem
+            real(c_double), value :: tout
+            type(c_ptr), value :: yout
+            real(c_double), intent(out) :: tret
+            integer(c_int), value :: itask
+        end function nrg_cvode_step_native
+
+        integer(c_int) function nrg_cvode_get_num_steps_native( &
+                cvode_mem, nsteps) bind(C,name='CVodeGetNumSteps')
+            import :: c_int, c_long, c_ptr
+            type(c_ptr), value :: cvode_mem
+            integer(c_long), intent(out) :: nsteps
+        end function nrg_cvode_get_num_steps_native
+
+        integer(c_int) function nrg_cvode_get_num_rhs_evals_native( &
+                cvode_mem, nfe) bind(C,name='CVodeGetNumRhsEvals')
+            import :: c_int, c_long, c_ptr
+            type(c_ptr), value :: cvode_mem
+            integer(c_long), intent(out) :: nfe
+        end function nrg_cvode_get_num_rhs_evals_native
+
+        integer(c_int) function nrg_cvode_get_num_lin_rhs_evals_native( &
+                cvode_mem, nfe_ls) bind(C,name='CVodeGetNumLinRhsEvals')
+            import :: c_int, c_long, c_ptr
+            type(c_ptr), value :: cvode_mem
+            integer(c_long), intent(out) :: nfe_ls
+        end function nrg_cvode_get_num_lin_rhs_evals_native
+
+        integer(c_int) function nrg_cvode_get_num_jac_evals_native( &
+                cvode_mem, nje) bind(C,name='CVodeGetNumJacEvals')
+            import :: c_int, c_long, c_ptr
+            type(c_ptr), value :: cvode_mem
+            integer(c_long), intent(out) :: nje
+        end function nrg_cvode_get_num_jac_evals_native
+
+        function nrg_nvector_get_array_pointer_native(vector) &
+                result(data_pointer) bind(C,name='N_VGetArrayPointer')
+            import :: c_ptr
+            type(c_ptr), value :: vector
+            type(c_ptr) :: data_pointer
+        end function nrg_nvector_get_array_pointer_native
+    end interface
+#endif
 
     interface
         subroutine ddriv3(n, t, y, f, nstate, tout, ntask, nroot, eps, &
@@ -156,6 +281,9 @@ module chemical_kinetics_solver_class
         real(dp) :: slatec_max_internal_step = &
             default_slatec_max_internal_step
         integer :: slatec_max_steps = default_slatec_max_steps
+        real(dp) :: cvode_relative_tolerance = default_cvode_relative_tolerance
+        real(dp) :: cvode_absolute_tolerance = default_cvode_absolute_tolerance
+        integer :: cvode_max_steps = default_cvode_max_steps
         real(dp) :: negative_concentration_tolerance = &
             default_negative_concentration_tolerance
         real(dp) :: mass_balance_tolerance = default_mass_balance_tolerance
@@ -180,18 +308,30 @@ module chemical_kinetics_solver_class
         integer(int64) :: last_internal_steps = 0_int64
         integer(int64) :: last_rhs_evaluations = 0_int64
         integer(int64) :: last_jacobian_evaluations = 0_int64
+        real(dp) :: total_cvode_packing_time = 0.0_dp
         real(dp) :: total_rate_preparation_time = 0.0_dp
+        real(dp) :: total_cvode_reinitialization_time = 0.0_dp
         real(dp) :: total_integration_time = 0.0_dp
+        real(dp) :: total_cvode_statistics_time = 0.0_dp
+        real(dp) :: total_cvode_result_processing_time = 0.0_dp
         real(dp) :: total_source_assembly_time = 0.0_dp
+        real(dp) :: total_solver_wall_time = 0.0_dp
+        real(dp) :: last_cvode_packing_time = 0.0_dp
         real(dp) :: last_rate_preparation_time = 0.0_dp
+        real(dp) :: last_cvode_reinitialization_time = 0.0_dp
         real(dp) :: last_integration_time = 0.0_dp
+        real(dp) :: last_cvode_statistics_time = 0.0_dp
+        real(dp) :: last_cvode_result_processing_time = 0.0_dp
         real(dp) :: last_source_assembly_time = 0.0_dp
+        real(dp) :: last_solver_wall_time = 0.0_dp
     contains
         procedure :: solve_chemical_kinetics
         procedure :: write_chemical_kinetics_table
         procedure :: can_write_chemical_kinetics_table
         procedure :: set_activation_temperature
         procedure :: set_slatec_controls
+        procedure :: set_cvode_controls
+        procedure :: use_cvode_kinetics
         procedure :: configure_table_approximated
         procedure :: use_detailed_kinetics
         procedure :: set_concentration_increment_recording
@@ -202,6 +342,10 @@ module chemical_kinetics_solver_class
         procedure, private :: ensure_thread_workspace
         procedure, private :: prepare_cell_rate_coefficients
         procedure, private :: solve_cell_detailed_kinetics
+#ifdef NRG_ENABLE_CVODE
+        procedure, private :: ensure_cvode_workers
+        procedure, private :: solve_cell_cvode_kinetics
+#endif
         procedure, private :: assemble_cell_sources
         procedure, private :: read_chemical_kinetics_table
         procedure, private :: interpolate_table_increment
@@ -297,6 +441,8 @@ contains
             select case (trim(adjustl(ode_solver)))
             case ('slatec')
                 call constructor%use_detailed_kinetics()
+            case ('cvode')
+                call constructor%use_cvode_kinetics()
             case ('table_approximated')
                 if (.not. present(table_file)) then
                     error stop 'Chemical kinetics: table file was not supplied'
@@ -341,6 +487,17 @@ contains
         if (this%slatec_max_steps <= 0) then
             error stop 'Chemical kinetics: invalid maximum step count'
         end if
+        if (.not. ieee_is_finite(this%cvode_relative_tolerance) .or. &
+            this%cvode_relative_tolerance <= 0.0_dp) then
+            error stop 'Chemical kinetics: invalid CVODE relative tolerance'
+        end if
+        if (.not. ieee_is_finite(this%cvode_absolute_tolerance) .or. &
+            this%cvode_absolute_tolerance <= 0.0_dp) then
+            error stop 'Chemical kinetics: invalid CVODE absolute tolerance'
+        end if
+        if (this%cvode_max_steps <= 0) then
+            error stop 'Chemical kinetics: invalid CVODE maximum step count'
+        end if
     end subroutine validate_configuration
 
 
@@ -371,6 +528,35 @@ contains
         if (present(maximum_steps)) this%slatec_max_steps = maximum_steps
         call this%validate_configuration()
     end subroutine set_slatec_controls
+
+    subroutine set_cvode_controls(this, relative_tolerance, &
+            absolute_tolerance, maximum_steps)
+        class(chemical_kinetics_solver), intent(inout) :: this
+        real(dp), intent(in), optional :: relative_tolerance
+        real(dp), intent(in), optional :: absolute_tolerance
+        integer, intent(in), optional :: maximum_steps
+
+        if (present(relative_tolerance)) then
+            this%cvode_relative_tolerance = relative_tolerance
+        end if
+        if (present(absolute_tolerance)) then
+            this%cvode_absolute_tolerance = absolute_tolerance
+        end if
+        if (present(maximum_steps)) this%cvode_max_steps = maximum_steps
+        call this%validate_configuration()
+    end subroutine set_cvode_controls
+
+
+    subroutine use_cvode_kinetics(this)
+        class(chemical_kinetics_solver), intent(inout) :: this
+
+#ifdef NRG_ENABLE_CVODE
+        this%ode_solver = 'cvode'
+#else
+        error stop 'Chemical kinetics: CVODE backend requested, but NRG was '// &
+            'built with NRG_ENABLE_CVODE=OFF'
+#endif
+    end subroutine use_cvode_kinetics
 
 
     subroutine configure_table_approximated(this, table_file)
@@ -429,12 +615,22 @@ contains
         this%last_internal_steps = 0_int64
         this%last_rhs_evaluations = 0_int64
         this%last_jacobian_evaluations = 0_int64
+        this%total_cvode_packing_time = 0.0_dp
         this%total_rate_preparation_time = 0.0_dp
+        this%total_cvode_reinitialization_time = 0.0_dp
         this%total_integration_time = 0.0_dp
+        this%total_cvode_statistics_time = 0.0_dp
+        this%total_cvode_result_processing_time = 0.0_dp
         this%total_source_assembly_time = 0.0_dp
+        this%total_solver_wall_time = 0.0_dp
+        this%last_cvode_packing_time = 0.0_dp
         this%last_rate_preparation_time = 0.0_dp
+        this%last_cvode_reinitialization_time = 0.0_dp
         this%last_integration_time = 0.0_dp
+        this%last_cvode_statistics_time = 0.0_dp
+        this%last_cvode_result_processing_time = 0.0_dp
         this%last_source_assembly_time = 0.0_dp
+        this%last_solver_wall_time = 0.0_dp
     end subroutine reset_performance_statistics
 
 
@@ -456,14 +652,38 @@ contains
         write(output,'(A,I0)') '  Jacobian evaluations: ', &
             this%total_jacobian_evaluations
 #ifdef CHEMISTRY_PROFILE
-        write(output,'(A,ES14.6)') '  accumulated rate preparation time [s]: ', &
+        if (trim(this%ode_solver) == 'cvode') then
+            write(output,'(A,ES14.6)') &
+                '  summed CVODE concentration packing time [s]: ', &
+                this%total_cvode_packing_time
+        end if
+        write(output,'(A,ES14.6)') &
+            '  summed rate preparation time [s]: ', &
             this%total_rate_preparation_time
-        write(output,'(A,ES14.6)') '  accumulated integration time [s]: ', &
+        if (trim(this%ode_solver) == 'cvode') then
+            write(output,'(A,ES14.6)') &
+                '  summed CVODE reinitialization time [s]: ', &
+                this%total_cvode_reinitialization_time
+        end if
+        write(output,'(A,ES14.6)') '  summed integration time [s]: ', &
             this%total_integration_time
-        write(output,'(A,ES14.6)') '  accumulated source assembly time [s]: ', &
+        if (trim(this%ode_solver) == 'cvode') then
+            write(output,'(A,ES14.6)') &
+                '  summed CVODE statistics-query time [s]: ', &
+                this%total_cvode_statistics_time
+            write(output,'(A,ES14.6)') &
+                '  summed CVODE result-processing time [s]: ', &
+                this%total_cvode_result_processing_time
+        end if
+        write(output,'(A,ES14.6)') &
+            '  summed source assembly time [s]: ', &
             this%total_source_assembly_time
+        write(output,'(A,ES14.6)') &
+            '  chemistry solver wall time [s]: ', &
+            this%total_solver_wall_time
 #else
-        write(output,'(A)') '  timing disabled; compile with CHEMISTRY_PROFILE'
+        write(output,'(A)') &
+            '  detailed counters/timing disabled; compile with CHEMISTRY_PROFILE'
 #endif
     end subroutine write_performance_statistics
 
@@ -482,7 +702,7 @@ contains
         real(dp), intent(in) :: time_step
 
         integer, dimension(3,2) :: cell_loop
-        integer :: i, j, k, specie
+        integer :: i, j, k, specie, cvode_worker_index
         real(dp) :: density_cell, temperature_cell, energy_source_cell
         real(dp) :: mass_fraction_sum, negative_tolerance
         integer(int64) :: active_cells_step, integrator_calls_step
@@ -490,15 +710,27 @@ contains
         integer(int64) :: jacobian_evaluations_step
         integer(int64) :: cell_internal_steps, cell_rhs_evaluations
         integer(int64) :: cell_jacobian_evaluations
-        real(dp) :: rate_preparation_time_step, integration_time_step
+        real(dp) :: cvode_packing_time_step, rate_preparation_time_step
+        real(dp) :: cvode_reinitialization_time_step, integration_time_step
+        real(dp) :: cvode_statistics_time_step
+        real(dp) :: cvode_result_processing_time_step
         real(dp) :: source_assembly_time_step
-        real(dp) :: cell_rate_preparation_time, cell_integration_time
+        real(dp) :: cell_cvode_packing_time, cell_rate_preparation_time
+        real(dp) :: cell_cvode_reinitialization_time, cell_integration_time
+        real(dp) :: cell_cvode_statistics_time
+        real(dp) :: cell_cvode_result_processing_time
         real(dp) :: source_time_start
+#ifdef CHEMISTRY_PROFILE
+        real(dp) :: solver_wall_time_start, solver_wall_time_step
+#endif
 
         if (.not. ieee_is_finite(time_step) .or. time_step <= 0.0_dp) then
             error stop 'Chemical kinetics: time step must be finite and positive'
         end if
 
+#ifdef CHEMISTRY_PROFILE
+        solver_wall_time_start = chemistry_wall_time()
+#endif
         call this%validate_configuration()
         cell_loop = this%domain%get_local_inner_cells_bounds()
 
@@ -514,9 +746,22 @@ contains
         internal_steps_step = 0_int64
         rhs_evaluations_step = 0_int64
         jacobian_evaluations_step = 0_int64
+        cvode_packing_time_step = 0.0_dp
         rate_preparation_time_step = 0.0_dp
+        cvode_reinitialization_time_step = 0.0_dp
         integration_time_step = 0.0_dp
+        cvode_statistics_time_step = 0.0_dp
+        cvode_result_processing_time_step = 0.0_dp
         source_assembly_time_step = 0.0_dp
+#ifdef CHEMISTRY_PROFILE
+        solver_wall_time_step = 0.0_dp
+#endif
+
+#ifdef NRG_ENABLE_CVODE
+        if (trim(this%ode_solver) == 'cvode') then
+            call this%ensure_cvode_workers()
+        end if
+#endif
 
         associate( &
             temperature_field => this%temperature%s_ptr, &
@@ -530,14 +775,25 @@ contains
 !$omp private(i,j,k,specie,density_cell,temperature_cell,energy_source_cell) &
 !$omp private(mass_fraction_sum,negative_tolerance) &
 !$omp private(cell_internal_steps,cell_rhs_evaluations) &
-!$omp private(cell_jacobian_evaluations,cell_rate_preparation_time) &
-!$omp private(cell_integration_time,source_time_start) &
+!$omp private(cell_jacobian_evaluations,cell_cvode_packing_time) &
+!$omp private(cell_rate_preparation_time,cell_cvode_reinitialization_time) &
+!$omp private(cell_integration_time,cell_cvode_statistics_time) &
+!$omp private(cell_cvode_result_processing_time,source_time_start) &
+!$omp private(cvode_worker_index) &
 !$omp reduction(+:active_cells_step,integrator_calls_step) &
 !$omp reduction(+:internal_steps_step,rhs_evaluations_step) &
 !$omp reduction(+:jacobian_evaluations_step) &
-!$omp reduction(+:rate_preparation_time_step,integration_time_step) &
+!$omp reduction(+:cvode_packing_time_step,rate_preparation_time_step) &
+!$omp reduction(+:cvode_reinitialization_time_step,integration_time_step) &
+!$omp reduction(+:cvode_statistics_time_step,cvode_result_processing_time_step) &
 !$omp reduction(+:source_assembly_time_step)
         call this%ensure_thread_workspace()
+        cvode_worker_index = 1
+#ifdef OMP
+        if (trim(this%ode_solver) == 'cvode') then
+            cvode_worker_index = omp_get_thread_num() + 1
+        end if
+#endif
 
 !$omp do collapse(3) schedule(dynamic,2)
         do k = cell_loop(3,1), cell_loop(3,2)
@@ -608,8 +864,12 @@ contains
                     cell_internal_steps = 0_int64
                     cell_rhs_evaluations = 0_int64
                     cell_jacobian_evaluations = 0_int64
+                    cell_cvode_packing_time = 0.0_dp
                     cell_rate_preparation_time = 0.0_dp
+                    cell_cvode_reinitialization_time = 0.0_dp
                     cell_integration_time = 0.0_dp
+                    cell_cvode_statistics_time = 0.0_dp
+                    cell_cvode_result_processing_time = 0.0_dp
                     select case (this%ode_solver)
                     case ('slatec')
                         call this%solve_cell_detailed_kinetics( &
@@ -632,6 +892,38 @@ contains
                             cell_rate_preparation_time
                         integration_time_step = integration_time_step + &
                             cell_integration_time
+#ifdef NRG_ENABLE_CVODE
+                    case ('cvode')
+                        call this%solve_cell_cvode_kinetics( &
+                            cvode_worker_index,density_cell,temperature_cell, &
+                            thread_workspace%mass_fraction_cell,time_step, &
+                            i,j,k,thread_workspace%concentration_increment_cell, &
+                            cell_internal_steps,cell_rhs_evaluations, &
+                            cell_jacobian_evaluations, &
+                            cell_cvode_packing_time,cell_rate_preparation_time, &
+                            cell_cvode_reinitialization_time, &
+                            cell_integration_time,cell_cvode_statistics_time, &
+                            cell_cvode_result_processing_time)
+                        integrator_calls_step = integrator_calls_step + 1_int64
+                        internal_steps_step = internal_steps_step + cell_internal_steps
+                        rhs_evaluations_step = rhs_evaluations_step + cell_rhs_evaluations
+                        jacobian_evaluations_step = jacobian_evaluations_step + &
+                            cell_jacobian_evaluations
+                        cvode_packing_time_step = cvode_packing_time_step + &
+                            cell_cvode_packing_time
+                        rate_preparation_time_step = rate_preparation_time_step + &
+                            cell_rate_preparation_time
+                        cvode_reinitialization_time_step = &
+                            cvode_reinitialization_time_step + &
+                            cell_cvode_reinitialization_time
+                        integration_time_step = integration_time_step + &
+                            cell_integration_time
+                        cvode_statistics_time_step = cvode_statistics_time_step + &
+                            cell_cvode_statistics_time
+                        cvode_result_processing_time_step = &
+                            cvode_result_processing_time_step + &
+                            cell_cvode_result_processing_time
+#endif
                     case ('table_approximated')
                         call this%interpolate_table_increment( &
                             temperature_cell, &
@@ -678,9 +970,21 @@ contains
         this%last_internal_steps = internal_steps_step
         this%last_rhs_evaluations = rhs_evaluations_step
         this%last_jacobian_evaluations = jacobian_evaluations_step
+        this%last_cvode_packing_time = cvode_packing_time_step
         this%last_rate_preparation_time = rate_preparation_time_step
+        this%last_cvode_reinitialization_time = &
+            cvode_reinitialization_time_step
         this%last_integration_time = integration_time_step
+        this%last_cvode_statistics_time = cvode_statistics_time_step
+        this%last_cvode_result_processing_time = &
+            cvode_result_processing_time_step
         this%last_source_assembly_time = source_assembly_time_step
+#ifdef CHEMISTRY_PROFILE
+        solver_wall_time_step = chemistry_wall_time()-solver_wall_time_start
+        this%last_solver_wall_time = solver_wall_time_step
+#else
+        this%last_solver_wall_time = 0.0_dp
+#endif
         this%total_solve_calls = this%total_solve_calls + 1_int64
         this%total_active_cells = this%total_active_cells + active_cells_step
         this%total_integrator_calls = this%total_integrator_calls + &
@@ -691,13 +995,32 @@ contains
             rhs_evaluations_step
         this%total_jacobian_evaluations = &
             this%total_jacobian_evaluations + jacobian_evaluations_step
+        this%total_cvode_packing_time = this%total_cvode_packing_time + &
+            cvode_packing_time_step
         this%total_rate_preparation_time = &
             this%total_rate_preparation_time + rate_preparation_time_step
+        this%total_cvode_reinitialization_time = &
+            this%total_cvode_reinitialization_time + &
+            cvode_reinitialization_time_step
         this%total_integration_time = this%total_integration_time + &
             integration_time_step
+        this%total_cvode_statistics_time = &
+            this%total_cvode_statistics_time + cvode_statistics_time_step
+        this%total_cvode_result_processing_time = &
+            this%total_cvode_result_processing_time + &
+            cvode_result_processing_time_step
         this%total_source_assembly_time = &
             this%total_source_assembly_time + source_assembly_time_step
-!        call this%write_performance_statistics()
+#ifdef CHEMISTRY_PROFILE
+        this%total_solver_wall_time = this%total_solver_wall_time + &
+            solver_wall_time_step
+        if (chemistry_profile_output_interval > 0) then
+            if (mod(this%total_solve_calls, &
+                    int(chemistry_profile_output_interval,int64)) == 0_int64) then
+                call this%write_performance_statistics()
+            end if
+        end if
+#endif
     end subroutine solve_chemical_kinetics
 
 
@@ -962,6 +1285,436 @@ contains
     end subroutine solve_cell_detailed_kinetics
 
 
+#ifdef NRG_ENABLE_CVODE
+    subroutine ensure_cvode_workers(this)
+        class(chemical_kinetics_solver), intent(in) :: this
+
+        integer :: worker_count, worker
+        logical :: rebuild
+
+        worker_count = 1
+#ifdef OMP
+        worker_count = max(1,omp_get_max_threads())
+#endif
+
+        rebuild = .not. allocated(cvode_workers)
+        if (.not. rebuild) then
+            rebuild = size(cvode_workers) /= worker_count
+        end if
+        if (.not. rebuild .and. worker_count > 0) then
+            rebuild = cvode_workers(1)%species_number /= this%species_number .or. &
+                cvode_workers(1)%reactions_number /= this%reactions_number
+            if (.not. associated(cvode_workers(1)%kinetics_core%chemistry, &
+                    this%chemistry%chem_ptr)) rebuild = .true.
+            if (.not. associated(cvode_workers(1)%kinetics_core%thermophysics, &
+                    this%thermophysics%thermo_ptr)) rebuild = .true.
+        end if
+
+        if (.not. rebuild) return
+
+        call clear_cvode_workers()
+        allocate(cvode_workers(worker_count))
+        allocate(cvode_user_contexts(worker_count))
+
+        ! Initialize sequentially before entering the OpenMP cell loop.  Besides
+        ! avoiding lazy-init races, this makes the ownership of every SUNDIALS
+        ! object deterministic and mirrors the SUNDIALS documented pattern for
+        ! one integrator per worker.
+        do worker = 1, worker_count
+            call initialize_cvode_worker(this,worker)
+        end do
+    end subroutine ensure_cvode_workers
+
+
+    subroutine initialize_cvode_worker(this, worker_index)
+        class(chemical_kinetics_solver), intent(in) :: this
+        integer, intent(in) :: worker_index
+
+        integer(c_int) :: status
+        integer(c_int64_t) :: neq
+
+        cvode_workers(worker_index)%species_number = this%species_number
+        cvode_workers(worker_index)%reactions_number = this%reactions_number
+        cvode_workers(worker_index)%kinetics_core = this%kinetics_core
+        allocate(cvode_workers(worker_index)%concentration_initial( &
+            this%species_number))
+        allocate(cvode_workers(worker_index)%concentration_final( &
+            this%species_number))
+        cvode_workers(worker_index)%concentration_initial = 0.0_dp
+        cvode_workers(worker_index)%concentration_final = 0.0_dp
+
+        neq = int(this%species_number,c_int64_t)
+        status = FSUNContext_Create(SUN_COMM_NULL, &
+            cvode_workers(worker_index)%sunctx)
+        if (status /= 0) then
+            error stop 'Chemical kinetics: FSUNContext_Create failed'
+        end if
+
+        allocate(cvode_workers(worker_index)%cvode_y_data( &
+            this%species_number))
+        cvode_workers(worker_index)%cvode_y_data = 0.0_c_double
+        cvode_workers(worker_index)%cvode_y => FN_VMake_Serial(neq, &
+            cvode_workers(worker_index)%cvode_y_data, &
+            cvode_workers(worker_index)%sunctx)
+        if (.not. associated(cvode_workers(worker_index)%cvode_y)) then
+            error stop 'Chemical kinetics: FN_VMake_Serial failed'
+        end if
+
+        cvode_workers(worker_index)%cvode_matrix => FSUNDenseMatrix( &
+            neq,neq,cvode_workers(worker_index)%sunctx)
+        if (.not. associated(cvode_workers(worker_index)%cvode_matrix)) then
+            error stop 'Chemical kinetics: FSUNDenseMatrix failed'
+        end if
+
+        cvode_workers(worker_index)%cvode_linear_solver => FSUNLinSol_Dense( &
+            cvode_workers(worker_index)%cvode_y, &
+            cvode_workers(worker_index)%cvode_matrix, &
+            cvode_workers(worker_index)%sunctx)
+        if (.not. associated( &
+                cvode_workers(worker_index)%cvode_linear_solver)) then
+            error stop 'Chemical kinetics: FSUNLinSol_Dense failed'
+        end if
+
+        cvode_workers(worker_index)%cvode_mem = FCVodeCreate( &
+            CV_BDF,cvode_workers(worker_index)%sunctx)
+        if (.not. c_associated(cvode_workers(worker_index)%cvode_mem)) then
+            error stop 'Chemical kinetics: FCVodeCreate failed'
+        end if
+
+        status = nrg_cvode_init_native( &
+            cvode_workers(worker_index)%cvode_mem, &
+            c_funloc(cvode_rhs_native),0.0_c_double, &
+            c_loc(cvode_workers(worker_index)%cvode_y))
+        if (status /= 0) then
+            error stop 'Chemical kinetics: native CVodeInit failed'
+        end if
+
+        cvode_user_contexts(worker_index)%worker_index = &
+            int(worker_index,c_int)
+        status = nrg_cvode_set_user_data_native( &
+            cvode_workers(worker_index)%cvode_mem, &
+            c_loc(cvode_user_contexts(worker_index)))
+        if (status /= 0) then
+            error stop 'Chemical kinetics: native CVodeSetUserData failed'
+        end if
+
+        status = FCVodeSStolerances(cvode_workers(worker_index)%cvode_mem, &
+            real(this%cvode_relative_tolerance,c_double), &
+            real(this%cvode_absolute_tolerance,c_double))
+        if (status /= 0) then
+            error stop 'Chemical kinetics: FCVodeSStolerances failed'
+        end if
+
+        status = FCVodeSetLinearSolver( &
+            cvode_workers(worker_index)%cvode_mem, &
+            cvode_workers(worker_index)%cvode_linear_solver, &
+            cvode_workers(worker_index)%cvode_matrix)
+        if (status /= 0) then
+            error stop 'Chemical kinetics: FCVodeSetLinearSolver failed'
+        end if
+
+        status = FCVodeSetMaxNumSteps( &
+            cvode_workers(worker_index)%cvode_mem, &
+            int(this%cvode_max_steps,c_long))
+        if (status /= 0) then
+            error stop 'Chemical kinetics: FCVodeSetMaxNumSteps failed'
+        end if
+
+        cvode_workers(worker_index)%initialized = .true.
+    end subroutine initialize_cvode_worker
+
+
+    subroutine clear_cvode_workers()
+        integer :: worker
+        integer(c_int) :: cvode_status
+
+        if (.not. allocated(cvode_workers)) then
+            if (allocated(cvode_user_contexts)) deallocate(cvode_user_contexts)
+            return
+        end if
+
+        do worker = 1, size(cvode_workers)
+            if (c_associated(cvode_workers(worker)%cvode_mem)) then
+                call FCVodeFree(cvode_workers(worker)%cvode_mem)
+                cvode_workers(worker)%cvode_mem = c_null_ptr
+            end if
+            if (associated(cvode_workers(worker)%cvode_linear_solver)) then
+                cvode_status = FSUNLinSolFree( &
+                    cvode_workers(worker)%cvode_linear_solver)
+                nullify(cvode_workers(worker)%cvode_linear_solver)
+            end if
+            if (associated(cvode_workers(worker)%cvode_matrix)) then
+                call FSUNMatDestroy(cvode_workers(worker)%cvode_matrix)
+                nullify(cvode_workers(worker)%cvode_matrix)
+            end if
+            if (associated(cvode_workers(worker)%cvode_y)) then
+                call FN_VDestroy(cvode_workers(worker)%cvode_y)
+                nullify(cvode_workers(worker)%cvode_y)
+            end if
+            if (associated(cvode_workers(worker)%cvode_y_data)) then
+                deallocate(cvode_workers(worker)%cvode_y_data)
+                nullify(cvode_workers(worker)%cvode_y_data)
+            end if
+            if (c_associated(cvode_workers(worker)%sunctx)) then
+                cvode_status = FSUNContext_Free(cvode_workers(worker)%sunctx)
+                cvode_workers(worker)%sunctx = c_null_ptr
+            end if
+            call cvode_workers(worker)%rate_state%clear()
+            call cvode_workers(worker)%kinetics_core%clear()
+            if (allocated(cvode_workers(worker)%concentration_initial)) &
+                deallocate(cvode_workers(worker)%concentration_initial)
+            if (allocated(cvode_workers(worker)%concentration_final)) &
+                deallocate(cvode_workers(worker)%concentration_final)
+            cvode_workers(worker)%species_number = 0
+            cvode_workers(worker)%reactions_number = 0
+            cvode_workers(worker)%initialized = .false.
+        end do
+
+        deallocate(cvode_workers)
+        if (allocated(cvode_user_contexts)) deallocate(cvode_user_contexts)
+    end subroutine clear_cvode_workers
+
+
+    subroutine solve_cell_cvode_kinetics(this, worker_index, density, &
+            temperature, mass_fraction, time_step, i_cell, j_cell, k_cell, &
+            concentration_increment, internal_steps, rhs_evaluations, &
+            jacobian_evaluations, packing_time, rate_preparation_time, &
+            reinitialization_time, integration_time, statistics_time, &
+            result_processing_time)
+        class(chemical_kinetics_solver), intent(in) :: this
+        integer, intent(in) :: worker_index
+        real(dp), intent(in) :: density, temperature, time_step
+        real(dp), dimension(:), intent(in) :: mass_fraction
+        integer, intent(in) :: i_cell, j_cell, k_cell
+        real(dp), dimension(:), intent(out) :: concentration_increment
+        integer(int64), intent(out) :: internal_steps, rhs_evaluations
+        integer(int64), intent(out) :: jacobian_evaluations
+        real(dp), intent(out) :: packing_time, rate_preparation_time
+        real(dp), intent(out) :: reinitialization_time, integration_time
+        real(dp), intent(out) :: statistics_time, result_processing_time
+
+        integer :: specie
+        integer(c_int) :: status
+#ifdef CHEMISTRY_PROFILE
+        integer(c_long) :: nsteps, nfe, nfe_ls, nje
+#endif
+        real(c_double) :: tret
+        real(dp) :: concentration_scale, negative_limit
+#ifdef CHEMISTRY_PROFILE
+        real(dp) :: timer_start
+#endif
+
+        if (.not. allocated(cvode_workers)) then
+            error stop 'Chemical kinetics: CVODE workers are not initialized'
+        end if
+        if (worker_index < 1 .or. worker_index > size(cvode_workers)) then
+            error stop 'Chemical kinetics: invalid CVODE worker index'
+        end if
+        if (.not. cvode_workers(worker_index)%initialized) then
+            error stop 'Chemical kinetics: CVODE worker is not initialized'
+        end if
+
+        packing_time = 0.0_dp
+        rate_preparation_time = 0.0_dp
+        reinitialization_time = 0.0_dp
+        integration_time = 0.0_dp
+        statistics_time = 0.0_dp
+        result_processing_time = 0.0_dp
+        internal_steps = 0_int64
+        rhs_evaluations = 0_int64
+        jacobian_evaluations = 0_int64
+
+#ifdef CHEMISTRY_PROFILE
+        timer_start = chemistry_wall_time()
+#endif
+        do specie = 1, this%species_number
+            cvode_workers(worker_index)%concentration_initial(specie) = &
+                density*mass_fraction(specie)*this%inverse_molar_mass(specie)
+        end do
+        cvode_workers(worker_index)%concentration_final = &
+            cvode_workers(worker_index)%concentration_initial
+        cvode_workers(worker_index)%cvode_y_data = &
+            real(cvode_workers(worker_index)%concentration_initial,c_double)
+#ifdef CHEMISTRY_PROFILE
+        packing_time = chemistry_wall_time()-timer_start
+        timer_start = chemistry_wall_time()
+#endif
+        call cvode_workers(worker_index)%kinetics_core%prepare_rate_state( &
+            temperature,cvode_workers(worker_index)%rate_state)
+#ifdef CHEMISTRY_PROFILE
+        rate_preparation_time = chemistry_wall_time()-timer_start
+#endif
+
+        ! The concurrent hot path calls the native SUNDIALS C API directly.
+        ! Each worker owns an independent CVODE object graph and an independent
+        ! user-owned state array wrapped by its N_Vector.  This avoids the
+        ! generated F2003/SWIG pointer-return wrappers that were found to be
+        ! unsafe under concurrent Windows/ifx execution.
+#ifdef CHEMISTRY_PROFILE
+        timer_start = chemistry_wall_time()
+#endif
+        status = nrg_cvode_reinit_native( &
+            cvode_workers(worker_index)%cvode_mem,0.0_c_double, &
+            c_loc(cvode_workers(worker_index)%cvode_y))
+#ifdef CHEMISTRY_PROFILE
+        reinitialization_time = chemistry_wall_time()-timer_start
+#endif
+        if (status /= 0) then
+            call report_invalid_cell(this,'CVODE reinitialization failure', &
+                i_cell,j_cell,k_cell,offending_value=real(status,dp), &
+                time_step=time_step)
+        end if
+
+#ifdef CHEMISTRY_PROFILE
+        timer_start = chemistry_wall_time()
+#endif
+        status = nrg_cvode_step_native( &
+            cvode_workers(worker_index)%cvode_mem, &
+            real(time_step,c_double), &
+            c_loc(cvode_workers(worker_index)%cvode_y),tret,CV_NORMAL)
+#ifdef CHEMISTRY_PROFILE
+        integration_time = chemistry_wall_time()-timer_start
+#endif
+        if (status < 0) then
+            call report_invalid_cell(this,'CVODE integration failure', &
+                i_cell,j_cell,k_cell,offending_value=real(status,dp), &
+                time_step=time_step, &
+                concentration_initial= &
+                    cvode_workers(worker_index)%concentration_initial)
+        end if
+
+#ifdef CHEMISTRY_PROFILE
+        timer_start = chemistry_wall_time()
+        status = nrg_cvode_get_num_steps_native( &
+            cvode_workers(worker_index)%cvode_mem,nsteps)
+        if (status /= 0) nsteps = 0_c_long
+        status = nrg_cvode_get_num_rhs_evals_native( &
+            cvode_workers(worker_index)%cvode_mem,nfe)
+        if (status /= 0) nfe = 0_c_long
+        status = nrg_cvode_get_num_lin_rhs_evals_native( &
+            cvode_workers(worker_index)%cvode_mem,nfe_ls)
+        if (status /= 0) nfe_ls = 0_c_long
+        status = nrg_cvode_get_num_jac_evals_native( &
+            cvode_workers(worker_index)%cvode_mem,nje)
+        if (status /= 0) nje = 0_c_long
+
+        internal_steps = int(max(nsteps,0_c_long),int64)
+        rhs_evaluations = int(max(nfe,0_c_long),int64) + &
+            int(max(nfe_ls,0_c_long),int64)
+        jacobian_evaluations = int(max(nje,0_c_long),int64)
+        statistics_time = chemistry_wall_time()-timer_start
+        timer_start = chemistry_wall_time()
+#endif
+
+        cvode_workers(worker_index)%concentration_final = &
+            real(cvode_workers(worker_index)%cvode_y_data,dp)
+
+        concentration_scale = max(1.0_dp, &
+            maxval(cvode_workers(worker_index)%concentration_initial))
+        negative_limit = this%negative_concentration_tolerance* &
+            concentration_scale
+        do specie = 1, this%species_number
+            if (.not. ieee_is_finite( &
+                    cvode_workers(worker_index)%concentration_final(specie))) then
+                call report_invalid_cell(this, &
+                    'non-finite CVODE final concentration', &
+                    i_cell,j_cell,k_cell,specie_index=specie, &
+                    offending_value= &
+                        cvode_workers(worker_index)%concentration_final(specie), &
+                    time_step=time_step, &
+                    concentration_initial= &
+                        cvode_workers(worker_index)%concentration_initial, &
+                    concentration_final= &
+                        cvode_workers(worker_index)%concentration_final)
+            end if
+            if (cvode_workers(worker_index)%concentration_final(specie) < &
+                    -negative_limit) then
+                call report_invalid_cell(this, &
+                    'negative CVODE final concentration', &
+                    i_cell,j_cell,k_cell,specie_index=specie, &
+                    offending_value= &
+                        cvode_workers(worker_index)%concentration_final(specie), &
+                    threshold=-negative_limit,time_step=time_step, &
+                    concentration_initial= &
+                        cvode_workers(worker_index)%concentration_initial, &
+                    concentration_final= &
+                        cvode_workers(worker_index)%concentration_final)
+            end if
+            cvode_workers(worker_index)%concentration_final(specie) = max( &
+                cvode_workers(worker_index)%concentration_final(specie),0.0_dp)
+            concentration_increment(specie) = &
+                cvode_workers(worker_index)%concentration_final(specie) - &
+                cvode_workers(worker_index)%concentration_initial(specie)
+        end do
+#ifdef CHEMISTRY_PROFILE
+        result_processing_time = chemistry_wall_time()-timer_start
+#endif
+    end subroutine solve_cell_cvode_kinetics
+
+
+    integer(c_int) function cvode_rhs_native( &
+            t,sunvec_y,sunvec_f,user_data) result(status) &
+            bind(C,name='nrg_cvode_rhs_native')
+        real(c_double), value :: t
+        type(c_ptr), value :: sunvec_y
+        type(c_ptr), value :: sunvec_f
+        type(c_ptr), value :: user_data
+
+        type(cvode_user_context), pointer :: context
+        type(c_ptr) :: y_data, ydot_data
+        real(c_double), pointer :: y(:), ydot(:)
+        integer :: worker_index
+
+        if (.not. c_associated(user_data)) then
+            status = -1_c_int
+            return
+        end if
+        call c_f_pointer(user_data,context)
+        if (.not. associated(context)) then
+            status = -1_c_int
+            return
+        end if
+
+        worker_index = int(context%worker_index)
+        if (.not. allocated(cvode_workers)) then
+            status = -1_c_int
+            return
+        end if
+        if (worker_index < 1 .or. worker_index > size(cvode_workers)) then
+            status = -1_c_int
+            return
+        end if
+        if (.not. cvode_workers(worker_index)%initialized) then
+            status = -1_c_int
+            return
+        end if
+
+        y_data = nrg_nvector_get_array_pointer_native(sunvec_y)
+        ydot_data = nrg_nvector_get_array_pointer_native(sunvec_f)
+        if (.not. c_associated(y_data) .or. &
+                .not. c_associated(ydot_data)) then
+            status = -1_c_int
+            return
+        end if
+
+        call c_f_pointer(y_data,y, &
+            [cvode_workers(worker_index)%species_number])
+        call c_f_pointer(ydot_data,ydot, &
+            [cvode_workers(worker_index)%species_number])
+        if (.not. associated(y) .or. .not. associated(ydot)) then
+            status = -1_c_int
+            return
+        end if
+
+        call cvode_workers(worker_index)%kinetics_core%calculate_species_rates( &
+            cvode_workers(worker_index)%rate_state,y,ydot)
+        status = 0_c_int
+
+        if (t < -huge(1.0_c_double)) status = status
+    end function cvode_rhs_native
+#endif
+
+
     subroutine prepare_cell_rate_coefficients(this, input_temperature)
         class(chemical_kinetics_solver), intent(in) :: this
         real(dp), intent(in) :: input_temperature
@@ -1017,9 +1770,16 @@ contains
         ! invariant defect several tens of EPS times the cell mass.  A factor of
         ! 100 remains stringent (1e-7 of cell mass for the default EPS=1e-9)
         ! while avoiding false failures in strongly reacting cells.
-        integrator_mass_floor = density*max( &
-            100.0_dp*this%slatec_accuracy, &
-            1000.0_dp*epsilon(1.0_dp))
+        select case (this%ode_solver)
+        case ('cvode')
+            integrator_mass_floor = density*max( &
+                100.0_dp*this%cvode_relative_tolerance, &
+                1000.0_dp*epsilon(1.0_dp))
+        case default
+            integrator_mass_floor = density*max( &
+                100.0_dp*this%slatec_accuracy, &
+                1000.0_dp*epsilon(1.0_dp))
+        end select
         integrated_mass_tolerance = max( &
             this%mass_balance_tolerance*integrated_mass_activity, &
             integrator_mass_floor)
