@@ -97,8 +97,24 @@ source_group("slatec" FILES
 	${SRC_COMPUTE}/src/third_party/slatec/xgetua.f90
 )
 
+
 # Links the main executable with the created library
-target_link_libraries(${COMPUTE} ${LIBRARY_NAME})
+target_link_libraries(${COMPUTE}
+    PRIVATE
+    ${LIBRARY_NAME}
+)
+
+if(NRG_ENABLE_CVODE)
+    target_link_libraries(${COMPUTE}
+        PRIVATE
+        SUNDIALS::cvode
+        SUNDIALS::nvecserial
+        SUNDIALS::fcvode_mod
+        SUNDIALS::fnvecserial_mod
+        SUNDIALS::fsunmatrixdense_mod
+        SUNDIALS::fsunlinsoldense_mod
+    )
+endif()
 
 target_include_directories(${COMPUTE}
     PRIVATE

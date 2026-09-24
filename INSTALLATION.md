@@ -137,10 +137,7 @@ cmake --version
 Use CMake's Visual Studio toolset selection:
 
 ```cmd
-cmake -S . -B build ^
-  -G "Visual Studio 17 2022" ^
-  -A x64 ^
-  -T fortran=ifx
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -T fortran=ifx
 ```
 
 Then build the solver:
@@ -541,10 +538,7 @@ Changing only `PACKAGE_INTERFACE_SOURCE` or `PACKAGE_UTILITY_SOURCE` normally re
 For Visual Studio 2022, use CMake 3.29+ and configure a **fresh build directory** with:
 
 ```cmd
-cmake -S . -B build ^
-  -G "Visual Studio 17 2022" ^
-  -A x64 ^
-  -T fortran=ifx
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -T fortran=ifx
 ```
 
 Do not carry forward a cache created with `-DCMAKE_Fortran_COMPILER=ifx`.
