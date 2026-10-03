@@ -340,6 +340,9 @@ module chemical_kinetics_solver_class
         integer(int64) :: total_rhs_evaluations = 0_int64
         integer(int64) :: total_jacobian_evaluations = 0_int64
         integer(int64) :: total_qss_projection_clips = 0_int64
+        integer(int64) :: total_qss_projection_clipped_components = 0_int64
+        real(dp) :: maximum_qss_projection_clip_magnitude = 0.0_dp
+        integer :: maximum_qss_projection_clip_species = 0
         integer(int64) :: last_active_cells = 0_int64
         integer(int64) :: last_integrator_calls = 0_int64
         integer(int64) :: last_internal_steps = 0_int64
@@ -351,6 +354,9 @@ module chemical_kinetics_solver_class
         real(dp) :: total_cvode_reinitialization_time = 0.0_dp
         real(dp) :: total_integration_time = 0.0_dp
         real(dp) :: total_qss_projection_time = 0.0_dp
+        real(dp) :: maximum_qss_pre_projection_conservation_residual = 0.0_dp
+        real(dp) :: maximum_qss_post_projection_conservation_residual = 0.0_dp
+        real(dp) :: maximum_qss_post_source_conservation_residual = 0.0_dp
         real(dp) :: total_cvode_statistics_time = 0.0_dp
         real(dp) :: total_cvode_result_processing_time = 0.0_dp
         real(dp) :: total_source_assembly_time = 0.0_dp
@@ -382,6 +388,7 @@ module chemical_kinetics_solver_class
         procedure, private :: preprocess_mechanism
         procedure, private :: build_qss_conservation_basis
         procedure, private :: project_qss_final_state
+        procedure, private :: qss_increment_conservation_residual
         procedure, private :: allocate_concentration_increment_storage
         procedure, private :: ensure_thread_workspace
         procedure, private :: prepare_cell_rate_coefficients
@@ -757,6 +764,9 @@ contains
         this%total_rhs_evaluations = 0_int64
         this%total_jacobian_evaluations = 0_int64
         this%total_qss_projection_clips = 0_int64
+        this%total_qss_projection_clipped_components = 0_int64
+        this%maximum_qss_projection_clip_magnitude = 0.0_dp
+        this%maximum_qss_projection_clip_species = 0
         this%last_active_cells = 0_int64
         this%last_integrator_calls = 0_int64
         this%last_internal_steps = 0_int64
@@ -768,6 +778,9 @@ contains
         this%total_cvode_reinitialization_time = 0.0_dp
         this%total_integration_time = 0.0_dp
         this%total_qss_projection_time = 0.0_dp
+        this%maximum_qss_pre_projection_conservation_residual = 0.0_dp
+        this%maximum_qss_post_projection_conservation_residual = 0.0_dp
+        this%maximum_qss_post_source_conservation_residual = 0.0_dp
         this%total_cvode_statistics_time = 0.0_dp
         this%total_cvode_result_processing_time = 0.0_dp
         this%total_source_assembly_time = 0.0_dp
@@ -834,6 +847,30 @@ contains
             write(output,'(A,I0)') &
                 '  QSS1 projection positivity clips: ', &
                 this%total_qss_projection_clips
+            write(output,'(A,I0)') &
+                '  QSS1 projection clipped components: ', &
+                this%total_qss_projection_clipped_components
+            write(output,'(A,ES14.6)') &
+                '  QSS1 maximum clipped negative concentration [mol/m3]: ', &
+                this%maximum_qss_projection_clip_magnitude
+            write(output,'(A,I0)') &
+                '  QSS1 maximum clip species index: ', &
+                this%maximum_qss_projection_clip_species
+            if (this%maximum_qss_projection_clip_species > 0) then
+                write(output,'(A,A)') &
+                    '  QSS1 maximum clip species name: ', &
+                    trim(this%chemistry%chem_ptr%species_names( &
+                        this%maximum_qss_projection_clip_species))
+            end if
+            write(output,'(A,ES14.6)') &
+                '  QSS1 max relative invariant residual before projection: ', &
+                this%maximum_qss_pre_projection_conservation_residual
+            write(output,'(A,ES14.6)') &
+                '  QSS1 max relative invariant residual after projection: ', &
+                this%maximum_qss_post_projection_conservation_residual
+            write(output,'(A,ES14.6)') &
+                '  QSS1 max relative invariant residual after source assembly: ', &
+                this%maximum_qss_post_source_conservation_residual
         end if
         if (trim(this%ode_solver) == 'cvode') then
             write(output,'(A,ES14.6)') &
@@ -877,20 +914,32 @@ contains
         integer(int64) :: internal_steps_step, rhs_evaluations_step
         integer(int64) :: jacobian_evaluations_step
         integer(int64) :: qss_projection_clips_step
+        integer(int64) :: qss_projection_clipped_components_step
         integer(int64) :: cell_internal_steps, cell_rhs_evaluations
         integer(int64) :: cell_jacobian_evaluations
         integer(int64) :: cell_qss_projection_clips
+        integer(int64) :: cell_qss_projection_clipped_components
+        integer :: qss_max_clip_species_step
+        integer :: cell_qss_projection_clip_species
         real(dp) :: cvode_packing_time_step, rate_preparation_time_step
         real(dp) :: cvode_reinitialization_time_step, integration_time_step
         real(dp) :: cvode_statistics_time_step
         real(dp) :: cvode_result_processing_time_step
         real(dp) :: qss_projection_time_step
+        real(dp) :: qss_max_clip_magnitude_step
+        real(dp) :: qss_pre_projection_residual_step
+        real(dp) :: qss_post_projection_residual_step
+        real(dp) :: qss_post_source_residual_step
         real(dp) :: source_assembly_time_step
         real(dp) :: cell_cvode_packing_time, cell_rate_preparation_time
         real(dp) :: cell_cvode_reinitialization_time, cell_integration_time
         real(dp) :: cell_cvode_statistics_time
         real(dp) :: cell_cvode_result_processing_time
         real(dp) :: cell_qss_projection_time
+        real(dp) :: cell_qss_projection_clip_magnitude
+        real(dp) :: cell_qss_pre_projection_residual
+        real(dp) :: cell_qss_post_projection_residual
+        real(dp) :: cell_qss_post_source_residual
         real(dp) :: source_time_start
 #ifdef CHEMISTRY_PROFILE
         real(dp) :: solver_wall_time_start, solver_wall_time_step
@@ -919,6 +968,9 @@ contains
         rhs_evaluations_step = 0_int64
         jacobian_evaluations_step = 0_int64
         qss_projection_clips_step = 0_int64
+        qss_projection_clipped_components_step = 0_int64
+        qss_max_clip_magnitude_step = 0.0_dp
+        qss_max_clip_species_step = 0
         cvode_packing_time_step = 0.0_dp
         rate_preparation_time_step = 0.0_dp
         cvode_reinitialization_time_step = 0.0_dp
@@ -926,6 +978,9 @@ contains
         cvode_statistics_time_step = 0.0_dp
         cvode_result_processing_time_step = 0.0_dp
         qss_projection_time_step = 0.0_dp
+        qss_pre_projection_residual_step = 0.0_dp
+        qss_post_projection_residual_step = 0.0_dp
+        qss_post_source_residual_step = 0.0_dp
         source_assembly_time_step = 0.0_dp
 #ifdef CHEMISTRY_PROFILE
         solver_wall_time_step = 0.0_dp
@@ -953,12 +1008,18 @@ contains
 !$omp private(cell_rate_preparation_time,cell_cvode_reinitialization_time) &
 !$omp private(cell_integration_time,cell_cvode_statistics_time) &
 !$omp private(cell_cvode_result_processing_time,cell_qss_projection_time) &
-!$omp private(cell_qss_projection_clips,source_time_start) &
+!$omp private(cell_qss_projection_clips,cell_qss_projection_clipped_components) &
+!$omp private(cell_qss_projection_clip_magnitude,cell_qss_projection_clip_species) &
+!$omp private(cell_qss_pre_projection_residual,cell_qss_post_projection_residual) &
+!$omp private(cell_qss_post_source_residual) &
+!$omp private(source_time_start) &
 !$omp private(cvode_worker_index) &
 !$omp reduction(+:active_cells_step,integrator_calls_step) &
 !$omp reduction(+:internal_steps_step,rhs_evaluations_step) &
 !$omp reduction(+:jacobian_evaluations_step) &
-!$omp reduction(+:qss_projection_clips_step) &
+!$omp reduction(+:qss_projection_clips_step,qss_projection_clipped_components_step) &
+!$omp reduction(max:qss_pre_projection_residual_step) &
+!$omp reduction(max:qss_post_projection_residual_step,qss_post_source_residual_step) &
 !$omp reduction(+:cvode_packing_time_step,rate_preparation_time_step) &
 !$omp reduction(+:cvode_reinitialization_time_step,integration_time_step) &
 !$omp reduction(+:cvode_statistics_time_step,cvode_result_processing_time_step) &
@@ -1048,6 +1109,12 @@ contains
                     cell_cvode_result_processing_time = 0.0_dp
                     cell_qss_projection_time = 0.0_dp
                     cell_qss_projection_clips = 0_int64
+                    cell_qss_projection_clipped_components = 0_int64
+                    cell_qss_projection_clip_magnitude = 0.0_dp
+                    cell_qss_projection_clip_species = 0
+                    cell_qss_pre_projection_residual = 0.0_dp
+                    cell_qss_post_projection_residual = 0.0_dp
+                    cell_qss_post_source_residual = 0.0_dp
                     select case (this%ode_solver)
                     case ('slatec')
                         call this%solve_cell_detailed_kinetics( &
@@ -1111,7 +1178,12 @@ contains
                             cell_jacobian_evaluations, &
                             cell_rate_preparation_time,cell_integration_time, &
                             cell_qss_projection_time, &
-                            cell_qss_projection_clips)
+                            cell_qss_projection_clips, &
+                            cell_qss_projection_clipped_components, &
+                            cell_qss_projection_clip_magnitude, &
+                            cell_qss_projection_clip_species, &
+                            cell_qss_pre_projection_residual, &
+                            cell_qss_post_projection_residual)
                         integrator_calls_step = integrator_calls_step + 1_int64
                         internal_steps_step = internal_steps_step + &
                             cell_internal_steps
@@ -1130,6 +1202,26 @@ contains
                         qss_projection_clips_step = &
                             qss_projection_clips_step + &
                             cell_qss_projection_clips
+                        qss_projection_clipped_components_step = &
+                            qss_projection_clipped_components_step + &
+                            cell_qss_projection_clipped_components
+                        if (cell_qss_projection_clip_magnitude > 0.0_dp) then
+!$omp critical(qss1_clip_maximum)
+                            if (cell_qss_projection_clip_magnitude > &
+                                    qss_max_clip_magnitude_step) then
+                                qss_max_clip_magnitude_step = &
+                                    cell_qss_projection_clip_magnitude
+                                qss_max_clip_species_step = &
+                                    cell_qss_projection_clip_species
+                            end if
+!$omp end critical(qss1_clip_maximum)
+                        end if
+                        qss_pre_projection_residual_step = max( &
+                            qss_pre_projection_residual_step, &
+                            cell_qss_pre_projection_residual)
+                        qss_post_projection_residual_step = max( &
+                            qss_post_projection_residual_step, &
+                            cell_qss_post_projection_residual)
                     case ('table_approximated')
                         call this%interpolate_table_increment( &
                             temperature_cell, &
@@ -1152,6 +1244,16 @@ contains
 #ifdef CHEMISTRY_PROFILE
                     source_assembly_time_step = source_assembly_time_step + &
                         chemistry_wall_time()-source_time_start
+                    if (trim(this%ode_solver) == 'qss1') then
+                        cell_qss_post_source_residual = &
+                            this%qss_increment_conservation_residual( &
+                                density_cell, &
+                                thread_workspace%mass_fraction_cell, &
+                                thread_workspace%concentration_increment_cell)
+                        qss_post_source_residual_step = max( &
+                            qss_post_source_residual_step, &
+                            cell_qss_post_source_residual)
+                    end if
 #endif
 
                     energy_source_field%cells(i,j,k) = energy_source_cell
@@ -1217,6 +1319,25 @@ contains
         this%total_qss_projection_clips = &
             this%total_qss_projection_clips + &
             qss_projection_clips_step
+        this%total_qss_projection_clipped_components = &
+            this%total_qss_projection_clipped_components + &
+            qss_projection_clipped_components_step
+        if (qss_max_clip_magnitude_step > &
+                this%maximum_qss_projection_clip_magnitude) then
+            this%maximum_qss_projection_clip_magnitude = &
+                qss_max_clip_magnitude_step
+            this%maximum_qss_projection_clip_species = &
+                qss_max_clip_species_step
+        end if
+        this%maximum_qss_pre_projection_conservation_residual = max( &
+            this%maximum_qss_pre_projection_conservation_residual, &
+            qss_pre_projection_residual_step)
+        this%maximum_qss_post_projection_conservation_residual = max( &
+            this%maximum_qss_post_projection_conservation_residual, &
+            qss_post_projection_residual_step)
+        this%maximum_qss_post_source_conservation_residual = max( &
+            this%maximum_qss_post_source_conservation_residual, &
+            qss_post_source_residual_step)
         this%total_cvode_statistics_time = &
             this%total_cvode_statistics_time + cvode_statistics_time_step
         this%total_cvode_result_processing_time = &
@@ -1699,11 +1820,18 @@ contains
 
 
     subroutine project_qss_final_state(this,active_threshold,i_cell,j_cell, &
-            k_cell,time_step,clipped_negative)
+            k_cell,time_step,clipped_negative,clipped_components, &
+            maximum_clip_magnitude,maximum_clip_species, &
+            pre_projection_relative_residual,post_projection_relative_residual)
         class(chemical_kinetics_solver), intent(in) :: this
         real(dp), intent(in) :: active_threshold,time_step
         integer, intent(in) :: i_cell,j_cell,k_cell
         logical, intent(out) :: clipped_negative
+        integer(int64), intent(out) :: clipped_components
+        real(dp), intent(out) :: maximum_clip_magnitude
+        integer, intent(out) :: maximum_clip_species
+        real(dp), intent(out) :: pre_projection_relative_residual
+        real(dp), intent(out) :: post_projection_relative_residual
 
         integer :: specie,row,column,k
         real(dp) :: correction,residual_value,post_residual
@@ -1711,6 +1839,11 @@ contains
         real(dp) :: total_concentration,negative_tolerance,conservation_scale
 
         clipped_negative = .false.
+        clipped_components = 0_int64
+        maximum_clip_magnitude = 0.0_dp
+        maximum_clip_species = 0
+        pre_projection_relative_residual = 0.0_dp
+        post_projection_relative_residual = 0.0_dp
         total_concentration = sum(thread_workspace%concentration_initial)
         conservation_scale = max(total_concentration,1.0_dp)
         negative_tolerance = qss1_projection_negative_factor* &
@@ -1732,6 +1865,8 @@ contains
             this%qss_projection_basis, &
             thread_workspace%concentration_final - &
                 thread_workspace%concentration_initial)
+        pre_projection_relative_residual = maxval(abs( &
+            thread_workspace%qss_projection_residual))/conservation_scale
 
         ! Form and factor G = B W B^T.  The number of constraints is normally
         ! only 3--6, so this remains a tiny cell-local solve and is done once
@@ -1835,6 +1970,13 @@ contains
                     concentration_final=thread_workspace%qss_projected)
             end if
             if (thread_workspace%qss_projected(specie) < 0.0_dp) then
+                clipped_components = clipped_components + 1_int64
+                if (-thread_workspace%qss_projected(specie) > &
+                        maximum_clip_magnitude) then
+                    maximum_clip_magnitude = &
+                        -thread_workspace%qss_projected(specie)
+                    maximum_clip_species = specie
+                end if
                 thread_workspace%qss_projected(specie) = 0.0_dp
                 clipped_negative = .true.
             end if
@@ -1847,6 +1989,7 @@ contains
             thread_workspace%qss_projected - &
                 thread_workspace%concentration_initial)
         post_residual = maxval(abs(thread_workspace%qss_projection_residual))
+        post_projection_relative_residual = post_residual/conservation_scale
         if (.not. ieee_is_finite(post_residual) .or. &
             post_residual > qss1_conservation_check_tolerance* &
                 conservation_scale) then
@@ -1867,7 +2010,9 @@ contains
             time_step, i_cell, j_cell, k_cell, concentration_increment, &
             internal_steps, rhs_evaluations, jacobian_evaluations, &
             rate_preparation_time, integration_time,projection_time, &
-            projection_clips)
+            projection_clips,projection_clipped_components, &
+            projection_clip_magnitude,projection_clip_species, &
+            pre_projection_relative_residual,post_projection_relative_residual)
         class(chemical_kinetics_solver), intent(in) :: this
         real(dp), intent(in) :: density, temperature, time_step
         real(dp), dimension(:), intent(in) :: mass_fraction
@@ -1876,8 +2021,13 @@ contains
         integer(int64), intent(out) :: internal_steps, rhs_evaluations
         integer(int64), intent(out) :: jacobian_evaluations
         integer(int64), intent(out) :: projection_clips
+        integer(int64), intent(out) :: projection_clipped_components
         real(dp), intent(out) :: rate_preparation_time, integration_time
         real(dp), intent(out) :: projection_time
+        real(dp), intent(out) :: projection_clip_magnitude
+        integer, intent(out) :: projection_clip_species
+        real(dp), intent(out) :: pre_projection_relative_residual
+        real(dp), intent(out) :: post_projection_relative_residual
 
         integer :: specie
         real(dp) :: elapsed_time,remaining_time,trial_step,accepted_step
@@ -1908,6 +2058,11 @@ contains
         integration_time = 0.0_dp
         projection_time = 0.0_dp
         projection_clips = 0_int64
+        projection_clipped_components = 0_int64
+        projection_clip_magnitude = 0.0_dp
+        projection_clip_species = 0
+        pre_projection_relative_residual = 0.0_dp
+        post_projection_relative_residual = 0.0_dp
         internal_steps = 0_int64
         rhs_evaluations = 0_int64
         jacobian_evaluations = 0_int64
@@ -2048,7 +2203,10 @@ contains
 #endif
         call this%project_qss_final_state( &
             active_threshold,i_cell,j_cell,k_cell,time_step, &
-            projection_clipped)
+            projection_clipped,projection_clipped_components, &
+            projection_clip_magnitude,projection_clip_species, &
+            pre_projection_relative_residual, &
+            post_projection_relative_residual)
 #ifdef CHEMISTRY_PROFILE
         projection_time = chemistry_wall_time()-projection_timer_start
 #endif
@@ -2537,6 +2695,37 @@ contains
         call thread_workspace%kinetics_core%prepare_rate_state( &
             input_temperature,thread_workspace%rate_state)
     end subroutine prepare_cell_rate_coefficients
+
+
+
+    real(dp) function qss_increment_conservation_residual( &
+            this,density,mass_fraction,concentration_increment) result(value)
+        class(chemical_kinetics_solver), intent(in) :: this
+        real(dp), intent(in) :: density
+        real(dp), dimension(:), intent(in) :: mass_fraction
+        real(dp), dimension(:), intent(in) :: concentration_increment
+
+        integer :: specie
+        real(dp) :: total_concentration,conservation_scale
+
+        if (this%qss_projection_constraint_count <= 0) then
+            value = 0.0_dp
+            return
+        end if
+
+        total_concentration = 0.0_dp
+        do specie = 1,this%species_number
+            total_concentration = total_concentration + &
+                density*max(mass_fraction(specie),0.0_dp)* &
+                this%inverse_molar_mass(specie)
+        end do
+        conservation_scale = max(total_concentration,1.0_dp)
+
+        thread_workspace%qss_projection_residual = matmul( &
+            this%qss_projection_basis,concentration_increment)
+        value = maxval(abs(thread_workspace%qss_projection_residual))/ &
+            conservation_scale
+    end function qss_increment_conservation_residual
 
 
     subroutine assemble_cell_sources(this, density, mass_fraction, time_step, &
