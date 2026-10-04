@@ -48,6 +48,13 @@ module chemical_kinetics_solver_class
         1.0e-7_dp
     real(dp), parameter :: default_qss1_step_growth_factor = 1.04_dp
     integer, parameter :: default_qss1_max_steps = 100000
+    real(dp), parameter :: default_qss2_error_tolerance = 1.0e-3_dp
+    real(dp), parameter :: default_qss2_minimum_internal_step = 1.0e-10_dp
+    real(dp), parameter :: default_qss2_active_concentration_fraction = 1.0e-7_dp
+    integer, parameter :: default_qss2_max_steps = 100000
+    real(dp), parameter :: qss2_safety_factor = 0.90_dp
+    real(dp), parameter :: qss2_minimum_step_factor = 0.20_dp
+    real(dp), parameter :: qss2_maximum_step_factor = 2.0_dp
     real(dp), parameter :: qss1_concentration_floor = 1.0e-30_dp
     real(dp), parameter :: qss1_small_loss_argument = 1.0e-4_dp
     real(dp), parameter :: qss1_conservation_rank_tolerance = 1.0e-12_dp
@@ -85,6 +92,8 @@ module chemical_kinetics_solver_class
         real(dp), allocatable :: concentration_final(:)
         real(dp), allocatable :: qss_production(:)
         real(dp), allocatable :: qss_destruction(:)
+        real(dp), allocatable :: qss2_production_trial(:)
+        real(dp), allocatable :: qss2_destruction_trial(:)
         real(dp), allocatable :: qss_trial(:)
         real(dp), allocatable :: qss_projected(:)
         real(dp), allocatable :: qss_projection_weights(:)
@@ -320,6 +329,12 @@ module chemical_kinetics_solver_class
         real(dp) :: qss1_step_growth_factor = &
             default_qss1_step_growth_factor
         integer :: qss1_max_steps = default_qss1_max_steps
+        real(dp) :: qss2_error_tolerance = default_qss2_error_tolerance
+        real(dp) :: qss2_minimum_internal_step = &
+            default_qss2_minimum_internal_step
+        real(dp) :: qss2_active_concentration_fraction = &
+            default_qss2_active_concentration_fraction
+        integer :: qss2_max_steps = default_qss2_max_steps
         real(dp) :: negative_concentration_tolerance = &
             default_negative_concentration_tolerance
         real(dp) :: mass_balance_tolerance = default_mass_balance_tolerance
@@ -378,10 +393,12 @@ module chemical_kinetics_solver_class
         procedure :: set_slatec_controls
         procedure :: set_cvode_controls
         procedure :: set_qss1_controls
+        procedure :: set_qss2_controls
         procedure :: use_cvode_kinetics
         procedure :: configure_table_approximated
         procedure :: use_detailed_kinetics
         procedure :: use_qss1_kinetics
+        procedure :: use_qss2_kinetics
         procedure :: set_concentration_increment_recording
         procedure :: reset_performance_statistics
         procedure :: write_performance_statistics
@@ -394,6 +411,7 @@ module chemical_kinetics_solver_class
         procedure, private :: prepare_cell_rate_coefficients
         procedure, private :: solve_cell_detailed_kinetics
         procedure, private :: solve_cell_qss1
+        procedure, private :: solve_cell_qss2
 #ifdef NRG_ENABLE_CVODE
         procedure, private :: ensure_cvode_workers
         procedure, private :: solve_cell_cvode_kinetics
@@ -519,6 +537,14 @@ contains
                 manager%solver_options%get_chemistry_qss1_step_growth_factor(), &
             maximum_steps= &
                 manager%solver_options%get_chemistry_qss1_max_steps())
+        call constructor%set_qss2_controls( &
+            error_tolerance= &
+                manager%solver_options%get_chemistry_qss2_error_tolerance(), &
+            minimum_internal_step= &
+                manager%solver_options%get_chemistry_qss2_minimum_internal_step(), &
+            active_concentration_fraction=manager%solver_options% &
+                get_chemistry_qss2_active_concentration_fraction(), &
+            maximum_steps=manager%solver_options%get_chemistry_qss2_max_steps())
 
         if (present(ode_solver)) then
             select case (trim(adjustl(ode_solver)))
@@ -528,6 +554,8 @@ contains
                 call constructor%use_cvode_kinetics()
             case ('qss1')
                 call constructor%use_qss1_kinetics()
+            case ('qss2')
+                call constructor%use_qss2_kinetics()
             case ('table_approximated')
                 if (.not. present(table_file)) then
                     error stop 'Chemical kinetics: table file was not supplied'
@@ -547,6 +575,8 @@ contains
                 call constructor%use_cvode_kinetics()
             case ('qss1')
                 call constructor%use_qss1_kinetics()
+            case ('qss2')
+                call constructor%use_qss2_kinetics()
             case default
                 error stop 'Chemical kinetics: unsupported configured backend'
             end select
@@ -614,6 +644,22 @@ contains
         end if
         if (this%qss1_max_steps <= 0) then
             error stop 'Chemical kinetics: invalid QSS1 maximum step count'
+        end if
+        if (.not. ieee_is_finite(this%qss2_error_tolerance) .or. &
+            this%qss2_error_tolerance <= 0.0_dp) then
+            error stop 'Chemical kinetics: invalid QSS2 error tolerance'
+        end if
+        if (.not. ieee_is_finite(this%qss2_minimum_internal_step) .or. &
+            this%qss2_minimum_internal_step <= 0.0_dp) then
+            error stop 'Chemical kinetics: invalid QSS2 minimum step'
+        end if
+        if (.not. ieee_is_finite( &
+            this%qss2_active_concentration_fraction) .or. &
+            this%qss2_active_concentration_fraction <= 0.0_dp) then
+            error stop 'Chemical kinetics: invalid QSS2 active fraction'
+        end if
+        if (this%qss2_max_steps <= 0) then
+            error stop 'Chemical kinetics: invalid QSS2 maximum step count'
         end if
     end subroutine validate_configuration
 
@@ -692,6 +738,27 @@ contains
     end subroutine set_qss1_controls
 
 
+    subroutine set_qss2_controls(this, error_tolerance, &
+            minimum_internal_step, active_concentration_fraction, maximum_steps)
+        class(chemical_kinetics_solver), intent(inout) :: this
+        real(dp), intent(in), optional :: error_tolerance
+        real(dp), intent(in), optional :: minimum_internal_step
+        real(dp), intent(in), optional :: active_concentration_fraction
+        integer, intent(in), optional :: maximum_steps
+
+        if (present(error_tolerance)) this%qss2_error_tolerance = error_tolerance
+        if (present(minimum_internal_step)) then
+            this%qss2_minimum_internal_step = minimum_internal_step
+        end if
+        if (present(active_concentration_fraction)) then
+            this%qss2_active_concentration_fraction = &
+                active_concentration_fraction
+        end if
+        if (present(maximum_steps)) this%qss2_max_steps = maximum_steps
+        call this%validate_configuration()
+    end subroutine set_qss2_controls
+
+
     subroutine use_cvode_kinetics(this)
         class(chemical_kinetics_solver), intent(inout) :: this
 
@@ -725,6 +792,13 @@ contains
 
         this%ode_solver = 'qss1'
     end subroutine use_qss1_kinetics
+
+
+    subroutine use_qss2_kinetics(this)
+        class(chemical_kinetics_solver), intent(inout) :: this
+
+        this%ode_solver = 'qss2'
+    end subroutine use_qss2_kinetics
 
 
     subroutine set_concentration_increment_recording(this, enabled)
@@ -1169,21 +1243,38 @@ contains
                             cvode_result_processing_time_step + &
                             cell_cvode_result_processing_time
 #endif
-                    case ('qss1')
-                        call this%solve_cell_qss1( &
-                            density_cell,temperature_cell, &
-                            thread_workspace%mass_fraction_cell,time_step, &
-                            i,j,k,thread_workspace%concentration_increment_cell, &
-                            cell_internal_steps,cell_rhs_evaluations, &
-                            cell_jacobian_evaluations, &
-                            cell_rate_preparation_time,cell_integration_time, &
-                            cell_qss_projection_time, &
-                            cell_qss_projection_clips, &
-                            cell_qss_projection_clipped_components, &
-                            cell_qss_projection_clip_magnitude, &
-                            cell_qss_projection_clip_species, &
-                            cell_qss_pre_projection_residual, &
-                            cell_qss_post_projection_residual)
+                    case ('qss1','qss2')
+                        if (trim(this%ode_solver) == 'qss1') then
+                            call this%solve_cell_qss1( &
+                                density_cell,temperature_cell, &
+                                thread_workspace%mass_fraction_cell,time_step, &
+                                i,j,k,thread_workspace%concentration_increment_cell, &
+                                cell_internal_steps,cell_rhs_evaluations, &
+                                cell_jacobian_evaluations, &
+                                cell_rate_preparation_time,cell_integration_time, &
+                                cell_qss_projection_time, &
+                                cell_qss_projection_clips, &
+                                cell_qss_projection_clipped_components, &
+                                cell_qss_projection_clip_magnitude, &
+                                cell_qss_projection_clip_species, &
+                                cell_qss_pre_projection_residual, &
+                                cell_qss_post_projection_residual)
+                        else
+                            call this%solve_cell_qss2( &
+                                density_cell,temperature_cell, &
+                                thread_workspace%mass_fraction_cell,time_step, &
+                                i,j,k,thread_workspace%concentration_increment_cell, &
+                                cell_internal_steps,cell_rhs_evaluations, &
+                                cell_jacobian_evaluations, &
+                                cell_rate_preparation_time,cell_integration_time, &
+                                cell_qss_projection_time, &
+                                cell_qss_projection_clips, &
+                                cell_qss_projection_clipped_components, &
+                                cell_qss_projection_clip_magnitude, &
+                                cell_qss_projection_clip_species, &
+                                cell_qss_pre_projection_residual, &
+                                cell_qss_post_projection_residual)
+                        end if
                         integrator_calls_step = integrator_calls_step + 1_int64
                         internal_steps_step = internal_steps_step + &
                             cell_internal_steps
@@ -1244,7 +1335,8 @@ contains
 #ifdef CHEMISTRY_PROFILE
                     source_assembly_time_step = source_assembly_time_step + &
                         chemistry_wall_time()-source_time_start
-                    if (trim(this%ode_solver) == 'qss1') then
+                    if (trim(this%ode_solver) == 'qss1' .or. &
+                            trim(this%ode_solver) == 'qss2') then
                         cell_qss_post_source_residual = &
                             this%qss_increment_conservation_residual( &
                                 density_cell, &
@@ -1382,6 +1474,8 @@ contains
         allocate(thread_workspace%concentration_final(this%species_number))
         allocate(thread_workspace%qss_production(this%species_number))
         allocate(thread_workspace%qss_destruction(this%species_number))
+        allocate(thread_workspace%qss2_production_trial(this%species_number))
+        allocate(thread_workspace%qss2_destruction_trial(this%species_number))
         allocate(thread_workspace%qss_trial(this%species_number))
         allocate(thread_workspace%qss_projected(this%species_number))
         allocate(thread_workspace%qss_projection_weights(this%species_number))
@@ -1410,6 +1504,8 @@ contains
         thread_workspace%concentration_final = 0.0_dp
         thread_workspace%qss_production = 0.0_dp
         thread_workspace%qss_destruction = 0.0_dp
+        thread_workspace%qss2_production_trial = 0.0_dp
+        thread_workspace%qss2_destruction_trial = 0.0_dp
         thread_workspace%qss_trial = 0.0_dp
         thread_workspace%qss_projected = 0.0_dp
         thread_workspace%qss_projection_weights = 0.0_dp
@@ -1440,6 +1536,10 @@ contains
             deallocate(thread_workspace%qss_production)
         if (allocated(thread_workspace%qss_destruction)) &
             deallocate(thread_workspace%qss_destruction)
+        if (allocated(thread_workspace%qss2_production_trial)) &
+            deallocate(thread_workspace%qss2_production_trial)
+        if (allocated(thread_workspace%qss2_destruction_trial)) &
+            deallocate(thread_workspace%qss2_destruction_trial)
         if (allocated(thread_workspace%qss_trial)) &
             deallocate(thread_workspace%qss_trial)
         if (allocated(thread_workspace%qss_projected)) &
@@ -2254,6 +2354,335 @@ contains
         end do
     end subroutine solve_cell_qss1
 
+
+    subroutine solve_cell_qss2(this, density, temperature, mass_fraction, &
+            time_step, i_cell, j_cell, k_cell, concentration_increment, &
+            internal_steps, rhs_evaluations, jacobian_evaluations, &
+            rate_preparation_time, integration_time,projection_time, &
+            projection_clips,projection_clipped_components, &
+            projection_clip_magnitude,projection_clip_species, &
+            pre_projection_relative_residual,post_projection_relative_residual)
+        class(chemical_kinetics_solver), intent(in) :: this
+        real(dp), intent(in) :: density, temperature, time_step
+        real(dp), dimension(:), intent(in) :: mass_fraction
+        integer, intent(in) :: i_cell, j_cell, k_cell
+        real(dp), dimension(:), intent(out) :: concentration_increment
+        integer(int64), intent(out) :: internal_steps, rhs_evaluations
+        integer(int64), intent(out) :: jacobian_evaluations
+        integer(int64), intent(out) :: projection_clips
+        integer(int64), intent(out) :: projection_clipped_components
+        real(dp), intent(out) :: rate_preparation_time, integration_time
+        real(dp), intent(out) :: projection_time
+        real(dp), intent(out) :: projection_clip_magnitude
+        integer, intent(out) :: projection_clip_species
+        real(dp), intent(out) :: pre_projection_relative_residual
+        real(dp), intent(out) :: post_projection_relative_residual
+
+        integer :: specie
+        real(dp) :: elapsed_time, remaining_time, trial_step, accepted_step
+        real(dp) :: total_concentration, active_threshold
+        real(dp) :: old_concentration, predictor_concentration
+        real(dp) :: loss_old, loss_predictor, production_average, loss_average
+        real(dp) :: loss_argument, phi, decay_factor
+        real(dp) :: error_scale, embedded_error, maximum_error, error_ratio
+        real(dp) :: step_factor
+        real(dp) :: predictor_mass_density, corrector_mass_density, mass_scale
+        real(dp) :: projected_mass_density, mass_relative_error
+        logical :: accept_step, projection_clipped
+#ifdef CHEMISTRY_PROFILE
+        real(dp) :: timer_start, projection_timer_start
+#endif
+
+        call this%ensure_thread_workspace()
+
+        do specie = 1,this%species_number
+            thread_workspace%concentration_initial(specie) = &
+                density*mass_fraction(specie)*this%inverse_molar_mass(specie)
+        end do
+        thread_workspace%concentration_final = &
+            thread_workspace%concentration_initial
+        thread_workspace%temperature = min(temperature,maximum_rate_temperature)
+
+        total_concentration = sum(thread_workspace%concentration_initial)
+        active_threshold = this%qss2_active_concentration_fraction* &
+            max(total_concentration,qss1_concentration_floor)
+
+        rate_preparation_time = 0.0_dp
+        integration_time = 0.0_dp
+        projection_time = 0.0_dp
+        projection_clips = 0_int64
+        projection_clipped_components = 0_int64
+        projection_clip_magnitude = 0.0_dp
+        projection_clip_species = 0
+        pre_projection_relative_residual = 0.0_dp
+        post_projection_relative_residual = 0.0_dp
+        internal_steps = 0_int64
+        rhs_evaluations = 0_int64
+        jacobian_evaluations = 0_int64
+#ifdef CHEMISTRY_PROFILE
+        timer_start = chemistry_wall_time()
+#endif
+        call this%prepare_cell_rate_coefficients(temperature)
+#ifdef CHEMISTRY_PROFILE
+        rate_preparation_time = chemistry_wall_time()-timer_start
+        timer_start = chemistry_wall_time()
+#endif
+
+        elapsed_time = 0.0_dp
+        trial_step = time_step
+
+        do while (elapsed_time < time_step)
+            if (internal_steps >= int(this%qss2_max_steps,int64)) then
+                call report_invalid_cell( &
+                    this,'QSS2 maximum internal step count exceeded', &
+                    i_cell,j_cell,k_cell,time_step=time_step, &
+                    concentration_initial=thread_workspace%concentration_initial, &
+                    concentration_final=thread_workspace%concentration_final)
+            end if
+
+            remaining_time = time_step-elapsed_time
+            trial_step = min(trial_step,remaining_time)
+
+            call thread_workspace%kinetics_core%calculate_production_loss( &
+                thread_workspace%rate_state, &
+                thread_workspace%concentration_final, &
+                thread_workspace%qss_production, &
+                thread_workspace%qss_destruction)
+            rhs_evaluations = rhs_evaluations + 1_int64
+
+            do
+                do specie = 1,this%species_number
+                    old_concentration = max( &
+                        thread_workspace%concentration_final(specie), &
+                        qss1_concentration_floor)
+                    loss_old = thread_workspace%qss_destruction(specie)/ &
+                        old_concentration
+                    loss_argument = loss_old*trial_step
+
+                    if (loss_argument <= qss1_small_loss_argument) then
+                        phi = 1.0_dp - 0.5_dp*loss_argument + &
+                            loss_argument*loss_argument/6.0_dp - &
+                            loss_argument*loss_argument*loss_argument/24.0_dp
+                        thread_workspace%qss_trial(specie) = &
+                            thread_workspace%concentration_final(specie) + &
+                            trial_step*(thread_workspace%qss_production(specie) - &
+                            loss_old*thread_workspace%concentration_final(specie))*phi
+                    else
+                        decay_factor = exp(-loss_argument)
+                        thread_workspace%qss_trial(specie) = &
+                            thread_workspace%concentration_final(specie)*decay_factor + &
+                            thread_workspace%qss_production(specie)/loss_old* &
+                            (1.0_dp-decay_factor)
+                    end if
+
+                    if (.not. ieee_is_finite(thread_workspace%qss_trial(specie))) then
+                        call report_invalid_cell( &
+                            this,'non-finite QSS2 predictor concentration', &
+                            i_cell,j_cell,k_cell,specie_index=specie, &
+                            offending_value=thread_workspace%qss_trial(specie), &
+                            time_step=time_step, &
+                            concentration_initial=thread_workspace%concentration_initial, &
+                            concentration_final=thread_workspace%qss_trial)
+                    end if
+                    thread_workspace%qss_trial(specie) = max( &
+                        thread_workspace%qss_trial(specie),0.0_dp)
+                end do
+
+                predictor_mass_density = 0.0_dp
+                do specie = 1,this%species_number
+                    predictor_mass_density = predictor_mass_density + &
+                        thread_workspace%qss_trial(specie)/ &
+                        this%inverse_molar_mass(specie)
+                end do
+                if (.not. ieee_is_finite(predictor_mass_density) .or. &
+                        predictor_mass_density <= tiny(1.0_dp)) then
+                    call report_invalid_cell( &
+                        this,'invalid QSS2 predictor mass density', &
+                        i_cell,j_cell,k_cell,offending_value=predictor_mass_density, &
+                        threshold=tiny(1.0_dp),time_step=time_step, &
+                        concentration_initial=thread_workspace%concentration_initial, &
+                        concentration_final=thread_workspace%qss_trial)
+                end if
+                mass_scale = density/predictor_mass_density
+                thread_workspace%qss_trial = thread_workspace%qss_trial*mass_scale
+
+                call thread_workspace%kinetics_core%calculate_production_loss( &
+                    thread_workspace%rate_state, &
+                    thread_workspace%qss_trial, &
+                    thread_workspace%qss2_production_trial, &
+                    thread_workspace%qss2_destruction_trial)
+                rhs_evaluations = rhs_evaluations + 1_int64
+
+                do specie = 1,this%species_number
+                    old_concentration = max( &
+                        thread_workspace%concentration_final(specie), &
+                        qss1_concentration_floor)
+                    predictor_concentration = max( &
+                        thread_workspace%qss_trial(specie), &
+                        qss1_concentration_floor)
+                    loss_old = thread_workspace%qss_destruction(specie)/ &
+                        old_concentration
+                    loss_predictor = &
+                        thread_workspace%qss2_destruction_trial(specie)/ &
+                        predictor_concentration
+                    production_average = 0.5_dp*( &
+                        thread_workspace%qss_production(specie) + &
+                        thread_workspace%qss2_production_trial(specie))
+                    loss_average = 0.5_dp*(loss_old+loss_predictor)
+                    loss_argument = loss_average*trial_step
+
+                    if (loss_argument <= qss1_small_loss_argument) then
+                        phi = 1.0_dp - 0.5_dp*loss_argument + &
+                            loss_argument*loss_argument/6.0_dp - &
+                            loss_argument*loss_argument*loss_argument/24.0_dp
+                        thread_workspace%qss_projected(specie) = &
+                            thread_workspace%concentration_final(specie) + &
+                            trial_step*(production_average - loss_average* &
+                            thread_workspace%concentration_final(specie))*phi
+                    else
+                        decay_factor = exp(-loss_argument)
+                        thread_workspace%qss_projected(specie) = &
+                            thread_workspace%concentration_final(specie)*decay_factor + &
+                            production_average/loss_average*(1.0_dp-decay_factor)
+                    end if
+
+                    if (.not. ieee_is_finite( &
+                            thread_workspace%qss_projected(specie))) then
+                        call report_invalid_cell( &
+                            this,'non-finite QSS2 corrected concentration', &
+                            i_cell,j_cell,k_cell,specie_index=specie, &
+                            offending_value=thread_workspace%qss_projected(specie), &
+                            time_step=time_step, &
+                            concentration_initial=thread_workspace%concentration_initial, &
+                            concentration_final=thread_workspace%qss_projected)
+                    end if
+                    thread_workspace%qss_projected(specie) = max( &
+                        thread_workspace%qss_projected(specie),0.0_dp)
+                end do
+
+                corrector_mass_density = 0.0_dp
+                do specie = 1,this%species_number
+                    corrector_mass_density = corrector_mass_density + &
+                        thread_workspace%qss_projected(specie)/ &
+                        this%inverse_molar_mass(specie)
+                end do
+                if (.not. ieee_is_finite(corrector_mass_density) .or. &
+                        corrector_mass_density <= tiny(1.0_dp)) then
+                    call report_invalid_cell( &
+                        this,'invalid QSS2 corrector mass density', &
+                        i_cell,j_cell,k_cell,offending_value=corrector_mass_density, &
+                        threshold=tiny(1.0_dp),time_step=time_step, &
+                        concentration_initial=thread_workspace%concentration_initial, &
+                        concentration_final=thread_workspace%qss_projected)
+                end if
+                mass_scale = density/corrector_mass_density
+                thread_workspace%qss_projected = &
+                    thread_workspace%qss_projected*mass_scale
+
+                maximum_error = 0.0_dp
+                do specie = 1,this%species_number
+                    if (max(thread_workspace%qss_trial(specie), &
+                            thread_workspace%qss_projected(specie)) > &
+                            active_threshold) then
+                        error_scale = max(active_threshold, &
+                            max(thread_workspace%qss_trial(specie), &
+                                thread_workspace%qss_projected(specie)))
+                        embedded_error = abs( &
+                            thread_workspace%qss_projected(specie) - &
+                            thread_workspace%qss_trial(specie))/error_scale
+                        maximum_error = max(maximum_error,embedded_error)
+                    end if
+                end do
+
+                accept_step = maximum_error <= this%qss2_error_tolerance .or. &
+                    trial_step <= this%qss2_minimum_internal_step* &
+                        (1.0_dp+16.0_dp*epsilon(1.0_dp))
+                if (accept_step) exit
+
+                error_ratio = maximum_error/this%qss2_error_tolerance
+                step_factor = qss2_safety_factor/ &
+                    sqrt(max(error_ratio,tiny(1.0_dp)))
+                step_factor = max(qss2_minimum_step_factor, &
+                    min(0.8_dp,step_factor))
+                trial_step = max(this%qss2_minimum_internal_step, &
+                    trial_step*step_factor)
+                trial_step = min(trial_step,remaining_time)
+            end do
+
+            thread_workspace%concentration_final = &
+                thread_workspace%qss_projected
+            accepted_step = trial_step
+            elapsed_time = elapsed_time + accepted_step
+            internal_steps = internal_steps + 1_int64
+
+            remaining_time = time_step-elapsed_time
+            if (remaining_time <= &
+                max(epsilon(time_step)*time_step,tiny(1.0_dp))) exit
+
+            if (maximum_error <= tiny(1.0_dp)) then
+                step_factor = qss2_maximum_step_factor
+            else
+                error_ratio = maximum_error/this%qss2_error_tolerance
+                step_factor = qss2_safety_factor/ &
+                    sqrt(max(error_ratio,tiny(1.0_dp)))
+                step_factor = max(1.0_dp, &
+                    min(qss2_maximum_step_factor,step_factor))
+            end if
+            trial_step = min(remaining_time,accepted_step*step_factor)
+        end do
+
+#ifdef CHEMISTRY_PROFILE
+        integration_time = chemistry_wall_time()-timer_start
+        projection_timer_start = chemistry_wall_time()
+#endif
+        call this%project_qss_final_state( &
+            active_threshold,i_cell,j_cell,k_cell,time_step, &
+            projection_clipped,projection_clipped_components, &
+            projection_clip_magnitude,projection_clip_species, &
+            pre_projection_relative_residual, &
+            post_projection_relative_residual)
+#ifdef CHEMISTRY_PROFILE
+        projection_time = chemistry_wall_time()-projection_timer_start
+#endif
+        if (projection_clipped) projection_clips = 1_int64
+
+        projected_mass_density = 0.0_dp
+        do specie = 1,this%species_number
+            projected_mass_density = projected_mass_density + &
+                thread_workspace%qss_projected(specie)/ &
+                this%inverse_molar_mass(specie)
+        end do
+        mass_relative_error = abs(projected_mass_density-density)/ &
+            max(density,tiny(1.0_dp))
+        if (.not. ieee_is_finite(mass_relative_error) .or. &
+            mass_relative_error > qss1_conservation_check_tolerance) then
+            call report_invalid_cell( &
+                this,'QSS2 final projected state violates cell mass', &
+                i_cell,j_cell,k_cell,offending_value=mass_relative_error, &
+                threshold=qss1_conservation_check_tolerance,time_step=time_step, &
+                concentration_initial=thread_workspace%concentration_initial, &
+                concentration_final=thread_workspace%qss_projected)
+        end if
+
+        thread_workspace%concentration_final = thread_workspace%qss_projected
+        do specie = 1,this%species_number
+            if (.not. ieee_is_finite( &
+                    thread_workspace%concentration_final(specie))) then
+                call report_invalid_cell( &
+                    this,'non-finite QSS2 final concentration', &
+                    i_cell,j_cell,k_cell,specie_index=specie, &
+                    offending_value=thread_workspace%concentration_final(specie), &
+                    time_step=time_step, &
+                    initial_value=thread_workspace%concentration_initial(specie), &
+                    final_value=thread_workspace%concentration_final(specie), &
+                    concentration_initial=thread_workspace%concentration_initial, &
+                    concentration_final=thread_workspace%concentration_final)
+            end if
+            concentration_increment(specie) = &
+                thread_workspace%concentration_final(specie) - &
+                thread_workspace%concentration_initial(specie)
+        end do
+    end subroutine solve_cell_qss2
 
 #ifdef NRG_ENABLE_CVODE
     subroutine ensure_cvode_workers(this)

@@ -24,6 +24,10 @@ module solver_options_class
     real(dp), parameter :: default_chemistry_qss1_active_fraction = 1.0e-7_dp
     real(dp), parameter :: default_chemistry_qss1_step_growth_factor = 1.04_dp
     integer, parameter :: default_chemistry_qss1_max_steps = 100000
+    real(dp), parameter :: default_chemistry_qss2_error_tolerance = 1.0e-3_dp
+    real(dp), parameter :: default_chemistry_qss2_minimum_internal_step = 1.0e-10_dp
+    real(dp), parameter :: default_chemistry_qss2_active_fraction = 1.0e-7_dp
+    integer, parameter :: default_chemistry_qss2_max_steps = 100000
 
     !> Configuration of one dispersed material phase.
     !>
@@ -111,6 +115,14 @@ module solver_options_class
             default_chemistry_qss1_step_growth_factor
         integer :: chemistry_qss1_max_steps = &
             default_chemistry_qss1_max_steps
+        real(dp) :: chemistry_qss2_error_tolerance = &
+            default_chemistry_qss2_error_tolerance
+        real(dp) :: chemistry_qss2_minimum_internal_step = &
+            default_chemistry_qss2_minimum_internal_step
+        real(dp) :: chemistry_qss2_active_concentration_fraction = &
+            default_chemistry_qss2_active_fraction
+        integer :: chemistry_qss2_max_steps = &
+            default_chemistry_qss2_max_steps
 
         integer :: additional_particles_phases = 0
         integer :: particles_phase_counter = 0
@@ -147,6 +159,10 @@ module solver_options_class
         procedure :: get_chemistry_qss1_active_concentration_fraction
         procedure :: get_chemistry_qss1_step_growth_factor
         procedure :: get_chemistry_qss1_max_steps
+        procedure :: get_chemistry_qss2_error_tolerance
+        procedure :: get_chemistry_qss2_minimum_internal_step
+        procedure :: get_chemistry_qss2_active_concentration_fraction
+        procedure :: get_chemistry_qss2_max_steps
         procedure :: get_grav_acc
         procedure :: get_additional_particles_phases_number
         procedure :: get_particles_params
@@ -172,7 +188,9 @@ contains
         chemistry_qss1_relative_change_limit, &
         chemistry_qss1_minimum_internal_step, &
         chemistry_qss1_active_concentration_fraction, &
-        chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps)
+        chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+        chemistry_qss2_error_tolerance, chemistry_qss2_minimum_internal_step, &
+        chemistry_qss2_active_concentration_fraction, chemistry_qss2_max_steps)
 
         character(len=*), intent(in) :: solver_name
         logical, intent(in) :: hydrodynamics_flag
@@ -201,6 +219,11 @@ contains
             chemistry_qss1_active_concentration_fraction
         real(dp), intent(in), optional :: chemistry_qss1_step_growth_factor
         integer, intent(in), optional :: chemistry_qss1_max_steps
+        real(dp), intent(in), optional :: chemistry_qss2_error_tolerance
+        real(dp), intent(in), optional :: chemistry_qss2_minimum_internal_step
+        real(dp), intent(in), optional :: &
+            chemistry_qss2_active_concentration_fraction
+        integer, intent(in), optional :: chemistry_qss2_max_steps
 
         integer :: number_of_phases
         integer :: io_unit
@@ -237,7 +260,11 @@ contains
             qss1_active_fraction= &
                 chemistry_qss1_active_concentration_fraction, &
             qss1_step_growth_factor=chemistry_qss1_step_growth_factor, &
-            qss1_max_steps=chemistry_qss1_max_steps)
+            qss1_max_steps=chemistry_qss1_max_steps, &
+            qss2_error_tolerance=chemistry_qss2_error_tolerance, &
+            qss2_minimum_internal_step=chemistry_qss2_minimum_internal_step, &
+            qss2_active_fraction=chemistry_qss2_active_concentration_fraction, &
+            qss2_max_steps=chemistry_qss2_max_steps)
 
         open(newunit=io_unit, file=solver_data_file_name, status='replace', &
             form='formatted', delim='quote')
@@ -391,6 +418,10 @@ contains
         real(dp) :: chemistry_qss1_active_concentration_fraction
         real(dp) :: chemistry_qss1_step_growth_factor
         integer :: chemistry_qss1_max_steps
+        real(dp) :: chemistry_qss2_error_tolerance
+        real(dp) :: chemistry_qss2_minimum_internal_step
+        real(dp) :: chemistry_qss2_active_concentration_fraction
+        integer :: chemistry_qss2_max_steps
 
         namelist /solver_properties/ solver_name, hydrodynamics_flag, &
             heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
@@ -404,7 +435,11 @@ contains
             chemistry_qss1_relative_change_limit, &
             chemistry_qss1_minimum_internal_step, &
             chemistry_qss1_active_concentration_fraction, &
-            chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps
+            chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+            chemistry_qss2_error_tolerance, &
+            chemistry_qss2_minimum_internal_step, &
+            chemistry_qss2_active_concentration_fraction, &
+            chemistry_qss2_max_steps
 
         solver_name = this%solver_name
         hydrodynamics_flag = this%hydrodynamics_flag
@@ -439,6 +474,12 @@ contains
         chemistry_qss1_step_growth_factor = &
             this%chemistry_qss1_step_growth_factor
         chemistry_qss1_max_steps = this%chemistry_qss1_max_steps
+        chemistry_qss2_error_tolerance = this%chemistry_qss2_error_tolerance
+        chemistry_qss2_minimum_internal_step = &
+            this%chemistry_qss2_minimum_internal_step
+        chemistry_qss2_active_concentration_fraction = &
+            this%chemistry_qss2_active_concentration_fraction
+        chemistry_qss2_max_steps = this%chemistry_qss2_max_steps
 
         write(unit=solver_data_unit, nml=solver_properties)
     end subroutine write_properties
@@ -469,6 +510,10 @@ contains
         real(dp) :: chemistry_qss1_active_concentration_fraction
         real(dp) :: chemistry_qss1_step_growth_factor
         integer :: chemistry_qss1_max_steps
+        real(dp) :: chemistry_qss2_error_tolerance
+        real(dp) :: chemistry_qss2_minimum_internal_step
+        real(dp) :: chemistry_qss2_active_concentration_fraction
+        integer :: chemistry_qss2_max_steps
 
         namelist /solver_properties/ solver_name, hydrodynamics_flag, &
             heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
@@ -482,7 +527,11 @@ contains
             chemistry_qss1_relative_change_limit, &
             chemistry_qss1_minimum_internal_step, &
             chemistry_qss1_active_concentration_fraction, &
-            chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps
+            chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+            chemistry_qss2_error_tolerance, &
+            chemistry_qss2_minimum_internal_step, &
+            chemistry_qss2_active_concentration_fraction, &
+            chemistry_qss2_max_steps
 
         ! Preserve compatibility with solver-data files written before
         ! Soret and chemistry-backend controls were introduced.
@@ -507,6 +556,12 @@ contains
         chemistry_qss1_step_growth_factor = &
             default_chemistry_qss1_step_growth_factor
         chemistry_qss1_max_steps = default_chemistry_qss1_max_steps
+        chemistry_qss2_error_tolerance = default_chemistry_qss2_error_tolerance
+        chemistry_qss2_minimum_internal_step = &
+            default_chemistry_qss2_minimum_internal_step
+        chemistry_qss2_active_concentration_fraction = &
+            default_chemistry_qss2_active_fraction
+        chemistry_qss2_max_steps = default_chemistry_qss2_max_steps
 
         read(unit=solver_data_unit, nml=solver_properties)
         call this%set_properties( &
@@ -529,7 +584,11 @@ contains
             qss1_active_fraction= &
                 chemistry_qss1_active_concentration_fraction, &
             qss1_step_growth_factor=chemistry_qss1_step_growth_factor, &
-            qss1_max_steps=chemistry_qss1_max_steps)
+            qss1_max_steps=chemistry_qss1_max_steps, &
+            qss2_error_tolerance=chemistry_qss2_error_tolerance, &
+            qss2_minimum_internal_step=chemistry_qss2_minimum_internal_step, &
+            qss2_active_fraction=chemistry_qss2_active_concentration_fraction, &
+            qss2_max_steps=chemistry_qss2_max_steps)
     end subroutine read_properties
 
 
@@ -589,7 +648,9 @@ contains
             cvode_relative_tolerance, cvode_absolute_tolerance, &
             cvode_max_steps, qss1_relative_change_limit, &
             qss1_minimum_internal_step, qss1_active_fraction, &
-            qss1_step_growth_factor, qss1_max_steps)
+            qss1_step_growth_factor, qss1_max_steps, &
+            qss2_error_tolerance, qss2_minimum_internal_step, &
+            qss2_active_fraction, qss2_max_steps)
         class(solver_options), intent(inout) :: this
         character(len=*), intent(in), optional :: backend
         real(dp), intent(in), optional :: slatec_accuracy
@@ -604,6 +665,10 @@ contains
         real(dp), intent(in), optional :: qss1_active_fraction
         real(dp), intent(in), optional :: qss1_step_growth_factor
         integer, intent(in), optional :: qss1_max_steps
+        real(dp), intent(in), optional :: qss2_error_tolerance
+        real(dp), intent(in), optional :: qss2_minimum_internal_step
+        real(dp), intent(in), optional :: qss2_active_fraction
+        integer, intent(in), optional :: qss2_max_steps
 
         if (present(backend)) this%chemistry_backend = lowercase(trim(backend))
         if (present(slatec_accuracy)) &
@@ -633,9 +698,17 @@ contains
             this%chemistry_qss1_step_growth_factor = qss1_step_growth_factor
         if (present(qss1_max_steps)) &
             this%chemistry_qss1_max_steps = qss1_max_steps
+        if (present(qss2_error_tolerance)) &
+            this%chemistry_qss2_error_tolerance = qss2_error_tolerance
+        if (present(qss2_minimum_internal_step)) &
+            this%chemistry_qss2_minimum_internal_step = qss2_minimum_internal_step
+        if (present(qss2_active_fraction)) &
+            this%chemistry_qss2_active_concentration_fraction = qss2_active_fraction
+        if (present(qss2_max_steps)) &
+            this%chemistry_qss2_max_steps = qss2_max_steps
 
         select case(trim(this%chemistry_backend))
-        case('slatec','cvode','qss1')
+        case('slatec','cvode','qss1','qss2')
         case default
             error stop 'solver_options: unsupported chemistry backend'
         end select
@@ -656,6 +729,12 @@ contains
             this%chemistry_qss1_step_growth_factor < 1.0_dp .or. &
             this%chemistry_qss1_max_steps <= 0) then
             error stop 'solver_options: invalid QSS1 chemistry controls'
+        end if
+        if (this%chemistry_qss2_error_tolerance <= 0.0_dp .or. &
+            this%chemistry_qss2_minimum_internal_step <= 0.0_dp .or. &
+            this%chemistry_qss2_active_concentration_fraction <= 0.0_dp .or. &
+            this%chemistry_qss2_max_steps <= 0) then
+            error stop 'solver_options: invalid QSS2 chemistry controls'
         end if
     end subroutine set_chemistry_options
 
@@ -1007,6 +1086,31 @@ contains
         integer :: value
         value = this%chemistry_qss1_max_steps
     end function get_chemistry_qss1_max_steps
+
+    pure function get_chemistry_qss2_error_tolerance(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss2_error_tolerance
+    end function get_chemistry_qss2_error_tolerance
+
+    pure function get_chemistry_qss2_minimum_internal_step(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss2_minimum_internal_step
+    end function get_chemistry_qss2_minimum_internal_step
+
+    pure function get_chemistry_qss2_active_concentration_fraction(this) &
+            result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss2_active_concentration_fraction
+    end function get_chemistry_qss2_active_concentration_fraction
+
+    pure function get_chemistry_qss2_max_steps(this) result(value)
+        class(solver_options), intent(in) :: this
+        integer :: value
+        value = this%chemistry_qss2_max_steps
+    end function get_chemistry_qss2_max_steps
 
 
     pure function get_additional_particles_phases_number(this) result(value)
