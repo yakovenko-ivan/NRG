@@ -706,8 +706,19 @@ contains
         if (.not. this%is_enabled()) return
         if (.not. reactive) &
             error stop 'problem_controls: flame stabilization requires reactive flow'
-        if (dimensions /= 1) &
-            error stop 'problem_controls: flame stabilization currently requires a 1D problem'
+
+        ! The anchor workflow uses the multidimensional heat-release / H / T-grad
+        ! centroids implemented by flame_stabilization_solver and is supported
+        ! here for planar 1D/2D inlet flames.  The laminar-burning-velocity
+        ! workflow retains its deliberately 1D scientific diagnostics.
+        if (this%is_anchor()) then
+            if (dimensions < 1 .or. dimensions > 2) &
+                error stop 'problem_controls: anchor stabilization supports 1D/2D'
+        else if (this%is_laminar_burning_velocity()) then
+            if (dimensions /= 1) &
+                error stop 'problem_controls: laminar burning velocity requires 1D'
+        end if
+
         if (inlet_count /= 1) &
             error stop 'problem_controls: flame stabilization requires exactly one inlet'
         if (outlet_count < 1) &
