@@ -64,7 +64,7 @@ module chemical_kinetics_solver_class
     real(dp), parameter :: default_mass_balance_tolerance = 1.0e-6_dp
 #ifdef CHEMISTRY_PROFILE
     ! Periodic profiling output cadence. Change to 500 for quieter long runs.
-    integer, parameter :: chemistry_profile_output_interval = 1
+    integer, parameter :: chemistry_profile_output_interval = 100
 #endif
     real(dp), parameter :: default_table_start_temperature = 300.5_dp
     real(dp), parameter :: default_table_start_temperature_max = 310.0_dp
@@ -902,7 +902,7 @@ contains
             this%total_rhs_evaluations
         write(output,'(A,I0)') '  Jacobian evaluations: ', &
             this%total_jacobian_evaluations
-        if ((trim(this%ode_solver) == 'qss1').or.(trim(this%ode_solver) == 'qss2')) then
+        if ((trim(this%ode_solver) == 'qss1').or.(trim(this%ode_solver) == 'qss2').or.(trim(this%ode_solver) == 'qss2_fixed')) then
             write(output,'(A,I0)') '  QSS stoichiometric rank: ', &
                 this%qss_stoichiometric_rank
             write(output,'(A,I0)') '  QSS invariant count: ', &
@@ -2644,8 +2644,11 @@ contains
             internal_steps = internal_steps + 1_int64
 
             remaining_time = time_step-elapsed_time
-            if (remaining_time <= &
-                max(epsilon(time_step)*time_step,tiny(1.0_dp))) exit
+            if (remaining_time <= 64.0_dp*epsilon(1.0_dp) * &
+                    max(time_step,accepted_step)) then
+                elapsed_time = time_step
+                exit
+            end if
 
             if (fixed_step_mode) then
                 trial_step = min(remaining_time,this%qss2_minimum_internal_step)
