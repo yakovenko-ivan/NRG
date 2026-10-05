@@ -64,7 +64,7 @@ module chemical_kinetics_solver_class
     real(dp), parameter :: default_mass_balance_tolerance = 1.0e-6_dp
 #ifdef CHEMISTRY_PROFILE
     ! Periodic profiling output cadence. Change to 500 for quieter long runs.
-    integer, parameter :: chemistry_profile_output_interval = 100
+    integer, parameter :: chemistry_profile_output_interval = 1
 #endif
     real(dp), parameter :: default_table_start_temperature = 300.5_dp
     real(dp), parameter :: default_table_start_temperature_max = 310.0_dp
@@ -399,6 +399,7 @@ module chemical_kinetics_solver_class
         procedure :: use_detailed_kinetics
         procedure :: use_qss1_kinetics
         procedure :: use_qss2_kinetics
+        procedure :: use_qss2_fixed_kinetics
         procedure :: set_concentration_increment_recording
         procedure :: reset_performance_statistics
         procedure :: write_performance_statistics
@@ -556,6 +557,8 @@ contains
                 call constructor%use_qss1_kinetics()
             case ('qss2')
                 call constructor%use_qss2_kinetics()
+            case ('qss2_fixed')
+                call constructor%use_qss2_fixed_kinetics()
             case ('table_approximated')
                 if (.not. present(table_file)) then
                     error stop 'Chemical kinetics: table file was not supplied'
@@ -577,6 +580,8 @@ contains
                 call constructor%use_qss1_kinetics()
             case ('qss2')
                 call constructor%use_qss2_kinetics()
+            case ('qss2_fixed')
+                call constructor%use_qss2_fixed_kinetics()
             case default
                 error stop 'Chemical kinetics: unsupported configured backend'
             end select
@@ -801,6 +806,15 @@ contains
     end subroutine use_qss2_kinetics
 
 
+    subroutine use_qss2_fixed_kinetics(this)
+        class(chemical_kinetics_solver), intent(inout) :: this
+
+        ! Diagnostic order-test backend only.  The QSS2 numerical stages and
+        ! final projection are unchanged; only adaptive step selection is bypassed.
+        this%ode_solver = 'qss2_fixed'
+    end subroutine use_qss2_fixed_kinetics
+
+
     subroutine set_concentration_increment_recording(this, enabled)
         class(chemical_kinetics_solver), intent(inout) :: this
         logical, intent(in) :: enabled
@@ -888,14 +902,14 @@ contains
             this%total_rhs_evaluations
         write(output,'(A,I0)') '  Jacobian evaluations: ', &
             this%total_jacobian_evaluations
-        if (trim(this%ode_solver) == 'qss1') then
-            write(output,'(A,I0)') '  QSS1 stoichiometric rank: ', &
+        if ((trim(this%ode_solver) == 'qss1').or.(trim(this%ode_solver) == 'qss2')) then
+            write(output,'(A,I0)') '  QSS stoichiometric rank: ', &
                 this%qss_stoichiometric_rank
-            write(output,'(A,I0)') '  QSS1 invariant count: ', &
+            write(output,'(A,I0)') '  QSS invariant count: ', &
                 this%qss_conservation_count
-            write(output,'(A,I0)') '  QSS1 projection constraints: ', &
+            write(output,'(A,I0)') '  QSS projection constraints: ', &
                 this%qss_projection_constraint_count
-            write(output,'(A,L1)') '  QSS1 independent mass row: ', &
+            write(output,'(A,L1)') '  QSS independent mass row: ', &
                 this%qss_has_independent_mass_constraint
         end if
 #ifdef CHEMISTRY_PROFILE
@@ -914,7 +928,7 @@ contains
         end if
         write(output,'(A,ES14.6)') '  summed integration time [s]: ', &
             this%total_integration_time
-        if (trim(this%ode_solver) == 'qss1') then
+        if ((trim(this%ode_solver) == 'qss1').or.(trim(this%ode_solver) == 'qss2')) then
             write(output,'(A,ES14.6)') &
                 '  summed QSS1 final projection time [s]: ', &
                 this%total_qss_projection_time
@@ -1243,7 +1257,7 @@ contains
                             cvode_result_processing_time_step + &
                             cell_cvode_result_processing_time
 #endif
-                    case ('qss1','qss2')
+                    case ('qss1','qss2','qss2_fixed')
                         if (trim(this%ode_solver) == 'qss1') then
                             call this%solve_cell_qss1( &
                                 density_cell,temperature_cell, &
@@ -1336,7 +1350,8 @@ contains
                     source_assembly_time_step = source_assembly_time_step + &
                         chemistry_wall_time()-source_time_start
                     if (trim(this%ode_solver) == 'qss1' .or. &
-                            trim(this%ode_solver) == 'qss2') then
+                            trim(this%ode_solver) == 'qss2' .or. &
+                            trim(this%ode_solver) == 'qss2_fixed') then
                         cell_qss_post_source_residual = &
                             this%qss_increment_conservation_residual( &
                                 density_cell, &
@@ -2291,8 +2306,11 @@ contains
             internal_steps = internal_steps + 1_int64
 
             remaining_time = time_step-elapsed_time
-            if (remaining_time <= &
-                max(epsilon(time_step)*time_step,tiny(1.0_dp))) exit
+            if (remaining_time <= 64.0_dp*epsilon(1.0_dp) * max(time_step,accepted_step)) then
+                elapsed_time = time_step
+                exit
+            end if
+                    
             trial_step = min(remaining_time, &
                 accepted_step*this%qss1_step_growth_factor)
         end do
@@ -2388,12 +2406,13 @@ contains
         real(dp) :: step_factor
         real(dp) :: predictor_mass_density, corrector_mass_density, mass_scale
         real(dp) :: projected_mass_density, mass_relative_error
-        logical :: accept_step, projection_clipped
+        logical :: accept_step, projection_clipped, fixed_step_mode
 #ifdef CHEMISTRY_PROFILE
         real(dp) :: timer_start, projection_timer_start
 #endif
 
         call this%ensure_thread_workspace()
+        fixed_step_mode = trim(this%ode_solver) == 'qss2_fixed'
 
         do specie = 1,this%species_number
             thread_workspace%concentration_initial(specie) = &
@@ -2430,6 +2449,11 @@ contains
 
         elapsed_time = 0.0_dp
         trial_step = time_step
+        if (fixed_step_mode) then
+            ! Reuse the existing minimum-step option as prescribed h only in
+            ! qss2_fixed.  Production qss2 semantics remain unchanged.
+            trial_step = min(time_step,this%qss2_minimum_internal_step)
+        end if
 
         do while (elapsed_time < time_step)
             if (internal_steps >= int(this%qss2_max_steps,int64)) then
@@ -2594,9 +2618,13 @@ contains
                     end if
                 end do
 
-                accept_step = maximum_error <= this%qss2_error_tolerance .or. &
-                    trial_step <= this%qss2_minimum_internal_step* &
-                        (1.0_dp+16.0_dp*epsilon(1.0_dp))
+                if (fixed_step_mode) then
+                    accept_step = .true.
+                else
+                    accept_step = maximum_error <= this%qss2_error_tolerance .or. &
+                        trial_step <= this%qss2_minimum_internal_step* &
+                            (1.0_dp+16.0_dp*epsilon(1.0_dp))
+                end if
                 if (accept_step) exit
 
                 error_ratio = maximum_error/this%qss2_error_tolerance
@@ -2619,16 +2647,20 @@ contains
             if (remaining_time <= &
                 max(epsilon(time_step)*time_step,tiny(1.0_dp))) exit
 
-            if (maximum_error <= tiny(1.0_dp)) then
-                step_factor = qss2_maximum_step_factor
+            if (fixed_step_mode) then
+                trial_step = min(remaining_time,this%qss2_minimum_internal_step)
             else
-                error_ratio = maximum_error/this%qss2_error_tolerance
-                step_factor = qss2_safety_factor/ &
-                    sqrt(max(error_ratio,tiny(1.0_dp)))
-                step_factor = max(1.0_dp, &
-                    min(qss2_maximum_step_factor,step_factor))
+                if (maximum_error <= tiny(1.0_dp)) then
+                    step_factor = qss2_maximum_step_factor
+                else
+                    error_ratio = maximum_error/this%qss2_error_tolerance
+                    step_factor = qss2_safety_factor/ &
+                        sqrt(max(error_ratio,tiny(1.0_dp)))
+                    step_factor = max(1.0_dp, &
+                        min(qss2_maximum_step_factor,step_factor))
+                end if
+                trial_step = min(remaining_time,accepted_step*step_factor)
             end if
-            trial_step = min(remaining_time,accepted_step*step_factor)
         end do
 
 #ifdef CHEMISTRY_PROFILE

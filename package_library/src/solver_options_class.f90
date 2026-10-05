@@ -708,7 +708,7 @@ contains
             this%chemistry_qss2_max_steps = qss2_max_steps
 
         select case(trim(this%chemistry_backend))
-        case('slatec','cvode','qss1','qss2')
+        case('slatec','cvode','qss1','qss2','qss2_fixed')
         case default
             error stop 'solver_options: unsupported chemistry backend'
         end select
