@@ -94,6 +94,7 @@ module chemical_kinetics_solver_class
         real(dp), allocatable :: qss_destruction(:)
         real(dp), allocatable :: qss2_production_trial(:)
         real(dp), allocatable :: qss2_destruction_trial(:)
+        real(dp), allocatable :: qss2_loss_old(:)
         real(dp), allocatable :: qss_trial(:)
         real(dp), allocatable :: qss_projected(:)
         real(dp), allocatable :: qss_projection_weights(:)
@@ -1491,6 +1492,7 @@ contains
         allocate(thread_workspace%qss_destruction(this%species_number))
         allocate(thread_workspace%qss2_production_trial(this%species_number))
         allocate(thread_workspace%qss2_destruction_trial(this%species_number))
+        allocate(thread_workspace%qss2_loss_old(this%species_number))
         allocate(thread_workspace%qss_trial(this%species_number))
         allocate(thread_workspace%qss_projected(this%species_number))
         allocate(thread_workspace%qss_projection_weights(this%species_number))
@@ -1521,6 +1523,7 @@ contains
         thread_workspace%qss_destruction = 0.0_dp
         thread_workspace%qss2_production_trial = 0.0_dp
         thread_workspace%qss2_destruction_trial = 0.0_dp
+        thread_workspace%qss2_loss_old = 0.0_dp
         thread_workspace%qss_trial = 0.0_dp
         thread_workspace%qss_projected = 0.0_dp
         thread_workspace%qss_projection_weights = 0.0_dp
@@ -1555,6 +1558,8 @@ contains
             deallocate(thread_workspace%qss2_production_trial)
         if (allocated(thread_workspace%qss2_destruction_trial)) &
             deallocate(thread_workspace%qss2_destruction_trial)
+        if (allocated(thread_workspace%qss2_loss_old)) &
+            deallocate(thread_workspace%qss2_loss_old)
         if (allocated(thread_workspace%qss_trial)) &
             deallocate(thread_workspace%qss_trial)
         if (allocated(thread_workspace%qss_projected)) &
@@ -2474,13 +2479,19 @@ contains
                 thread_workspace%qss_destruction)
             rhs_evaluations = rhs_evaluations + 1_int64
 
+            ! Old-state loss coefficients remain invariant across rejected QSS2 trials.
+            do specie = 1,this%species_number
+                old_concentration = max( &
+                    thread_workspace%concentration_final(specie), &
+                    qss1_concentration_floor)
+                thread_workspace%qss2_loss_old(specie) = &
+                    thread_workspace%qss_destruction(specie)/old_concentration
+            end do
+
             do
+                predictor_mass_density = 0.0_dp
                 do specie = 1,this%species_number
-                    old_concentration = max( &
-                        thread_workspace%concentration_final(specie), &
-                        qss1_concentration_floor)
-                    loss_old = thread_workspace%qss_destruction(specie)/ &
-                        old_concentration
+                    loss_old = thread_workspace%qss2_loss_old(specie)
                     loss_argument = loss_old*trial_step
 
                     if (loss_argument <= qss1_small_loss_argument) then
@@ -2510,10 +2521,6 @@ contains
                     end if
                     thread_workspace%qss_trial(specie) = max( &
                         thread_workspace%qss_trial(specie),0.0_dp)
-                end do
-
-                predictor_mass_density = 0.0_dp
-                do specie = 1,this%species_number
                     predictor_mass_density = predictor_mass_density + &
                         thread_workspace%qss_trial(specie)/ &
                         this%inverse_molar_mass(specie)
@@ -2537,15 +2544,12 @@ contains
                     thread_workspace%qss2_destruction_trial)
                 rhs_evaluations = rhs_evaluations + 1_int64
 
+                corrector_mass_density = 0.0_dp
                 do specie = 1,this%species_number
-                    old_concentration = max( &
-                        thread_workspace%concentration_final(specie), &
-                        qss1_concentration_floor)
                     predictor_concentration = max( &
                         thread_workspace%qss_trial(specie), &
                         qss1_concentration_floor)
-                    loss_old = thread_workspace%qss_destruction(specie)/ &
-                        old_concentration
+                    loss_old = thread_workspace%qss2_loss_old(specie)
                     loss_predictor = &
                         thread_workspace%qss2_destruction_trial(specie)/ &
                         predictor_concentration
@@ -2582,10 +2586,6 @@ contains
                     end if
                     thread_workspace%qss_projected(specie) = max( &
                         thread_workspace%qss_projected(specie),0.0_dp)
-                end do
-
-                corrector_mass_density = 0.0_dp
-                do specie = 1,this%species_number
                     corrector_mass_density = corrector_mass_density + &
                         thread_workspace%qss_projected(specie)/ &
                         this%inverse_molar_mass(specie)
@@ -2600,11 +2600,11 @@ contains
                         concentration_final=thread_workspace%qss_projected)
                 end if
                 mass_scale = density/corrector_mass_density
-                thread_workspace%qss_projected = &
-                    thread_workspace%qss_projected*mass_scale
 
                 maximum_error = 0.0_dp
                 do specie = 1,this%species_number
+                    thread_workspace%qss_projected(specie) = &
+                        thread_workspace%qss_projected(specie)*mass_scale
                     if (max(thread_workspace%qss_trial(specie), &
                             thread_workspace%qss_projected(specie)) > &
                             active_threshold) then

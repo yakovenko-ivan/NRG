@@ -765,6 +765,92 @@ contains
     end subroutine calculate_species_rates
 
 
+    real(dp) function third_body_concentration_fast(this,reaction,concentration, &
+            total_concentration) result(third_body)
+        type(chemical_kinetics_core), intent(in) :: this
+        integer, intent(in) :: reaction
+        real(dp), dimension(:), intent(in) :: concentration
+        real(dp), intent(in) :: total_concentration
+
+        integer :: index,specie_index
+        real(dp) :: cancellation_scale,correction,direct_sum
+
+        third_body = this%default_third_body_efficiency*total_concentration
+        cancellation_scale = abs(third_body)
+
+        do index = this%third_body_offset(reaction-1), &
+                this%third_body_offset(reaction)-1
+            specie_index = this%third_body_species(index)
+            correction = this%third_body_efficiency_delta(index)* &
+                max(concentration(specie_index),0.0_dp)
+            third_body = third_body + correction
+            cancellation_scale = cancellation_scale + abs(correction)
+        end do
+
+        ! Preserve the numerically robust cancellation fallback used by the
+        ! checked public helper, but omit repeated reaction/array validation.
+        if (cancellation_scale > 0.0_dp) then
+            if (abs(third_body) <= &
+                    epsilon(1.0_dp)* &
+                    real(max(1,1 + this%third_body_offset(reaction) - &
+                        this%third_body_offset(reaction-1)),dp)* &
+                    cancellation_scale) then
+                direct_sum = 0.0_dp
+                do specie_index = 1,this%species_number
+                    direct_sum = direct_sum + &
+                        this%chemistry%enhanced_efficiencies( &
+                            reaction,specie_index)* &
+                        max(concentration(specie_index),0.0_dp)
+                end do
+                third_body = direct_sum
+            end if
+        end if
+
+        third_body = max(third_body,0.0_dp)
+    end function third_body_concentration_fast
+
+
+    subroutine effective_rate_constants_fast(this,state,reaction,third_body, &
+            forward_constant,reverse_constant)
+        type(chemical_kinetics_core), intent(in) :: this
+        type(chemical_rate_state), intent(in) :: state
+        integer, intent(in) :: reaction
+        real(dp), intent(in) :: third_body
+        real(dp), intent(out) :: forward_constant,reverse_constant
+
+        real(dp) :: high_rate,low_rate,reduced_pressure,troe_factor
+
+        high_rate = state%high_pressure_rate(reaction)
+        low_rate = state%low_pressure_rate(reaction)
+
+        if (this%reaction_uses_falloff(reaction)) then
+            if (high_rate <= 0.0_dp .or. low_rate <= 0.0_dp .or. &
+                    third_body <= 0.0_dp) then
+                forward_constant = 0.0_dp
+            else
+                reduced_pressure = low_rate*third_body/high_rate
+                forward_constant = high_rate*reduced_pressure/ &
+                    (1.0_dp+reduced_pressure)
+                if (this%reaction_uses_troe(reaction)) then
+                    troe_factor = troe_falloff_factor( &
+                        state%troe_f_center(reaction), &
+                        state%troe_c(reaction),state%troe_n(reaction), &
+                        reduced_pressure)
+                    forward_constant = forward_constant*troe_factor
+                end if
+            end if
+        else
+            forward_constant = high_rate
+        end if
+
+        if (this%reaction_reversible(reaction)) then
+            reverse_constant = forward_constant*state%reverse_factor(reaction)
+        else
+            reverse_constant = 0.0_dp
+        end if
+    end subroutine effective_rate_constants_fast
+
+
     subroutine calculate_production_loss(this,state,concentration,production, &
             destruction)
         class(chemical_kinetics_core), intent(in) :: this
@@ -797,11 +883,11 @@ contains
         do reaction = 1,this%reactions_number
             third_body = 0.0_dp
             if (this%reaction_uses_third_body(reaction)) then
-                third_body = this%third_body_concentration( &
-                    reaction,concentration,total_concentration)
+                third_body = third_body_concentration_fast( &
+                    this,reaction,concentration,total_concentration)
             end if
 
-            call this%effective_rate_constants(state,reaction,third_body, &
+            call effective_rate_constants_fast(this,state,reaction,third_body, &
                 forward_constant,reverse_constant)
 
             forward_rate = forward_constant
