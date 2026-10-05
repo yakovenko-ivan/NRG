@@ -11,6 +11,24 @@ module solver_options_class
 
     integer, parameter :: option_name_length = 24
 
+    character(len=option_name_length), parameter :: default_chemistry_backend = 'slatec'
+    real(dp), parameter :: default_chemistry_slatec_accuracy = 1.0e-9_dp
+    real(dp), parameter :: default_chemistry_slatec_error_weight = 1.0e-4_dp
+    real(dp), parameter :: default_chemistry_slatec_max_internal_step = 1.0e-7_dp
+    integer, parameter :: default_chemistry_slatec_max_steps = 10000
+    real(dp), parameter :: default_chemistry_cvode_relative_tolerance = 1.0e-8_dp
+    real(dp), parameter :: default_chemistry_cvode_absolute_tolerance = 1.0e-12_dp
+    integer, parameter :: default_chemistry_cvode_max_steps = 10000
+    real(dp), parameter :: default_chemistry_qss1_relative_change_limit = 5.0e-2_dp
+    real(dp), parameter :: default_chemistry_qss1_minimum_internal_step = 1.0e-9_dp
+    real(dp), parameter :: default_chemistry_qss1_active_fraction = 1.0e-7_dp
+    real(dp), parameter :: default_chemistry_qss1_step_growth_factor = 1.04_dp
+    integer, parameter :: default_chemistry_qss1_max_steps = 100000
+    real(dp), parameter :: default_chemistry_qss2_error_tolerance = 1.0e-3_dp
+    real(dp), parameter :: default_chemistry_qss2_minimum_internal_step = 1.0e-10_dp
+    real(dp), parameter :: default_chemistry_qss2_active_fraction = 1.0e-7_dp
+    integer, parameter :: default_chemistry_qss2_max_steps = 100000
+
     !> Configuration of one dispersed material phase.
     !>
     !> The model and initialization fields are deliberately part of the
@@ -70,6 +88,42 @@ module solver_options_class
         real(dp) :: CFL_coefficient = 0.0_dp
         real(dp) :: initial_time_step = 0.0_dp
         real(dp), dimension(3) :: grav_acc = 0.0_dp
+
+        character(len=option_name_length) :: chemistry_backend = &
+            default_chemistry_backend
+        real(dp) :: chemistry_slatec_accuracy = &
+            default_chemistry_slatec_accuracy
+        real(dp) :: chemistry_slatec_error_weight = &
+            default_chemistry_slatec_error_weight
+        real(dp) :: chemistry_slatec_max_internal_step = &
+            default_chemistry_slatec_max_internal_step
+        integer :: chemistry_slatec_max_steps = &
+            default_chemistry_slatec_max_steps
+        real(dp) :: chemistry_cvode_relative_tolerance = &
+            default_chemistry_cvode_relative_tolerance
+        real(dp) :: chemistry_cvode_absolute_tolerance = &
+            default_chemistry_cvode_absolute_tolerance
+        integer :: chemistry_cvode_max_steps = &
+            default_chemistry_cvode_max_steps
+        real(dp) :: chemistry_qss1_relative_change_limit = &
+            default_chemistry_qss1_relative_change_limit
+        real(dp) :: chemistry_qss1_minimum_internal_step = &
+            default_chemistry_qss1_minimum_internal_step
+        real(dp) :: chemistry_qss1_active_concentration_fraction = &
+            default_chemistry_qss1_active_fraction
+        real(dp) :: chemistry_qss1_step_growth_factor = &
+            default_chemistry_qss1_step_growth_factor
+        integer :: chemistry_qss1_max_steps = &
+            default_chemistry_qss1_max_steps
+        real(dp) :: chemistry_qss2_error_tolerance = &
+            default_chemistry_qss2_error_tolerance
+        real(dp) :: chemistry_qss2_minimum_internal_step = &
+            default_chemistry_qss2_minimum_internal_step
+        real(dp) :: chemistry_qss2_active_concentration_fraction = &
+            default_chemistry_qss2_active_fraction
+        integer :: chemistry_qss2_max_steps = &
+            default_chemistry_qss2_max_steps
+
         integer :: additional_particles_phases = 0
         integer :: particles_phase_counter = 0
         type(particles_phase), dimension(:), allocatable :: particles
@@ -77,6 +131,7 @@ module solver_options_class
         procedure, private :: read_properties
         procedure, private :: write_properties
         procedure, private :: set_properties
+        procedure, private :: set_chemistry_options
         procedure, private :: validate_phase
 
         procedure :: create_additional_phase
@@ -91,6 +146,23 @@ module solver_options_class
         procedure :: get_soret_diffusion_flag
         procedure :: get_viscosity_flag
         procedure :: get_chemical_reaction_flag
+        procedure :: get_chemistry_backend
+        procedure :: get_chemistry_slatec_accuracy
+        procedure :: get_chemistry_slatec_error_weight
+        procedure :: get_chemistry_slatec_max_internal_step
+        procedure :: get_chemistry_slatec_max_steps
+        procedure :: get_chemistry_cvode_relative_tolerance
+        procedure :: get_chemistry_cvode_absolute_tolerance
+        procedure :: get_chemistry_cvode_max_steps
+        procedure :: get_chemistry_qss1_relative_change_limit
+        procedure :: get_chemistry_qss1_minimum_internal_step
+        procedure :: get_chemistry_qss1_active_concentration_fraction
+        procedure :: get_chemistry_qss1_step_growth_factor
+        procedure :: get_chemistry_qss1_max_steps
+        procedure :: get_chemistry_qss2_error_tolerance
+        procedure :: get_chemistry_qss2_minimum_internal_step
+        procedure :: get_chemistry_qss2_active_concentration_fraction
+        procedure :: get_chemistry_qss2_max_steps
         procedure :: get_grav_acc
         procedure :: get_additional_particles_phases_number
         procedure :: get_particles_params
@@ -108,7 +180,17 @@ contains
         solver_name, hydrodynamics_flag, heat_transfer_flag, &
         molecular_diffusion_flag, viscosity_flag, thermal_radiation_flag, &
         chemical_reaction_flag, grav_acc, additional_particles_phases, &
-        CFL_flag, CFL_coefficient, initial_time_step, soret_diffusion_flag)
+        CFL_flag, CFL_coefficient, initial_time_step, soret_diffusion_flag, &
+        chemistry_backend, chemistry_slatec_accuracy, &
+        chemistry_slatec_error_weight, chemistry_slatec_max_internal_step, &
+        chemistry_slatec_max_steps, chemistry_cvode_relative_tolerance, &
+        chemistry_cvode_absolute_tolerance, chemistry_cvode_max_steps, &
+        chemistry_qss1_relative_change_limit, &
+        chemistry_qss1_minimum_internal_step, &
+        chemistry_qss1_active_concentration_fraction, &
+        chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+        chemistry_qss2_error_tolerance, chemistry_qss2_minimum_internal_step, &
+        chemistry_qss2_active_concentration_fraction, chemistry_qss2_max_steps)
 
         character(len=*), intent(in) :: solver_name
         logical, intent(in) :: hydrodynamics_flag
@@ -123,6 +205,25 @@ contains
         real(dp), intent(in) :: CFL_coefficient
         real(dp), intent(in) :: initial_time_step
         logical, intent(in), optional :: soret_diffusion_flag
+        character(len=*), intent(in), optional :: chemistry_backend
+        real(dp), intent(in), optional :: chemistry_slatec_accuracy
+        real(dp), intent(in), optional :: chemistry_slatec_error_weight
+        real(dp), intent(in), optional :: chemistry_slatec_max_internal_step
+        integer, intent(in), optional :: chemistry_slatec_max_steps
+        real(dp), intent(in), optional :: chemistry_cvode_relative_tolerance
+        real(dp), intent(in), optional :: chemistry_cvode_absolute_tolerance
+        integer, intent(in), optional :: chemistry_cvode_max_steps
+        real(dp), intent(in), optional :: chemistry_qss1_relative_change_limit
+        real(dp), intent(in), optional :: chemistry_qss1_minimum_internal_step
+        real(dp), intent(in), optional :: &
+            chemistry_qss1_active_concentration_fraction
+        real(dp), intent(in), optional :: chemistry_qss1_step_growth_factor
+        integer, intent(in), optional :: chemistry_qss1_max_steps
+        real(dp), intent(in), optional :: chemistry_qss2_error_tolerance
+        real(dp), intent(in), optional :: chemistry_qss2_minimum_internal_step
+        real(dp), intent(in), optional :: &
+            chemistry_qss2_active_concentration_fraction
+        integer, intent(in), optional :: chemistry_qss2_max_steps
 
         integer :: number_of_phases
         integer :: io_unit
@@ -144,6 +245,26 @@ contains
             molecular_diffusion_flag, soret_enabled, viscosity_flag, &
             radiation_enabled, chemical_reaction_flag, grav_acc, &
             number_of_phases, CFL_flag, CFL_coefficient, initial_time_step)
+
+        call constructor%set_chemistry_options( &
+            backend=chemistry_backend, &
+            slatec_accuracy=chemistry_slatec_accuracy, &
+            slatec_error_weight=chemistry_slatec_error_weight, &
+            slatec_max_internal_step=chemistry_slatec_max_internal_step, &
+            slatec_max_steps=chemistry_slatec_max_steps, &
+            cvode_relative_tolerance=chemistry_cvode_relative_tolerance, &
+            cvode_absolute_tolerance=chemistry_cvode_absolute_tolerance, &
+            cvode_max_steps=chemistry_cvode_max_steps, &
+            qss1_relative_change_limit=chemistry_qss1_relative_change_limit, &
+            qss1_minimum_internal_step=chemistry_qss1_minimum_internal_step, &
+            qss1_active_fraction= &
+                chemistry_qss1_active_concentration_fraction, &
+            qss1_step_growth_factor=chemistry_qss1_step_growth_factor, &
+            qss1_max_steps=chemistry_qss1_max_steps, &
+            qss2_error_tolerance=chemistry_qss2_error_tolerance, &
+            qss2_minimum_internal_step=chemistry_qss2_minimum_internal_step, &
+            qss2_active_fraction=chemistry_qss2_active_concentration_fraction, &
+            qss2_max_steps=chemistry_qss2_max_steps)
 
         open(newunit=io_unit, file=solver_data_file_name, status='replace', &
             form='formatted', delim='quote')
@@ -284,12 +405,41 @@ contains
         real(dp), dimension(3) :: grav_acc
         integer :: additional_particles_phases
         real(dp) :: CFL_coefficient, initial_time_step
+        character(len=option_name_length) :: chemistry_backend
+        real(dp) :: chemistry_slatec_accuracy
+        real(dp) :: chemistry_slatec_error_weight
+        real(dp) :: chemistry_slatec_max_internal_step
+        integer :: chemistry_slatec_max_steps
+        real(dp) :: chemistry_cvode_relative_tolerance
+        real(dp) :: chemistry_cvode_absolute_tolerance
+        integer :: chemistry_cvode_max_steps
+        real(dp) :: chemistry_qss1_relative_change_limit
+        real(dp) :: chemistry_qss1_minimum_internal_step
+        real(dp) :: chemistry_qss1_active_concentration_fraction
+        real(dp) :: chemistry_qss1_step_growth_factor
+        integer :: chemistry_qss1_max_steps
+        real(dp) :: chemistry_qss2_error_tolerance
+        real(dp) :: chemistry_qss2_minimum_internal_step
+        real(dp) :: chemistry_qss2_active_concentration_fraction
+        integer :: chemistry_qss2_max_steps
 
         namelist /solver_properties/ solver_name, hydrodynamics_flag, &
             heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
-            viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
-            additional_particles_phases, CFL_flag, CFL_coefficient, &
-            initial_time_step
+            viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, &
+            grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, &
+            initial_time_step, chemistry_backend, chemistry_slatec_accuracy, &
+            chemistry_slatec_error_weight, &
+            chemistry_slatec_max_internal_step, chemistry_slatec_max_steps, &
+            chemistry_cvode_relative_tolerance, &
+            chemistry_cvode_absolute_tolerance, chemistry_cvode_max_steps, &
+            chemistry_qss1_relative_change_limit, &
+            chemistry_qss1_minimum_internal_step, &
+            chemistry_qss1_active_concentration_fraction, &
+            chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+            chemistry_qss2_error_tolerance, &
+            chemistry_qss2_minimum_internal_step, &
+            chemistry_qss2_active_concentration_fraction, &
+            chemistry_qss2_max_steps
 
         solver_name = this%solver_name
         hydrodynamics_flag = this%hydrodynamics_flag
@@ -304,6 +454,32 @@ contains
         CFL_flag = this%CFL_flag
         CFL_coefficient = this%CFL_coefficient
         initial_time_step = this%initial_time_step
+        chemistry_backend = this%chemistry_backend
+        chemistry_slatec_accuracy = this%chemistry_slatec_accuracy
+        chemistry_slatec_error_weight = this%chemistry_slatec_error_weight
+        chemistry_slatec_max_internal_step = &
+            this%chemistry_slatec_max_internal_step
+        chemistry_slatec_max_steps = this%chemistry_slatec_max_steps
+        chemistry_cvode_relative_tolerance = &
+            this%chemistry_cvode_relative_tolerance
+        chemistry_cvode_absolute_tolerance = &
+            this%chemistry_cvode_absolute_tolerance
+        chemistry_cvode_max_steps = this%chemistry_cvode_max_steps
+        chemistry_qss1_relative_change_limit = &
+            this%chemistry_qss1_relative_change_limit
+        chemistry_qss1_minimum_internal_step = &
+            this%chemistry_qss1_minimum_internal_step
+        chemistry_qss1_active_concentration_fraction = &
+            this%chemistry_qss1_active_concentration_fraction
+        chemistry_qss1_step_growth_factor = &
+            this%chemistry_qss1_step_growth_factor
+        chemistry_qss1_max_steps = this%chemistry_qss1_max_steps
+        chemistry_qss2_error_tolerance = this%chemistry_qss2_error_tolerance
+        chemistry_qss2_minimum_internal_step = &
+            this%chemistry_qss2_minimum_internal_step
+        chemistry_qss2_active_concentration_fraction = &
+            this%chemistry_qss2_active_concentration_fraction
+        chemistry_qss2_max_steps = this%chemistry_qss2_max_steps
 
         write(unit=solver_data_unit, nml=solver_properties)
     end subroutine write_properties
@@ -321,16 +497,71 @@ contains
         real(dp), dimension(3) :: grav_acc
         integer :: additional_particles_phases
         real(dp) :: CFL_coefficient, initial_time_step
+        character(len=option_name_length) :: chemistry_backend
+        real(dp) :: chemistry_slatec_accuracy
+        real(dp) :: chemistry_slatec_error_weight
+        real(dp) :: chemistry_slatec_max_internal_step
+        integer :: chemistry_slatec_max_steps
+        real(dp) :: chemistry_cvode_relative_tolerance
+        real(dp) :: chemistry_cvode_absolute_tolerance
+        integer :: chemistry_cvode_max_steps
+        real(dp) :: chemistry_qss1_relative_change_limit
+        real(dp) :: chemistry_qss1_minimum_internal_step
+        real(dp) :: chemistry_qss1_active_concentration_fraction
+        real(dp) :: chemistry_qss1_step_growth_factor
+        integer :: chemistry_qss1_max_steps
+        real(dp) :: chemistry_qss2_error_tolerance
+        real(dp) :: chemistry_qss2_minimum_internal_step
+        real(dp) :: chemistry_qss2_active_concentration_fraction
+        integer :: chemistry_qss2_max_steps
 
         namelist /solver_properties/ solver_name, hydrodynamics_flag, &
             heat_transfer_flag, molecular_diffusion_flag, soret_diffusion_flag, &
-            viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, grav_acc, &
-            additional_particles_phases, CFL_flag, CFL_coefficient, &
-            initial_time_step
+            viscosity_flag, thermal_radiation_flag, chemical_reaction_flag, &
+            grav_acc, additional_particles_phases, CFL_flag, CFL_coefficient, &
+            initial_time_step, chemistry_backend, chemistry_slatec_accuracy, &
+            chemistry_slatec_error_weight, &
+            chemistry_slatec_max_internal_step, chemistry_slatec_max_steps, &
+            chemistry_cvode_relative_tolerance, &
+            chemistry_cvode_absolute_tolerance, chemistry_cvode_max_steps, &
+            chemistry_qss1_relative_change_limit, &
+            chemistry_qss1_minimum_internal_step, &
+            chemistry_qss1_active_concentration_fraction, &
+            chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+            chemistry_qss2_error_tolerance, &
+            chemistry_qss2_minimum_internal_step, &
+            chemistry_qss2_active_concentration_fraction, &
+            chemistry_qss2_max_steps
 
-        ! Preserve compatibility with solver-data files written before the
-        ! Soret option was introduced.
+        ! Preserve compatibility with solver-data files written before
+        ! Soret and chemistry-backend controls were introduced.
         soret_diffusion_flag = .false.
+        chemistry_backend = default_chemistry_backend
+        chemistry_slatec_accuracy = default_chemistry_slatec_accuracy
+        chemistry_slatec_error_weight = default_chemistry_slatec_error_weight
+        chemistry_slatec_max_internal_step = &
+            default_chemistry_slatec_max_internal_step
+        chemistry_slatec_max_steps = default_chemistry_slatec_max_steps
+        chemistry_cvode_relative_tolerance = &
+            default_chemistry_cvode_relative_tolerance
+        chemistry_cvode_absolute_tolerance = &
+            default_chemistry_cvode_absolute_tolerance
+        chemistry_cvode_max_steps = default_chemistry_cvode_max_steps
+        chemistry_qss1_relative_change_limit = &
+            default_chemistry_qss1_relative_change_limit
+        chemistry_qss1_minimum_internal_step = &
+            default_chemistry_qss1_minimum_internal_step
+        chemistry_qss1_active_concentration_fraction = &
+            default_chemistry_qss1_active_fraction
+        chemistry_qss1_step_growth_factor = &
+            default_chemistry_qss1_step_growth_factor
+        chemistry_qss1_max_steps = default_chemistry_qss1_max_steps
+        chemistry_qss2_error_tolerance = default_chemistry_qss2_error_tolerance
+        chemistry_qss2_minimum_internal_step = &
+            default_chemistry_qss2_minimum_internal_step
+        chemistry_qss2_active_concentration_fraction = &
+            default_chemistry_qss2_active_fraction
+        chemistry_qss2_max_steps = default_chemistry_qss2_max_steps
 
         read(unit=solver_data_unit, nml=solver_properties)
         call this%set_properties( &
@@ -339,6 +570,25 @@ contains
             thermal_radiation_flag, &
             chemical_reaction_flag, grav_acc, additional_particles_phases, &
             CFL_flag, CFL_coefficient, initial_time_step)
+        call this%set_chemistry_options( &
+            backend=chemistry_backend, &
+            slatec_accuracy=chemistry_slatec_accuracy, &
+            slatec_error_weight=chemistry_slatec_error_weight, &
+            slatec_max_internal_step=chemistry_slatec_max_internal_step, &
+            slatec_max_steps=chemistry_slatec_max_steps, &
+            cvode_relative_tolerance=chemistry_cvode_relative_tolerance, &
+            cvode_absolute_tolerance=chemistry_cvode_absolute_tolerance, &
+            cvode_max_steps=chemistry_cvode_max_steps, &
+            qss1_relative_change_limit=chemistry_qss1_relative_change_limit, &
+            qss1_minimum_internal_step=chemistry_qss1_minimum_internal_step, &
+            qss1_active_fraction= &
+                chemistry_qss1_active_concentration_fraction, &
+            qss1_step_growth_factor=chemistry_qss1_step_growth_factor, &
+            qss1_max_steps=chemistry_qss1_max_steps, &
+            qss2_error_tolerance=chemistry_qss2_error_tolerance, &
+            qss2_minimum_internal_step=chemistry_qss2_minimum_internal_step, &
+            qss2_active_fraction=chemistry_qss2_active_concentration_fraction, &
+            qss2_max_steps=chemistry_qss2_max_steps)
     end subroutine read_properties
 
 
@@ -391,6 +641,102 @@ contains
         if (allocated(this%particles)) deallocate(this%particles)
         allocate(this%particles(additional_particles_phases))
     end subroutine set_properties
+
+
+    subroutine set_chemistry_options(this, backend, slatec_accuracy, &
+            slatec_error_weight, slatec_max_internal_step, slatec_max_steps, &
+            cvode_relative_tolerance, cvode_absolute_tolerance, &
+            cvode_max_steps, qss1_relative_change_limit, &
+            qss1_minimum_internal_step, qss1_active_fraction, &
+            qss1_step_growth_factor, qss1_max_steps, &
+            qss2_error_tolerance, qss2_minimum_internal_step, &
+            qss2_active_fraction, qss2_max_steps)
+        class(solver_options), intent(inout) :: this
+        character(len=*), intent(in), optional :: backend
+        real(dp), intent(in), optional :: slatec_accuracy
+        real(dp), intent(in), optional :: slatec_error_weight
+        real(dp), intent(in), optional :: slatec_max_internal_step
+        integer, intent(in), optional :: slatec_max_steps
+        real(dp), intent(in), optional :: cvode_relative_tolerance
+        real(dp), intent(in), optional :: cvode_absolute_tolerance
+        integer, intent(in), optional :: cvode_max_steps
+        real(dp), intent(in), optional :: qss1_relative_change_limit
+        real(dp), intent(in), optional :: qss1_minimum_internal_step
+        real(dp), intent(in), optional :: qss1_active_fraction
+        real(dp), intent(in), optional :: qss1_step_growth_factor
+        integer, intent(in), optional :: qss1_max_steps
+        real(dp), intent(in), optional :: qss2_error_tolerance
+        real(dp), intent(in), optional :: qss2_minimum_internal_step
+        real(dp), intent(in), optional :: qss2_active_fraction
+        integer, intent(in), optional :: qss2_max_steps
+
+        if (present(backend)) this%chemistry_backend = lowercase(trim(backend))
+        if (present(slatec_accuracy)) &
+            this%chemistry_slatec_accuracy = slatec_accuracy
+        if (present(slatec_error_weight)) &
+            this%chemistry_slatec_error_weight = slatec_error_weight
+        if (present(slatec_max_internal_step)) &
+            this%chemistry_slatec_max_internal_step = slatec_max_internal_step
+        if (present(slatec_max_steps)) &
+            this%chemistry_slatec_max_steps = slatec_max_steps
+        if (present(cvode_relative_tolerance)) &
+            this%chemistry_cvode_relative_tolerance = cvode_relative_tolerance
+        if (present(cvode_absolute_tolerance)) &
+            this%chemistry_cvode_absolute_tolerance = cvode_absolute_tolerance
+        if (present(cvode_max_steps)) &
+            this%chemistry_cvode_max_steps = cvode_max_steps
+        if (present(qss1_relative_change_limit)) &
+            this%chemistry_qss1_relative_change_limit = &
+                qss1_relative_change_limit
+        if (present(qss1_minimum_internal_step)) &
+            this%chemistry_qss1_minimum_internal_step = &
+                qss1_minimum_internal_step
+        if (present(qss1_active_fraction)) &
+            this%chemistry_qss1_active_concentration_fraction = &
+                qss1_active_fraction
+        if (present(qss1_step_growth_factor)) &
+            this%chemistry_qss1_step_growth_factor = qss1_step_growth_factor
+        if (present(qss1_max_steps)) &
+            this%chemistry_qss1_max_steps = qss1_max_steps
+        if (present(qss2_error_tolerance)) &
+            this%chemistry_qss2_error_tolerance = qss2_error_tolerance
+        if (present(qss2_minimum_internal_step)) &
+            this%chemistry_qss2_minimum_internal_step = qss2_minimum_internal_step
+        if (present(qss2_active_fraction)) &
+            this%chemistry_qss2_active_concentration_fraction = qss2_active_fraction
+        if (present(qss2_max_steps)) &
+            this%chemistry_qss2_max_steps = qss2_max_steps
+
+        select case(trim(this%chemistry_backend))
+        case('slatec','cvode','qss1','qss2','qss2_fixed')
+        case default
+            error stop 'solver_options: unsupported chemistry backend'
+        end select
+        if (this%chemistry_slatec_accuracy <= 0.0_dp .or. &
+            this%chemistry_slatec_error_weight <= 0.0_dp .or. &
+            this%chemistry_slatec_max_internal_step <= 0.0_dp .or. &
+            this%chemistry_slatec_max_steps <= 0) then
+            error stop 'solver_options: invalid SLATEC chemistry controls'
+        end if
+        if (this%chemistry_cvode_relative_tolerance <= 0.0_dp .or. &
+            this%chemistry_cvode_absolute_tolerance <= 0.0_dp .or. &
+            this%chemistry_cvode_max_steps <= 0) then
+            error stop 'solver_options: invalid CVODE chemistry controls'
+        end if
+        if (this%chemistry_qss1_relative_change_limit <= 0.0_dp .or. &
+            this%chemistry_qss1_minimum_internal_step <= 0.0_dp .or. &
+            this%chemistry_qss1_active_concentration_fraction <= 0.0_dp .or. &
+            this%chemistry_qss1_step_growth_factor < 1.0_dp .or. &
+            this%chemistry_qss1_max_steps <= 0) then
+            error stop 'solver_options: invalid QSS1 chemistry controls'
+        end if
+        if (this%chemistry_qss2_error_tolerance <= 0.0_dp .or. &
+            this%chemistry_qss2_minimum_internal_step <= 0.0_dp .or. &
+            this%chemistry_qss2_active_concentration_fraction <= 0.0_dp .or. &
+            this%chemistry_qss2_max_steps <= 0) then
+            error stop 'solver_options: invalid QSS2 chemistry controls'
+        end if
+    end subroutine set_chemistry_options
 
 
     subroutine create_additional_phase(this, particles_parameters)
@@ -594,6 +940,8 @@ contains
             this%thermal_radiation_flag
         write(log_unit, '(A,L1)') ' Chemical reaction           : ', &
             this%chemical_reaction_flag
+        write(log_unit, '(A,A)') ' Chemistry backend           : ', &
+            trim(this%chemistry_backend)
         write(log_unit, '(A,3ES14.6)') ' Gravitational acceleration  : ', this%grav_acc
         write(log_unit, '(A,I0)') ' Dispersed phases            : ', &
             this%additional_particles_phases
@@ -659,6 +1007,111 @@ contains
         logical :: value
         value = this%chemical_reaction_flag
     end function get_chemical_reaction_flag
+
+    pure function get_chemistry_backend(this) result(value)
+        class(solver_options), intent(in) :: this
+        character(len=option_name_length) :: value
+        value = this%chemistry_backend
+    end function get_chemistry_backend
+
+    pure function get_chemistry_slatec_accuracy(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_slatec_accuracy
+    end function get_chemistry_slatec_accuracy
+
+    pure function get_chemistry_slatec_error_weight(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_slatec_error_weight
+    end function get_chemistry_slatec_error_weight
+
+    pure function get_chemistry_slatec_max_internal_step(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_slatec_max_internal_step
+    end function get_chemistry_slatec_max_internal_step
+
+    pure function get_chemistry_slatec_max_steps(this) result(value)
+        class(solver_options), intent(in) :: this
+        integer :: value
+        value = this%chemistry_slatec_max_steps
+    end function get_chemistry_slatec_max_steps
+
+    pure function get_chemistry_cvode_relative_tolerance(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_cvode_relative_tolerance
+    end function get_chemistry_cvode_relative_tolerance
+
+    pure function get_chemistry_cvode_absolute_tolerance(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_cvode_absolute_tolerance
+    end function get_chemistry_cvode_absolute_tolerance
+
+    pure function get_chemistry_cvode_max_steps(this) result(value)
+        class(solver_options), intent(in) :: this
+        integer :: value
+        value = this%chemistry_cvode_max_steps
+    end function get_chemistry_cvode_max_steps
+
+    pure function get_chemistry_qss1_relative_change_limit(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss1_relative_change_limit
+    end function get_chemistry_qss1_relative_change_limit
+
+    pure function get_chemistry_qss1_minimum_internal_step(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss1_minimum_internal_step
+    end function get_chemistry_qss1_minimum_internal_step
+
+    pure function get_chemistry_qss1_active_concentration_fraction(this) &
+            result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss1_active_concentration_fraction
+    end function get_chemistry_qss1_active_concentration_fraction
+
+    pure function get_chemistry_qss1_step_growth_factor(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss1_step_growth_factor
+    end function get_chemistry_qss1_step_growth_factor
+
+    pure function get_chemistry_qss1_max_steps(this) result(value)
+        class(solver_options), intent(in) :: this
+        integer :: value
+        value = this%chemistry_qss1_max_steps
+    end function get_chemistry_qss1_max_steps
+
+    pure function get_chemistry_qss2_error_tolerance(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss2_error_tolerance
+    end function get_chemistry_qss2_error_tolerance
+
+    pure function get_chemistry_qss2_minimum_internal_step(this) result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss2_minimum_internal_step
+    end function get_chemistry_qss2_minimum_internal_step
+
+    pure function get_chemistry_qss2_active_concentration_fraction(this) &
+            result(value)
+        class(solver_options), intent(in) :: this
+        real(dp) :: value
+        value = this%chemistry_qss2_active_concentration_fraction
+    end function get_chemistry_qss2_active_concentration_fraction
+
+    pure function get_chemistry_qss2_max_steps(this) result(value)
+        class(solver_options), intent(in) :: this
+        integer :: value
+        value = this%chemistry_qss2_max_steps
+    end function get_chemistry_qss2_max_steps
+
 
     pure function get_additional_particles_phases_number(this) result(value)
         class(solver_options), intent(in) :: this

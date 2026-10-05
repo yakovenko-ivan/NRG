@@ -128,6 +128,32 @@ program package_interface
     cfl_enabled, cfl_coefficient
 
     !--------------------------------------------------------------------------
+    ! Chemistry backend
+    !--------------------------------------------------------------------------
+    character(len=24) :: chemistry_backend
+    real(dp) :: chemistry_cvode_relative_tolerance
+    real(dp) :: chemistry_cvode_absolute_tolerance
+    integer :: chemistry_cvode_max_steps
+    real(dp) :: chemistry_qss1_relative_change_limit
+    real(dp) :: chemistry_qss1_minimum_internal_step
+    real(dp) :: chemistry_qss1_active_concentration_fraction
+    real(dp) :: chemistry_qss1_step_growth_factor
+    integer :: chemistry_qss1_max_steps
+    real(dp) :: chemistry_qss2_error_tolerance
+    real(dp) :: chemistry_qss2_minimum_internal_step
+    real(dp) :: chemistry_qss2_active_concentration_fraction
+    integer :: chemistry_qss2_max_steps
+
+    namelist /chemistry_backend_config/ chemistry_backend, &
+        chemistry_cvode_relative_tolerance, chemistry_cvode_absolute_tolerance, &
+        chemistry_cvode_max_steps, chemistry_qss1_relative_change_limit, &
+        chemistry_qss1_minimum_internal_step, &
+        chemistry_qss1_active_concentration_fraction, &
+        chemistry_qss1_step_growth_factor, chemistry_qss1_max_steps, &
+        chemistry_qss2_error_tolerance, chemistry_qss2_minimum_internal_step, &
+        chemistry_qss2_active_concentration_fraction, chemistry_qss2_max_steps
+
+    !--------------------------------------------------------------------------
     ! Run control
     !--------------------------------------------------------------------------
     character(len=24) :: termination_mode
@@ -212,8 +238,22 @@ program package_interface
     checkpoint_interval_us   = 25.0_dp
     save_spatial_fields      = .true.
     
-    thermo_data_file        = 'COMMON_THERMO.txt'
-    transport_data_file     = 'COMMON_TRANSDATA.txt'
+    thermo_data_file        = 'KEROMNES_THERMO.txt'
+    transport_data_file     = 'KEROMNES_TRANSDATA.txt'
+
+    chemistry_backend = 'slatec'
+    chemistry_cvode_relative_tolerance = 1.0e-8_dp
+    chemistry_cvode_absolute_tolerance = 1.0e-12_dp
+    chemistry_cvode_max_steps = 10000
+    chemistry_qss1_relative_change_limit = 5.0e-2_dp
+    chemistry_qss1_minimum_internal_step = 1.0e-9_dp
+    chemistry_qss1_active_concentration_fraction = 1.0e-7_dp
+    chemistry_qss1_step_growth_factor = 1.04_dp
+    chemistry_qss1_max_steps = 100000
+    chemistry_qss2_error_tolerance = 1.0e-3_dp
+    chemistry_qss2_minimum_internal_step = 1.0e-10_dp
+    chemistry_qss2_active_concentration_fraction = 1.0e-7_dp
+    chemistry_qss2_max_steps = 100000
 
     !--------------------------------------------------------------------------
     ! Read configuration. Group order in the file is irrelevant.
@@ -248,6 +288,10 @@ program package_interface
     rewind(io_unit)
     read(io_unit, nml=physics_config, iostat=ierr, iomsg=iomsg)
     if (ierr /= 0) call namelist_error('physics_config', iomsg)
+
+    rewind(io_unit)
+    read(io_unit, nml=chemistry_backend_config, iostat=ierr, iomsg=iomsg)
+    if (ierr /= 0) call namelist_error('chemistry_backend_config', iomsg)
 
     rewind(io_unit)
     read(io_unit, nml=run_control_config, iostat=ierr, iomsg=iomsg)
@@ -327,7 +371,7 @@ program package_interface
         chemistry                   = problem_chemistry, &
         thermo_data_file_name       = trim(thermo_file), &
         transport_data_file_name    = trim(transdata_file), &
-        molar_masses_data_file_name = 'molar_masses.dat')
+        molar_masses_data_file_name = '')
 
     problem_mpi_support = mpi_communications_c(problem_domain)
 
@@ -347,7 +391,25 @@ program package_interface
         additional_particles_phases = 0, &
         CFL_flag                     = cfl_enabled, &
         CFL_coefficient              = cfl_coefficient, &
-        initial_time_step            = initial_time_step)
+        initial_time_step            = initial_time_step, &
+        chemistry_backend             = trim(chemistry_backend), &
+        chemistry_cvode_relative_tolerance = chemistry_cvode_relative_tolerance, &
+        chemistry_cvode_absolute_tolerance = chemistry_cvode_absolute_tolerance, &
+        chemistry_cvode_max_steps     = chemistry_cvode_max_steps, &
+        chemistry_qss1_relative_change_limit = &
+            chemistry_qss1_relative_change_limit, &
+        chemistry_qss1_minimum_internal_step = &
+            chemistry_qss1_minimum_internal_step, &
+        chemistry_qss1_active_concentration_fraction = &
+            chemistry_qss1_active_concentration_fraction, &
+        chemistry_qss1_step_growth_factor = chemistry_qss1_step_growth_factor, &
+        chemistry_qss1_max_steps      = chemistry_qss1_max_steps, &
+        chemistry_qss2_error_tolerance = chemistry_qss2_error_tolerance, &
+        chemistry_qss2_minimum_internal_step = &
+            chemistry_qss2_minimum_internal_step, &
+        chemistry_qss2_active_concentration_fraction = &
+            chemistry_qss2_active_concentration_fraction, &
+        chemistry_qss2_max_steps      = chemistry_qss2_max_steps)
 
     problem_data_manager = data_manager_c( &
         problem_domain, problem_mpi_support, problem_chemistry, &
@@ -497,6 +559,7 @@ program package_interface
     write(log_unit,'(A,A)') 'Thermodynamic database: ', trim(thermo_file)
     write(log_unit,'(A,A)') 'Transport database: ', trim(transdata_file)    
     write(log_unit,'(A,A)') 'Solver: ', trim(solver_name)
+    write(log_unit,'(A,A)') 'Chemistry backend: ', trim(chemistry_backend)
     write(log_unit,'(A,ES14.6)') 'Initial time step [s]: ', initial_time_step
     write(log_unit,'(A,A)') 'Termination mode: ', trim(termination_mode)
     write(log_unit,'(A,I0)') 'Reactor-history operations: ', operations_number
@@ -561,6 +624,19 @@ contains
         write(info_unit,'(A)') repeat('-',72)
         write(info_unit,'(A,A)') 'Mechanism: ', trim(mechanism_name)
         write(info_unit,'(A,A)') 'Solver: ', trim(solver_name)
+        write(info_unit,'(A,A)') 'Chemistry backend: ', trim(chemistry_backend)
+        if (trim(chemistry_backend) == 'qss1') then
+            write(info_unit,'(A,ES16.8)') 'QSS1 relative change limit: ', &
+                chemistry_qss1_relative_change_limit
+            write(info_unit,'(A,ES16.8)') 'QSS1 minimum internal step [s]: ', &
+                chemistry_qss1_minimum_internal_step
+        end if
+        if (trim(chemistry_backend) == 'qss2') then
+            write(info_unit,'(A,ES16.8)') 'QSS2 embedded error tolerance: ', &
+                chemistry_qss2_error_tolerance
+            write(info_unit,'(A,ES16.8)') 'QSS2 minimum internal step [s]: ', &
+                chemistry_qss2_minimum_internal_step
+        end if
         write(info_unit,'(A,ES16.8)') 'Initial time step [s]: ', initial_time_step
         write(info_unit,'(A,L1)') 'CFL enabled: ', cfl_enabled
         write(info_unit,'(A,F10.4)') 'CFL coefficient: ', cfl_coefficient
@@ -623,6 +699,7 @@ contains
         reactor_type     = to_lower_ascii(adjustl(reactor_type))
         mechanism_id     = to_lower_ascii(adjustl(mechanism_id))
         solver_id        = to_lower_ascii(adjustl(solver_id))
+        chemistry_backend = to_lower_ascii(adjustl(chemistry_backend))
         termination_mode = to_lower_ascii(adjustl(termination_mode))
 
         if (len_trim(case_directory) == 0) case_directory = case_id
@@ -652,6 +729,29 @@ contains
         end if
         if (initial_time_step <= 0.0_dp) then
             error stop 'ERROR: initial_time_step must be positive.'
+        end if
+        select case(trim(chemistry_backend))
+        case('slatec','cvode','qss1','qss2')
+        case default
+            error stop "ERROR: chemistry_backend must be slatec, cvode, qss1, or qss2."
+        end select
+        if (chemistry_cvode_relative_tolerance <= 0.0_dp .or. &
+            chemistry_cvode_absolute_tolerance <= 0.0_dp .or. &
+            chemistry_cvode_max_steps <= 0) then
+            error stop 'ERROR: invalid CVODE chemistry controls.'
+        end if
+        if (chemistry_qss1_relative_change_limit <= 0.0_dp .or. &
+            chemistry_qss1_minimum_internal_step <= 0.0_dp .or. &
+            chemistry_qss1_active_concentration_fraction <= 0.0_dp .or. &
+            chemistry_qss1_step_growth_factor < 1.0_dp .or. &
+            chemistry_qss1_max_steps <= 0) then
+            error stop 'ERROR: invalid QSS1 chemistry controls.'
+        end if
+        if (chemistry_qss2_error_tolerance <= 0.0_dp .or. &
+            chemistry_qss2_minimum_internal_step <= 0.0_dp .or. &
+            chemistry_qss2_active_concentration_fraction <= 0.0_dp .or. &
+            chemistry_qss2_max_steps <= 0) then
+            error stop 'ERROR: invalid QSS2 chemistry controls.'
         end if
         if (cfl_coefficient <= 0.0_dp .or. cfl_coefficient > 1.0_dp) then
             error stop 'ERROR: cfl_coefficient must lie in (0,1].'
@@ -697,14 +797,20 @@ contains
         case('keromnes')
             mechanism_name = 'KEROMNES'
             mech_file = 'KEROMNES.txt'
+            thermo_data_file = 'KEROMNES_THERMO.txt'
+            transport_data_file = 'KEROMNES_TRANSDATA.txt'
 
         case('konnov')
             mechanism_name = 'KONNOV'
             mech_file = 'KONNOV.txt'
+            thermo_data_file = 'KONNOV_THERMO.txt'
+            transport_data_file = 'KONNOV_TRANSDATA.txt'
 
         case('zhang')
             mechanism_name = 'ZHANG'
             mech_file = 'ZHANG.txt'
+            thermo_data_file = 'ZHANG_THERMO.txt'
+            transport_data_file = 'ZHANG_TRANSDATA.txt'
 
         case('gerasimov_shatalov2013')
             mechanism_name = 'GERASIMOV_SHATALOV_2013'
@@ -732,7 +838,9 @@ contains
             
         case('tereza')
             mechanism_name = 'TEREZA'
-            mech_file = 'TEREZA_orig.txt'
+            mech_file = 'TEREZA.txt'
+            thermo_data_file = 'TEREZA_THERMO.txt'
+            transport_data_file = 'TEREZA_TRANSDATA.txt'
             
         case('hong2010')
             mechanism_name = 'HONG_2010'

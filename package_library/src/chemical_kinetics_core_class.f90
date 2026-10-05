@@ -74,6 +74,7 @@ module chemical_kinetics_core_class
     contains
         procedure :: prepare_rate_state
         procedure :: calculate_species_rates
+        procedure :: calculate_production_loss
         procedure :: third_body_concentration
         procedure :: effective_rate_constants
         procedure :: effective_forward_rate_coefficient
@@ -762,6 +763,101 @@ contains
             end do
         end do
     end subroutine calculate_species_rates
+
+
+    subroutine calculate_production_loss(this,state,concentration,production, &
+            destruction)
+        class(chemical_kinetics_core), intent(in) :: this
+        type(chemical_rate_state), intent(in) :: state
+        real(dp), dimension(:), intent(in) :: concentration
+        real(dp), dimension(:), intent(out) :: production,destruction
+
+        integer :: reaction,component,multiplicity,specie_index
+        real(dp) :: forward_rate,reverse_rate
+        real(dp) :: forward_constant,reverse_constant
+        real(dp) :: third_body,total_concentration,positive_concentration
+        real(dp) :: stoichiometric_rate
+
+        if (size(concentration) /= this%species_number .or. &
+            size(production) /= this%species_number .or. &
+            size(destruction) /= this%species_number) then
+            error stop 'Chemical kinetics core: production/loss array size mismatch'
+        end if
+        if (.not. allocated(state%high_pressure_rate)) then
+            error stop 'Chemical kinetics core: rate state is not prepared'
+        end if
+
+        production = 0.0_dp
+        destruction = 0.0_dp
+        total_concentration = 0.0_dp
+        if (this%has_any_third_body_reaction) then
+            total_concentration = sum(max(concentration,0.0_dp))
+        end if
+
+        do reaction = 1,this%reactions_number
+            third_body = 0.0_dp
+            if (this%reaction_uses_third_body(reaction)) then
+                third_body = this%third_body_concentration( &
+                    reaction,concentration,total_concentration)
+            end if
+
+            call this%effective_rate_constants(state,reaction,third_body, &
+                forward_constant,reverse_constant)
+
+            forward_rate = forward_constant
+            do component = 1,this%reactant_count(reaction)
+                specie_index = this%reactant_species(component,reaction)
+                positive_concentration = max(concentration(specie_index),0.0_dp)
+                do multiplicity = 1, &
+                        this%reactant_multiplicity(component,reaction)
+                    forward_rate = forward_rate*positive_concentration
+                end do
+            end do
+            do multiplicity = 1,this%forward_third_body_power(reaction)
+                forward_rate = forward_rate*third_body
+            end do
+
+            reverse_rate = reverse_constant
+            do component = 1,this%product_count(reaction)
+                specie_index = this%product_species(component,reaction)
+                positive_concentration = max(concentration(specie_index),0.0_dp)
+                do multiplicity = 1, &
+                        this%product_multiplicity(component,reaction)
+                    reverse_rate = reverse_rate*positive_concentration
+                end do
+            end do
+            do multiplicity = 1,this%reverse_third_body_power(reaction)
+                reverse_rate = reverse_rate*third_body
+            end do
+
+            if (.not. ieee_is_finite(forward_rate) .or. &
+                .not. ieee_is_finite(reverse_rate)) then
+                error stop 'Chemical kinetics core: non-finite production/loss rate'
+            end if
+
+            ! Gross production/destruction decomposition, as required by QSS.
+            ! A species appearing on both sides contributes to both terms.
+            do component = 1,this%reactant_count(reaction)
+                specie_index = this%reactant_species(component,reaction)
+                stoichiometric_rate = real( &
+                    this%reactant_multiplicity(component,reaction),dp)
+                destruction(specie_index) = destruction(specie_index) + &
+                    stoichiometric_rate*forward_rate
+                production(specie_index) = production(specie_index) + &
+                    stoichiometric_rate*reverse_rate
+            end do
+
+            do component = 1,this%product_count(reaction)
+                specie_index = this%product_species(component,reaction)
+                stoichiometric_rate = real( &
+                    this%product_multiplicity(component,reaction),dp)
+                production(specie_index) = production(specie_index) + &
+                    stoichiometric_rate*forward_rate
+                destruction(specie_index) = destruction(specie_index) + &
+                    stoichiometric_rate*reverse_rate
+            end do
+        end do
+    end subroutine calculate_production_loss
 
 
     logical function reaction_matches(this,reaction,reactants,reactant_nu, &
