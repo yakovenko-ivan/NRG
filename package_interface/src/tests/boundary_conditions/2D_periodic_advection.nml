@@ -1,0 +1,68 @@
+!===============================================================================
+! P2: 2-D periodic-y species-wave advection verification for FDS low Mach.
+!
+! Exact reference:
+!   Y_O2(y,t) = 0.20 + 0.05*sin(2*pi*(y-v_y*t)/Ly)
+!   Y_N2(y,t) = 0.80 - 0.05*sin(2*pi*(y-v_y*t)/Ly)
+!
+! With Ly=6.4e-3 m and v_y=1 m/s, one traversal is 6.4e-3 s.
+! Fixed dt=1.0e-5 s gives exactly 640 steps per traversal.
+!===============================================================================
+
+&case_config
+    case_id                  = 'periodic_y_species_wave'
+    results_root             = '2D_periodic_boundary_tests'
+    overwrite_existing_case  = .true.
+/
+
+&mixture_config
+    mechanism_id                = 'keromnes'
+    operating_pressure          = 101325.0
+    temperature                 = 300.0
+    wave_species                = 'O2'
+    carrier_species             = 'N2'
+    wave_mean_mass_fraction     = 0.20
+    carrier_mean_mass_fraction  = 0.80
+/
+
+&domain_config
+    domain_length_x = 1.6e-3
+    domain_length_y = 6.4e-3
+    cells_x         = 16
+    cells_y         = 64
+    periodic_x      = .false.
+    periodic_y      = .true.
+/
+
+&initial_velocity_config
+    velocity_x = 0.0
+    velocity_y = 1.0
+/
+
+&species_wave_config
+    wave_amplitude = 0.05
+    wave_mode      = 1
+    wave_phase     = 0.0
+/
+
+&physics_config
+    chemical_reaction_flag   = .false.
+    molecular_diffusion_flag = .false.
+    soret_diffusion_flag     = .false.
+    viscosity_flag           = .false.
+    heat_transfer_flag       = .false.
+    thermal_radiation_flag   = .false.
+/
+
+&numerics_config
+    cfl_flag          = .false.
+    cfl_coefficient   = 0.25
+    initial_time_step = 1.0e-5
+    final_time        = 6.4e-3
+/
+
+&output_config
+    field_save_interval_us     = 200.0
+    restart_check_interval_ms  = 1000.0
+    wall_time_output_limit_min = 240.0
+/

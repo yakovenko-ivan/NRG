@@ -1,0 +1,74 @@
+&case_config
+  case_id = 'periodic_y_planar'
+  results_root = '2D_periodic_boundary_tests'
+  overwrite_existing_case = .true.
+/
+
+&mixture_config
+  hydrogen_mole_percent = 15.0
+  n2_o2_molar_ratio = 3.762
+  operating_pressure = 506625.0
+  fresh_temperature = 300.0
+  burned_temperature = 1500.0
+  inlet_velocity = 0.30
+/
+
+&geometry_config
+  domain_length = 6.4e-3
+  domain_width = 6.4e-3
+  cell_size_xy = 5.0e-5
+  front_position_fraction = 0.65
+  perturbation_amplitude = 0.0
+  perturbation_mode = 1
+  random_jitter_amplitude = 0.0
+  random_seed_value = 20261005
+  transverse_periodic = .true.
+/
+
+&physics_config
+  mechanism_id = 'keromnes'
+  molecular_diffusion_flag = .true.
+  soret_diffusion_flag = .true.
+  viscosity_flag = .true.
+  thermal_radiation_flag = .false.
+/
+
+&numerics_config
+  cfl_coefficient = 0.25
+  initial_time_step = 1.0e-7
+/
+
+&flame_stabilization_config
+  flame_stabilization_mode = 'none'
+  scientific_result_title = 'Periodic-y planar flame invariance test'
+  flame_case_setup = '2D_periodic_validation'
+  flame_time_delay = 1.0e-3
+  flame_time_track = 1.0e-4
+  flame_time_control = 5.0e-4
+  flame_response_settle_time = 5.0e-4
+  flame_measurement_max_duration = 1.0
+  flame_measurement_min_displacement_cells = 0.25
+/
+
+&chemistry_backend_config
+  chemistry_backend = 'qss2'
+  chemistry_cvode_relative_tolerance = 1.0e-8
+  chemistry_cvode_absolute_tolerance = 1.0e-12
+  chemistry_cvode_max_steps = 100000
+  chemistry_qss1_relative_change_limit = 2.0e-3
+  chemistry_qss1_minimum_internal_step = 1.0e-10
+  chemistry_qss1_active_concentration_fraction = 1.0e-7
+  chemistry_qss1_step_growth_factor = 1.04
+  chemistry_qss1_max_steps = 100000
+  chemistry_qss2_error_tolerance = 1.0e-3
+  chemistry_qss2_minimum_internal_step = 1.0e-10
+  chemistry_qss2_active_concentration_fraction = 1.0e-7
+  chemistry_qss2_max_steps = 100000
+/
+
+&output_config
+  postprocess_interval_us = 5.0
+  field_save_interval_us = 50.0
+  restart_check_interval_ms = 1.0
+  wall_time_output_limit_min = 30.0
+/
