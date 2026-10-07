@@ -75,6 +75,7 @@ module elliptic_multigrid_solver_class
         integer :: ny = 1
         integer :: nz = 1
         integer :: dimensions = 1
+        logical, dimension(3) :: periodic = .false.
         real(dp), allocatable :: x(:,:,:)
         real(dp), allocatable :: rhs(:,:,:)
         real(dp), allocatable :: residual(:,:,:)
@@ -106,6 +107,7 @@ module elliptic_multigrid_solver_class
         ! Repeated solves may then replace only the finest RHS/initial guess.
         logical :: operator_prepared = .false.
         logical :: prepared_pure_neumann = .false.
+        logical, dimension(3) :: prepared_periodic = .false.
         integer :: prepared_dimensions = 0
         type(multigrid_level), allocatable :: level(:)
     contains
@@ -135,8 +137,9 @@ contains
     !! hierarchy from the caller-supplied operator on every call.  Callers with
     !! a demonstrably invariant operator may instead call prepare() once and
     !! solve_prepared() repeatedly.
+
     subroutine solve_elliptic_problem(this, solution, rhs, conductance_x, conductance_y, conductance_z, &
-        cell_volume, active, boundary, dimensions, use_initial_guess, statistics)
+        cell_volume, active, boundary, dimensions, use_initial_guess, statistics, periodic)
 
         class(elliptic_multigrid_solver), intent(inout) :: this
         real(dp), intent(inout) :: solution(:,:,:)
@@ -150,29 +153,40 @@ contains
         integer, intent(in) :: dimensions
         logical, intent(in), optional :: use_initial_guess
         type(elliptic_solver_statistics), intent(out), optional :: statistics
+        logical, dimension(3), intent(in), optional :: periodic
 
         type(elliptic_solver_statistics) :: stat
         logical :: warm_start, pure_neumann
+        logical, dimension(3) :: periodic_axes
+
+        periodic_axes = .false.
+        if (present(periodic)) periodic_axes = periodic
+        if (dimensions < 3) periodic_axes(dimensions+1:3) = .false.
 
         call validate_problem(solution, rhs, conductance_x, conductance_y, conductance_z, &
             cell_volume, active, boundary, dimensions)
+        call validate_periodic_boundary_data(boundary, periodic_axes, dimensions)
         call validate_solver_controls(this)
 
         warm_start = .false.
         if (present(use_initial_guess)) warm_start = use_initial_guess
         pure_neumann = .not. has_active_dirichlet_boundary(active, boundary, dimensions)
 
-        ! Preserve the original direct path for ordinary one-shot 1-D solves.
         if (dimensions == 1 .and. all(active)) then
             call this%invalidate()
-            call solve_tridiagonal_1d(solution, rhs, conductance_x, cell_volume, boundary, &
-                pure_neumann, this%relative_tolerance, this%absolute_tolerance, stat)
+            if (periodic_axes(1)) then
+                call solve_periodic_tridiagonal_1d(solution, rhs, conductance_x, cell_volume, &
+                    this%relative_tolerance, this%absolute_tolerance, stat)
+            else
+                call solve_tridiagonal_1d(solution, rhs, conductance_x, cell_volume, boundary, &
+                    pure_neumann, this%relative_tolerance, this%absolute_tolerance, stat)
+            end if
             if (present(statistics)) statistics = stat
             return
         end if
 
         call this%prepare(conductance_x, conductance_y, conductance_z, cell_volume, active, &
-            boundary, dimensions)
+            boundary, dimensions, periodic=periodic_axes)
         call this%solve_prepared(solution, rhs, warm_start, stat)
         if (present(statistics)) statistics = stat
     end subroutine solve_elliptic_problem
@@ -183,8 +197,9 @@ contains
     !! The prepared state is valid only while conductances, active mask, cell
     !! volumes, boundary types/values, dimensions and grid shape are unchanged.
     !! The caller owns that lifetime contract and can explicitly invalidate it.
+
     subroutine prepare_elliptic_operator(this, conductance_x, conductance_y, conductance_z, &
-        cell_volume, active, boundary, dimensions)
+        cell_volume, active, boundary, dimensions, periodic)
 
         class(elliptic_multigrid_solver), intent(inout) :: this
         real(dp), intent(in) :: conductance_x(:,:,:), conductance_y(:,:,:), conductance_z(:,:,:)
@@ -192,17 +207,28 @@ contains
         logical, intent(in) :: active(:,:,:)
         type(elliptic_boundary_data), intent(in) :: boundary
         integer, intent(in) :: dimensions
+        logical, dimension(3), intent(in), optional :: periodic
 
-        integer :: nx, ny, nz
+        integer :: nx, ny, nz, level_index
+        logical, dimension(3) :: periodic_axes
 
         nx = size(active,1)
         ny = size(active,2)
         nz = size(active,3)
+        periodic_axes = .false.
+        if (present(periodic)) periodic_axes = periodic
+        if (dimensions < 3) periodic_axes(dimensions+1:3) = .false.
+
         call validate_operator_data(conductance_x, conductance_y, conductance_z, cell_volume, &
             active, boundary, dimensions)
+        call validate_periodic_boundary_data(boundary, periodic_axes, dimensions)
         call validate_solver_controls(this)
 
         call this%build_hierarchy(nx, ny, nz, dimensions)
+        do level_index = 1, size(this%level)
+            this%level(level_index)%periodic = periodic_axes
+        end do
+
         this%level(1)%rhs = 0.0_dp
         this%level(1)%volume = cell_volume
         this%level(1)%active = active
@@ -215,12 +241,14 @@ contains
 
         this%prepared_pure_neumann = &
             .not. has_active_dirichlet_boundary(active, boundary, dimensions)
+        this%prepared_periodic = periodic_axes
         this%prepared_dimensions = dimensions
         this%operator_prepared = .true.
     end subroutine prepare_elliptic_operator
 
 
     !> Solve a new right-hand side using an already prepared operator hierarchy.
+
     subroutine solve_prepared_elliptic_problem(this, solution, rhs, use_initial_guess, statistics)
         class(elliptic_multigrid_solver), intent(inout) :: this
         real(dp), intent(inout) :: solution(:,:,:)
@@ -247,11 +275,15 @@ contains
         warm_start = .false.
         if (present(use_initial_guess)) warm_start = use_initial_guess
 
-        ! Prepared 1-D systems can still use the direct tridiagonal path.
         if (this%prepared_dimensions == 1 .and. all(this%level(1)%active)) then
-            call solve_tridiagonal_1d(solution, rhs, this%level(1)%conductance_x, &
-                this%level(1)%volume, this%level(1)%boundary, this%prepared_pure_neumann, &
-                this%relative_tolerance, this%absolute_tolerance, stat)
+            if (this%prepared_periodic(1)) then
+                call solve_periodic_tridiagonal_1d(solution, rhs, this%level(1)%conductance_x, &
+                    this%level(1)%volume, this%relative_tolerance, this%absolute_tolerance, stat)
+            else
+                call solve_tridiagonal_1d(solution, rhs, this%level(1)%conductance_x, &
+                    this%level(1)%volume, this%level(1)%boundary, this%prepared_pure_neumann, &
+                    this%relative_tolerance, this%absolute_tolerance, stat)
+            end if
             if (present(statistics)) statistics = stat
             return
         end if
@@ -304,10 +336,12 @@ contains
 
 
     !> Mark the retained hierarchy unusable without forcing immediate deallocation.
+
     subroutine invalidate_prepared_operator(this)
         class(elliptic_multigrid_solver), intent(inout) :: this
         this%operator_prepared = .false.
         this%prepared_pure_neumann = .false.
+        this%prepared_periodic = .false.
         this%prepared_dimensions = 0
     end subroutine invalidate_prepared_operator
 
@@ -406,6 +440,122 @@ contains
         statistics%relative_residual = statistics%final_residual/max(forcing_norm, tiny(1.0_dp))
         statistics%converged = statistics%final_residual <= tolerance
     end subroutine solve_tridiagonal_1d
+
+
+    !> Direct solve for an all-active one-dimensional periodic operator.
+    !! The periodic Laplacian has the same constant null space as a pure-Neumann
+    !! problem.  Compatibility is enforced, cell 1 is temporarily pinned to
+    !! zero, the remaining (n-1)x(n-1) tridiagonal block is solved, and the
+    !! volume-weighted mean is removed afterwards.
+    subroutine solve_periodic_tridiagonal_1d(solution, rhs, conductance_x, cell_volume, &
+        relative_tolerance, absolute_tolerance, statistics)
+
+        real(dp), intent(inout) :: solution(:,:,:)
+        real(dp), intent(in) :: rhs(:,:,:)
+        real(dp), intent(in) :: conductance_x(:,:,:)
+        real(dp), intent(in) :: cell_volume(:,:,:)
+        real(dp), intent(in) :: relative_tolerance, absolute_tolerance
+        type(elliptic_solver_statistics), intent(out) :: statistics
+
+        real(dp), allocatable :: lower(:), diagonal(:), upper(:), source(:)
+        real(dp), allocatable :: compatible_rhs(:), x_line(:)
+        real(dp) :: factor, forcing_norm, tolerance, seam_conductance
+        real(dp) :: left_g, right_g, residual
+        integer :: n, m, i, left_i, right_i
+
+        statistics = elliptic_solver_statistics()
+        n = size(rhs,1)
+        if (n < 1) error stop 'Elliptic periodic 1-D solver: empty system'
+
+        allocate(compatible_rhs(n), x_line(n))
+        compatible_rhs = rhs(:,1,1)
+        statistics%compatibility_correction = &
+            sum(compatible_rhs*cell_volume(:,1,1))/sum(cell_volume(:,1,1))
+        compatible_rhs = compatible_rhs - statistics%compatibility_correction
+
+        if (n == 1) then
+            solution(1,1,1) = 0.0_dp
+            statistics%cycles = 1
+            statistics%initial_residual = abs(compatible_rhs(1))
+            statistics%final_residual = 0.0_dp
+            statistics%relative_residual = 0.0_dp
+            statistics%converged = .true.
+            return
+        end if
+
+        seam_conductance = 0.5_dp*(conductance_x(1,1,1) + conductance_x(n+1,1,1))
+        if (seam_conductance <= tiny(1.0_dp)) &
+            error stop 'Elliptic periodic 1-D solver: non-positive seam conductance'
+
+        allocate(lower(n-1), diagonal(n-1), upper(n-1), source(n-1))
+        lower = 0.0_dp
+        diagonal = 0.0_dp
+        upper = 0.0_dp
+        source = 0.0_dp
+
+        ! Unknowns are original cells 2:n; original cell 1 is pinned to zero.
+        do i = 2, n
+            m = i - 1
+            left_g = conductance_x(i,1,1)
+            if (i == n) then
+                right_g = seam_conductance
+            else
+                right_g = conductance_x(i+1,1,1)
+            end if
+            diagonal(m) = left_g + right_g
+            if (i > 2) lower(m) = -left_g
+            if (i < n) upper(m) = -right_g
+            source(m) = compatible_rhs(i)*cell_volume(i,1,1)
+        end do
+
+        do m = 2, n-1
+            if (abs(diagonal(m-1)) <= tiny(1.0_dp)) &
+                error stop 'Elliptic periodic 1-D solver: zero pivot'
+            factor = lower(m)/diagonal(m-1)
+            diagonal(m) = diagonal(m) - factor*upper(m-1)
+            source(m) = source(m) - factor*source(m-1)
+        end do
+        if (abs(diagonal(n-1)) <= tiny(1.0_dp)) &
+            error stop 'Elliptic periodic 1-D solver: zero final pivot'
+
+        x_line = 0.0_dp
+        x_line(n) = source(n-1)/diagonal(n-1)
+        do m = n-2, 1, -1
+            i = m + 1
+            x_line(i) = (source(m)-upper(m)*x_line(i+1))/diagonal(m)
+        end do
+
+        x_line = x_line - sum(x_line*cell_volume(:,1,1))/sum(cell_volume(:,1,1))
+        solution(:,1,1) = x_line
+
+        forcing_norm = max(maxval(abs(compatible_rhs)), tiny(1.0_dp))
+        statistics%initial_residual = forcing_norm
+        tolerance = absolute_tolerance + relative_tolerance*forcing_norm
+        statistics%final_residual = 0.0_dp
+        do i = 1, n
+            left_i = i-1
+            if (left_i < 1) left_i = n
+            right_i = i+1
+            if (right_i > n) right_i = 1
+            if (i == 1) then
+                left_g = seam_conductance
+            else
+                left_g = conductance_x(i,1,1)
+            end if
+            if (i == n) then
+                right_g = seam_conductance
+            else
+                right_g = conductance_x(i+1,1,1)
+            end if
+            residual = compatible_rhs(i) + &
+                (left_g*x_line(left_i) + right_g*x_line(right_i) - &
+                 (left_g+right_g)*x_line(i))/cell_volume(i,1,1)
+            statistics%final_residual = max(statistics%final_residual, abs(residual))
+        end do
+        statistics%cycles = 1
+        statistics%relative_residual = statistics%final_residual/forcing_norm
+        statistics%converged = statistics%final_residual <= tolerance
+    end subroutine solve_periodic_tridiagonal_1d
 
 
     !> Add one physical boundary contribution to a 1-D matrix row.
@@ -745,6 +895,7 @@ contains
 
 
     !> Add one face to the cached cell-local operator.
+
     subroutine accumulate_operator_face(level, neighbour_i, neighbour_j, neighbour_k, conductance, &
         boundary_type, boundary_value, diagonal_value, source_value, regular_cell)
 
@@ -753,16 +904,35 @@ contains
         real(dp), intent(in) :: conductance, boundary_value
         real(dp), intent(inout) :: diagonal_value, source_value
         logical, intent(inout) :: regular_cell
-        logical :: neighbour_is_active
+        logical :: neighbour_is_active, wrapped
+        integer :: mapped_i, mapped_j, mapped_k
 
-        neighbour_is_active = neighbour_i >= 1 .and. neighbour_i <= level%nx .and. &
-            neighbour_j >= 1 .and. neighbour_j <= level%ny .and. &
-            neighbour_k >= 1 .and. neighbour_k <= level%nz
-        if (neighbour_is_active) &
-            neighbour_is_active = level%active(neighbour_i,neighbour_j,neighbour_k)
+        mapped_i = neighbour_i
+        mapped_j = neighbour_j
+        mapped_k = neighbour_k
+        wrapped = .false.
+
+        if ((mapped_i < 1 .or. mapped_i > level%nx) .and. level%periodic(1)) then
+            mapped_i = 1 + modulo(mapped_i-1, level%nx)
+            wrapped = .true.
+        end if
+        if ((mapped_j < 1 .or. mapped_j > level%ny) .and. level%periodic(2)) then
+            mapped_j = 1 + modulo(mapped_j-1, level%ny)
+            wrapped = .true.
+        end if
+        if ((mapped_k < 1 .or. mapped_k > level%nz) .and. level%periodic(3)) then
+            mapped_k = 1 + modulo(mapped_k-1, level%nz)
+            wrapped = .true.
+        end if
+
+        neighbour_is_active = mapped_i >= 1 .and. mapped_i <= level%nx .and. &
+            mapped_j >= 1 .and. mapped_j <= level%ny .and. &
+            mapped_k >= 1 .and. mapped_k <= level%nz
+        if (neighbour_is_active) neighbour_is_active = level%active(mapped_i,mapped_j,mapped_k)
 
         if (neighbour_is_active) then
             diagonal_value = diagonal_value + conductance
+            if (wrapped) regular_cell = .false.
         else
             regular_cell = .false.
             call add_boundary_terms(conductance, boundary_type, boundary_value, &
@@ -1006,6 +1176,7 @@ contains
         logical :: use_parallel
 
         use_parallel = this%level(level_index)%active_cells >= this%minimum_parallel_cells
+        use_parallel = use_parallel .and. periodic_red_black_safe(this%level(level_index))
 
         do iteration = 1, iterations
             do color = 0, 1
@@ -1062,6 +1233,16 @@ contains
             end do
         end do
     end subroutine smooth
+
+
+    logical function periodic_red_black_safe(level) result(safe)
+        type(multigrid_level), intent(in) :: level
+
+        safe = .true.
+        if (level%periodic(1) .and. mod(level%nx,2) /= 0) safe = .false.
+        if (level%dimensions >= 2 .and. level%periodic(2) .and. mod(level%ny,2) /= 0) safe = .false.
+        if (level%dimensions >= 3 .and. level%periodic(3) .and. mod(level%nz,2) /= 0) safe = .false.
+    end function periodic_red_black_safe
 
 
     !> Compute the cell-volume-normalized residual on one level.
@@ -1180,6 +1361,7 @@ contains
 
 
     !> Evaluate only the solution-dependent neighbour part of the cached operator.
+
     real(dp) function preassembled_neighbour_sum(level, i, j, k) result(neighbour_sum)
         type(multigrid_level), intent(in) :: level
         integer, intent(in) :: i, j, k
@@ -1202,37 +1384,45 @@ contains
             return
         end if
 
-        if (i > 1) then
-            if (level%active(i-1,j,k)) neighbour_sum = neighbour_sum + &
-                level%conductance_x(i,j,k)*level%x(i-1,j,k)
-        end if
-        if (i < level%nx) then
-            if (level%active(i+1,j,k)) neighbour_sum = neighbour_sum + &
-                level%conductance_x(i+1,j,k)*level%x(i+1,j,k)
-        end if
-
+        call add_periodic_or_internal_neighbour(level, i,j,k, 1,-1, level%conductance_x(i,j,k), neighbour_sum)
+        call add_periodic_or_internal_neighbour(level, i,j,k, 1, 1, level%conductance_x(i+1,j,k), neighbour_sum)
         if (level%dimensions >= 2) then
-            if (j > 1) then
-                if (level%active(i,j-1,k)) neighbour_sum = neighbour_sum + &
-                    level%conductance_y(i,j,k)*level%x(i,j-1,k)
-            end if
-            if (j < level%ny) then
-                if (level%active(i,j+1,k)) neighbour_sum = neighbour_sum + &
-                    level%conductance_y(i,j+1,k)*level%x(i,j+1,k)
-            end if
+            call add_periodic_or_internal_neighbour(level, i,j,k, 2,-1, level%conductance_y(i,j,k), neighbour_sum)
+            call add_periodic_or_internal_neighbour(level, i,j,k, 2, 1, level%conductance_y(i,j+1,k), neighbour_sum)
         end if
-
         if (level%dimensions >= 3) then
-            if (k > 1) then
-                if (level%active(i,j,k-1)) neighbour_sum = neighbour_sum + &
-                    level%conductance_z(i,j,k)*level%x(i,j,k-1)
-            end if
-            if (k < level%nz) then
-                if (level%active(i,j,k+1)) neighbour_sum = neighbour_sum + &
-                    level%conductance_z(i,j,k+1)*level%x(i,j,k+1)
-            end if
+            call add_periodic_or_internal_neighbour(level, i,j,k, 3,-1, level%conductance_z(i,j,k), neighbour_sum)
+            call add_periodic_or_internal_neighbour(level, i,j,k, 3, 1, level%conductance_z(i,j,k+1), neighbour_sum)
         end if
     end function preassembled_neighbour_sum
+
+    subroutine add_periodic_or_internal_neighbour(level, i, j, k, dimension, direction, conductance, neighbour_sum)
+        type(multigrid_level), intent(in) :: level
+        integer, intent(in) :: i, j, k, dimension, direction
+        real(dp), intent(in) :: conductance
+        real(dp), intent(inout) :: neighbour_sum
+        integer :: ni, nj, nk
+
+        ni = i
+        nj = j
+        nk = k
+        select case (dimension)
+        case (1)
+            ni = i + direction
+            if ((ni < 1 .or. ni > level%nx) .and. level%periodic(1)) ni = 1 + modulo(ni-1, level%nx)
+        case (2)
+            nj = j + direction
+            if ((nj < 1 .or. nj > level%ny) .and. level%periodic(2)) nj = 1 + modulo(nj-1, level%ny)
+        case (3)
+            nk = k + direction
+            if ((nk < 1 .or. nk > level%nz) .and. level%periodic(3)) nk = 1 + modulo(nk-1, level%nz)
+        end select
+
+        if (ni < 1 .or. ni > level%nx .or. nj < 1 .or. nj > level%ny .or. &
+            nk < 1 .or. nk > level%nz) return
+        if (level%active(ni,nj,nk)) neighbour_sum = neighbour_sum + conductance*level%x(ni,nj,nk)
+    end subroutine add_periodic_or_internal_neighbour
+
 
 
     !> Add one Dirichlet or Neumann contribution to a cell equation.
@@ -1361,6 +1551,7 @@ contains
 
 
     !> Return a neighbouring coarse correction or a homogeneous boundary ghost.
+
     real(dp) function coarse_neighbour_value(level, i, j, k, dimension, direction) result(value)
         type(multigrid_level), intent(in) :: level
         integer, intent(in) :: i, j, k, dimension, direction
@@ -1374,10 +1565,16 @@ contains
         select case (dimension)
         case (1)
             neighbour_i = i + direction
+            if ((neighbour_i < 1 .or. neighbour_i > level%nx) .and. level%periodic(1)) &
+                neighbour_i = 1 + modulo(neighbour_i-1, level%nx)
         case (2)
             neighbour_j = j + direction
+            if ((neighbour_j < 1 .or. neighbour_j > level%ny) .and. level%periodic(2)) &
+                neighbour_j = 1 + modulo(neighbour_j-1, level%ny)
         case (3)
             neighbour_k = k + direction
+            if ((neighbour_k < 1 .or. neighbour_k > level%nz) .and. level%periodic(3)) &
+                neighbour_k = 1 + modulo(neighbour_k-1, level%nz)
         end select
 
         center_value = level%x(i,j,k)
@@ -1392,10 +1589,8 @@ contains
 
         boundary_type = face_boundary_type(level, i, j, k, dimension, direction)
         if (boundary_type == elliptic_bc_dirichlet) then
-            ! Homogeneous Dirichlet correction at a halfway boundary.
             value = -center_value
         else
-            ! Homogeneous Neumann correction.
             value = center_value
         end if
     end function coarse_neighbour_value
@@ -1770,5 +1965,29 @@ contains
                 error stop 'Elliptic solver: invalid z-boundary type'
         end if
     end subroutine validate_boundary_types
+
+
+
+    subroutine validate_periodic_boundary_data(boundary, periodic, dimensions)
+        type(elliptic_boundary_data), intent(in) :: boundary
+        logical, dimension(3), intent(in) :: periodic
+        integer, intent(in) :: dimensions
+
+        if (periodic(1)) then
+            if (any(boundary%type_x(1,:,:) /= elliptic_bc_internal) .or. &
+                any(boundary%type_x(size(boundary%type_x,1),:,:) /= elliptic_bc_internal)) &
+                error stop 'Elliptic solver: periodic x faces must be marked internal'
+        end if
+        if (dimensions >= 2 .and. periodic(2)) then
+            if (any(boundary%type_y(:,1,:) /= elliptic_bc_internal) .or. &
+                any(boundary%type_y(:,size(boundary%type_y,2),:) /= elliptic_bc_internal)) &
+                error stop 'Elliptic solver: periodic y faces must be marked internal'
+        end if
+        if (dimensions >= 3 .and. periodic(3)) then
+            if (any(boundary%type_z(:,:,1) /= elliptic_bc_internal) .or. &
+                any(boundary%type_z(:,:,size(boundary%type_z,3)) /= elliptic_bc_internal)) &
+                error stop 'Elliptic solver: periodic z faces must be marked internal'
+        end if
+    end subroutine validate_periodic_boundary_data
 
 end module elliptic_multigrid_solver_class
