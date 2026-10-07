@@ -298,6 +298,9 @@ contains
         call MPI_BARRIER(MPI_COMM_WORLD,error)
 
 #endif
+        ! Also covers serial/OpenMP and one-rank periodic axes.
+        call apply_local_periodic_cons_halo(this%domain, scal_ptr%cells)
+
     end subroutine
 
     subroutine exchange_boundary_conditions_markers(this, bc_ptr)
@@ -342,6 +345,8 @@ contains
         call MPI_BARRIER(MPI_COMM_WORLD,error)
 
 #endif
+        call apply_local_periodic_marker_halo(this%domain, bc_ptr%bc_markers)
+
     end subroutine
 	
     subroutine exchange_mesh(this, mesh_ptr)
@@ -441,6 +446,11 @@ contains
         call MPI_BARRIER(MPI_COMM_WORLD,error)
 
 #endif
+        vector_projections_number = vect_ptr%get_projections_number()
+        do dim = 1, vector_projections_number
+            call apply_local_periodic_cons_halo(this%domain, vect_ptr%pr(dim)%cells)
+        end do
+
     end subroutine
 
     subroutine exchange_conservative_tensor_field(this, tens_ptr)
@@ -493,6 +503,13 @@ contains
         call MPI_BARRIER(MPI_COMM_WORLD,error)
 
 #endif
+        tensor_projections_number = tens_ptr%get_projections_number()
+        do dim4 = 1, tensor_projections_number(1)
+        do dim5 = 1, tensor_projections_number(2)
+            call apply_local_periodic_cons_halo(this%domain, tens_ptr%pr(dim4,dim5)%cells)
+        end do
+        end do
+
     end subroutine
 
     subroutine exchange_flow_scalar_field(this, scal_ptr)
@@ -623,5 +640,57 @@ contains
         call MPI_BARRIER(MPI_COMM_WORLD,error)
 #endif
     end subroutine
+
+
+    !--------------------------------------------------------------------------
+    ! One-rank periodic halo helpers.  Assumed-shape dummy arrays are indexed
+    ! relative to their local extent, so this remains correct for NRG fields
+    ! whose allocated lower bound is zero in active dimensions.
+    !--------------------------------------------------------------------------
+    subroutine apply_local_periodic_cons_halo(domain, field)
+        type(computational_domain), intent(in) :: domain
+        real(dp), dimension(:,:,:), intent(inout) :: field
+        logical, dimension(3) :: periodic
+        integer, dimension(3) :: processor_number
+
+        periodic = domain%get_periodic_directions()
+        processor_number = domain%get_processor_number()
+
+        if (periodic(1) .and. processor_number(1) == 1 .and. size(field,1) > 2) then
+            field(1,:,:) = field(size(field,1)-1,:,:)
+            field(size(field,1),:,:) = field(2,:,:)
+        end if
+        if (periodic(2) .and. processor_number(2) == 1 .and. size(field,2) > 2) then
+            field(:,1,:) = field(:,size(field,2)-1,:)
+            field(:,size(field,2),:) = field(:,2,:)
+        end if
+        if (periodic(3) .and. processor_number(3) == 1 .and. size(field,3) > 2) then
+            field(:,:,1) = field(:,:,size(field,3)-1)
+            field(:,:,size(field,3)) = field(:,:,2)
+        end if
+    end subroutine apply_local_periodic_cons_halo
+
+    subroutine apply_local_periodic_marker_halo(domain, markers)
+        type(computational_domain), intent(in) :: domain
+        integer(i1), dimension(:,:,:), intent(inout) :: markers
+        logical, dimension(3) :: periodic
+        integer, dimension(3) :: processor_number
+
+        periodic = domain%get_periodic_directions()
+        processor_number = domain%get_processor_number()
+
+        if (periodic(1) .and. processor_number(1) == 1 .and. size(markers,1) > 2) then
+            markers(1,:,:) = markers(size(markers,1)-1,:,:)
+            markers(size(markers,1),:,:) = markers(2,:,:)
+        end if
+        if (periodic(2) .and. processor_number(2) == 1 .and. size(markers,2) > 2) then
+            markers(:,1,:) = markers(:,size(markers,2)-1,:)
+            markers(:,size(markers,2),:) = markers(:,2,:)
+        end if
+        if (periodic(3) .and. processor_number(3) == 1 .and. size(markers,3) > 2) then
+            markers(:,:,1) = markers(:,:,size(markers,3)-1)
+            markers(:,:,size(markers,3)) = markers(:,:,2)
+        end if
+    end subroutine apply_local_periodic_marker_halo
 
 end module mpi_communications_class
