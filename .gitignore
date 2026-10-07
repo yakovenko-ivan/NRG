@@ -33,6 +33,7 @@ package_utilities/x64
 build/
 build-cgns/
 build-cvode/
+build-*/
 *.bak
 *.u2d
 *.vfproj

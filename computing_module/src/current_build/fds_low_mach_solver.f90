@@ -161,8 +161,8 @@ module fds_low_mach_solver_class
         ! Previous converged timestep pressure is used only to form the first
         ! predictor F_b guess. This history is intentionally not a restart field:
         ! the first timestep after startup/restart therefore uses the baseline
-        ! pressure guess. Extrapolation activates only after a well-converged
-        ! predictor step.
+        ! pressure guess. Extrapolation activates only after a successfully
+        ! converged predictor step.
         real(dp), dimension(:,:,:), allocatable :: pressure_previous_p_dyn
         logical :: pressure_extrapolation_history_valid = .false.
         real(dp) :: pressure_extrapolation_previous_dt = 0.0_dp
