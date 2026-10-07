@@ -76,6 +76,7 @@ program computing_module
 	integer		:: iter, num_iterations, test
 	real(dp)	:: calculation_time, time_step
 	logical		:: stop_flag, precision_flag, benchmarking, there
+	logical		:: benchmark_checkpoint
 	logical		:: solver_stop_flag, data_io_stop_flag
 	logical		:: run_control_stop, restart_required
 	character(len=32) :: termination_reason
@@ -91,8 +92,9 @@ program computing_module
     character(len=100)          :: bechmark_result_file
     logical                     :: new_bench_io
     
-    num_threads     = 1
-    benchmarking    = .false.
+    num_threads          = 1
+    benchmarking         = .false.
+    benchmark_checkpoint = .false.
     
     do i = 1, command_argument_count()
         call get_command_argument(i, arg)
@@ -118,6 +120,9 @@ program computing_module
             case ('--num_threads')
                 num_threads = arg_val
                 
+            case ('--benchmark_checkpoint')
+                benchmark_checkpoint = .true.
+
             case ('--benchmark')
                 num_iterations = arg_val
                 benchmarking    = .true.
@@ -130,6 +135,7 @@ program computing_module
                     new_bench_io = .true.
                 else
                     open(newunit = bench_io, file = bechmark_result_file, status = 'old', position = 'append', form = 'formatted')
+                    new_bench_io = .false.
                 end if
                 
                 !do test = 1, 10
@@ -147,6 +153,10 @@ program computing_module
                 stop
         end select
     end do
+
+    if (benchmark_checkpoint .and. .not. benchmarking) then
+        error stop '--benchmark_checkpoint requires --benchmark=N'
+    end if
     
 #ifdef mpi
 	call mpi_init(error)
@@ -360,6 +370,11 @@ program computing_module
 
     if (benchmarking) then
         call problem_manager%print_all_clocks(num_threads,lun=bench_io,new_io=new_bench_io)
+        if (benchmark_checkpoint) then
+            ! Write the restart only after the timed loop and timer report.
+            ! Checkpoint I/O therefore does not contaminate benchmark timings.
+            call problem_data_io%write_restart_checkpoint(calculation_time)
+        end if
     end if
     
 #ifdef mpi
@@ -388,8 +403,11 @@ contains
 	
     subroutine print_help()
         print '(a, /)', 'command-line options:'
-        print '(a)',    '  -v, --version     print version information and exit'
-        print '(a, /)', '  -h, --help        print usage information and exit'
+        print '(a)',    '  -v, --version                 print version information and exit'
+        print '(a)',    '  -h, --help                    print usage information and exit'
+        print '(a)',    '  --num_threads=N               set OpenMP thread count'
+        print '(a)',    '  --benchmark=N                 stop after N iterations and write timers'
+        print '(a, /)', '  --benchmark_checkpoint        write restart after the timed benchmark'
     end subroutine print_help
 
 end program

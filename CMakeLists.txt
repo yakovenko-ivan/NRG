@@ -59,6 +59,8 @@ option(NRG_ENABLE_CVODE
     "Enable the optional SUNDIALS CVODE chemistry backend" OFF)
 option(NRG_ENABLE_CHEMISTRY_PROFILE
     "Enable chemical kinetics profiling instrumentation" OFF)
+option(NRG_ENABLE_FDS_PRESSURE_PROFILE
+    "Enable lightweight FDS pressure/multigrid CSV profiling" OFF)
 	
 if(NRG_ENABLE_CVODE)
     find_package(SUNDIALS CONFIG REQUIRED)
@@ -101,6 +103,16 @@ if(NRG_ENABLE_CHEMISTRY_PROFILE)
         CHEMISTRY_PROFILE
     )
     message(STATUS "Chemistry profiling enabled")
+endif()
+
+
+if(NRG_ENABLE_FDS_PRESSURE_PROFILE)
+    target_compile_definitions(
+        nrg_build_options
+        INTERFACE
+        FDS_PRESSURE_PROFILE
+    )
+    message(STATUS "FDS pressure profiling enabled")
 endif()
 
 if(NRG_ENABLE_OPENMP)
