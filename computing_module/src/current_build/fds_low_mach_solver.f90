@@ -26,6 +26,7 @@ module fds_low_mach_solver_class
     use data_io_class
     use computational_domain_class
     use computational_mesh_class
+    use mpi_communications_class
     use boundary_conditions_class
     use field_pointers
     use table_approximated_real_gas_class
@@ -123,6 +124,7 @@ module fds_low_mach_solver_class
         type(dispersed_phase_solver), dimension(:), allocatable :: particles_solver
 
         type(computational_domain) :: domain
+        type(mpi_communications) :: mpi_support
         type(thermophysical_properties_pointer) :: thermo
         type(chemical_properties_pointer) :: chem
         type(computational_mesh_pointer) :: mesh
@@ -191,6 +193,9 @@ module fds_low_mach_solver_class
         procedure, private :: calculate_velocity
         procedure, private :: calculate_interm_Y_corrector
         procedure, private :: apply_boundary_conditions
+        procedure, private :: synchronize_periodic_cell_state
+        procedure, private :: synchronize_periodic_face_velocity
+        procedure, private :: synchronize_periodic_pressure_fields
         procedure, private :: write_data_table
         procedure :: solve_problem
         procedure :: calculate_time_step
@@ -240,6 +245,7 @@ contains
         constructor%additional_particles_phases_number    = manager%solver_options%get_additional_particles_phases_number()
 
         constructor%domain                = manager%domain
+        constructor%mpi_support           = manager%mpi_communications
         constructor%thermo%thermo_ptr    => manager%thermophysics%thermo_ptr
         constructor%chem%chem_ptr        => manager%chemistry%chem_ptr
         constructor%boundary%bc_ptr        => manager%boundary_conditions_pointer%bc_ptr
@@ -436,6 +442,8 @@ contains
 
         constructor%load_counter    = problem_data_io%get_load_counter()
 
+        call constructor%synchronize_periodic_cell_state(.false.)
+
         dimensions        = manager%domain%get_domain_dimensions()
 
         do dim = 1, dimensions
@@ -477,6 +485,9 @@ contains
                 predictor=.true.)
             call constructor%state_eq%apply_boundary_conditions_for_initial_conditions()
         end if
+
+        call constructor%synchronize_periodic_cell_state(.true.)
+        call constructor%synchronize_periodic_face_velocity()
 
         constructor%time                = calculation_time
         constructor%initial_time_step    = manager%solver_options%get_initial_time_step()
@@ -541,6 +552,9 @@ contains
 
         call fds_timer%tic()
 
+        call this%synchronize_periodic_cell_state(.true.)
+        call this%synchronize_periodic_face_velocity()
+
         this%time = this%time + this%time_step
 
         if (this%energy_ignition_flag) then
@@ -594,9 +608,12 @@ contains
 
         call fds_gas_dynamics_timer%tic()
         call this%apply_boundary_conditions(this%time_step,predictor=.true.)
+        call this%synchronize_periodic_cell_state(.true.)
+        call this%synchronize_periodic_face_velocity()
         call this%calculate_divergence_v        (this%time_step,predictor=.true.)
         call this%calculate_pressure_poisson    (this%time_step,predictor=.true.)
         call this%calculate_velocity            (this%time_step,predictor=.true.)
+        call this%synchronize_periodic_face_velocity()
         call fds_gas_dynamics_timer%toc(new_iter=.true.)
 
         call fds_viscosity_timer%tic()
@@ -613,9 +630,12 @@ contains
 
         call fds_gas_dynamics_timer%tic()
         call this%apply_boundary_conditions(this%time_step,predictor=.false.)
+        call this%synchronize_periodic_cell_state(.true.)
+        call this%synchronize_periodic_face_velocity()
         call this%calculate_divergence_v        (this%time_step,predictor=.false.)
         call this%calculate_pressure_poisson    (this%time_step,predictor=.false.)
         call this%calculate_velocity            (this%time_step,predictor=.false.)
+        call this%synchronize_periodic_face_velocity()
 
         if (this%CFL_condition_flag) then
             call this%calculate_time_step()
@@ -661,6 +681,7 @@ contains
 
         integer    :: dimensions, species_number, coord_id
         integer    ,dimension(3,2)    :: cons_inner_loop
+        logical    ,dimension(3)      :: periodic
         character(len=20)            :: coordinate_system
 
         integer :: i,j,k,dim,spec,particles_phase_counter
@@ -670,6 +691,7 @@ contains
 
         cons_inner_loop    = this%domain%get_local_inner_cells_bounds()
 
+        periodic           = this%domain%get_periodic_directions()
         cell_size        = this%mesh%mesh_ptr%get_cell_edges_length()
         if (time_step <= 0.0_dp) error stop 'FDS species update: non-positive time step'
 
@@ -728,9 +750,9 @@ contains
 
                     rhs_vec = 0.0_dp
                     do dim = 1, dimensions
-                        if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
+                        if (((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) < cons_inner_loop(dim,2)) .or. periodic(dim)) then
                             call eos_corrected_species_face_vector(rho,Y,thermo%molar_masses,species_number,dim,i,j,k,1, &
-                                 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),flux_right_vec)
+                                 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),periodic,cons_inner_loop,flux_right_vec)
                         else
                             if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
                                 do spec = 1,species_number
@@ -744,9 +766,9 @@ contains
                             end if
                         end if
 
-                        if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
+                        if (((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) > cons_inner_loop(dim,1)) .or. periodic(dim)) then
                             call eos_corrected_species_face_vector(rho,Y,thermo%molar_masses,species_number,dim,i,j,k,-1, &
-                                 v_f%pr(dim)%cells(dim,i,j,k),flux_left_vec)
+                                 v_f%pr(dim)%cells(dim,i,j,k),periodic,cons_inner_loop,flux_left_vec)
                         else
                             if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
                                 do spec = 1,species_number
@@ -850,6 +872,7 @@ contains
 
         integer :: dimensions, species_number
         integer    ,dimension(3,2)    :: cons_inner_loop
+        logical, dimension(3) :: periodic
 
         integer    :: bound_number, plus, sign
         integer :: i,j,k,dim,spec,particles_phase_counter
@@ -860,6 +883,7 @@ contains
         coordinate_system    = this%domain%get_coordinate_system_name()
 
         cons_inner_loop    = this%domain%get_local_inner_cells_bounds()
+        periodic = this%domain%get_periodic_directions()
 
         cell_size             = this%mesh%mesh_ptr%get_cell_edges_length()
         base_cell_volume      = this%mesh%mesh_ptr%get_cell_volume()
@@ -1017,12 +1041,12 @@ contains
                     ! Reconstruct all conservative species densities once per face
                     ! and apply the already-assembled cell/species coefficients.
                     do dim = 1, dimensions
-                        if ((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) < &
-                            cons_inner_loop(dim,2)) then
+                        if (((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) < &
+                            cons_inner_loop(dim,2)) .or. periodic(dim)) then
                             call eos_corrected_species_face_vector(rho, Y, thermo%molar_masses, &
                                 species_number, dim, i, j, k, 1, &
                                 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2), &
-                                k+I_m(dim,3)), species_flux_right)
+                                k+I_m(dim,3)), periodic, cons_inner_loop, species_flux_right)
                         else
                             do spec = 1, species_number
                                 if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2), &
@@ -1038,11 +1062,11 @@ contains
                             end do
                         end if
 
-                        if ((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) > &
-                            cons_inner_loop(dim,1)) then
+                        if (((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) > &
+                            cons_inner_loop(dim,1)) .or. periodic(dim)) then
                             call eos_corrected_species_face_vector(rho, Y, thermo%molar_masses, &
                                 species_number, dim, i, j, k, -1, &
-                                v_f%pr(dim)%cells(dim,i,j,k), species_flux_left)
+                                v_f%pr(dim)%cells(dim,i,j,k), periodic, cons_inner_loop, species_flux_left)
                         else
                             do spec = 1, species_number
                                 if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
@@ -2284,8 +2308,16 @@ contains
 						H_old%cells(i,j,k) = H%cells(i,j,k)
 					end do
 					end do
-					end do
+                    end do
 					!$omp end do
+
+					! Periodic pressure-potential ghosts must correspond to the
+					! newly corrected interior state before evaluating the next
+					! FDS residual stencil.
+					!$omp master
+					call this%synchronize_periodic_pressure_fields()
+					!$omp end master
+					!$omp barrier
 
 					!$omp do collapse(3) schedule(static) reduction(+:a_norm)
 					do k = cons_inner_loop(3,1),cons_inner_loop(3,2)
@@ -2678,8 +2710,11 @@ contains
 
                 end associate
 
+				call this%synchronize_periodic_pressure_fields()
+
 				call this%calculate_dynamic_pressure(time_step,predictor)
 
+				call this%synchronize_periodic_pressure_fields()
 				! Direct fixed-point convergence test for the baroclinic pressure term.
 				! F_b currently contains F_b[p^m], which was used in the Poisson solve.
 				! Recompute F_b[p^(m+1)] from the updated dynamic pressure, measure
@@ -3014,7 +3049,8 @@ contains
         end associate
 
         call this%pressure_solver%prepare(conductance_x, conductance_y, conductance_z, &
-            cell_volume, active, elliptic_boundary, dimensions)
+            cell_volume, active, elliptic_boundary, dimensions, &
+            periodic=this%domain%get_periodic_directions())
         this%pressure_operator_prepared = .true.
         this%pressure_operator_preparations = this%pressure_operator_preparations + 1
         this%pressure_operator_dimensions = dimensions
@@ -3405,6 +3441,7 @@ contains
 
         integer    :: dimensions, species_number, coord_id
         integer    ,dimension(3,2)    :: cons_inner_loop
+        logical    ,dimension(3)      :: periodic
         character(len=20)    :: coordinate_system
 
         integer    :: i,j,k,dim,spec,particles_phase_counter
@@ -3414,6 +3451,7 @@ contains
 
         cons_inner_loop    = this%domain%get_local_inner_cells_bounds()
 
+        periodic           = this%domain%get_periodic_directions()
         cell_size        = this%mesh%mesh_ptr%get_cell_edges_length()
         if (time_step <= 0.0_dp) error stop 'FDS species update: non-positive time step'
 
@@ -3468,11 +3506,11 @@ contains
 
                     rhs_vec = 0.0_dp
                     do dim = 1, dimensions
-                        if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) < cons_inner_loop(dim,2)) then
+                        if (((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) < cons_inner_loop(dim,2)) .or. periodic(dim)) then
                             call &
                                 eos_corrected_species_face_vector(rho_int,Y_int,thermo%molar_masses,species_number,dim,i,j,k, &
                                 1, &
-                                 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),flux_right_vec)
+                                 v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)),periodic,cons_inner_loop,flux_right_vec)
                         else
                             if (v_f%pr(dim)%cells(dim,i+I_m(dim,1),j+I_m(dim,2),k+I_m(dim,3)) > 0.0_dp) then
                                 do spec = 1,species_number
@@ -3486,11 +3524,11 @@ contains
                             end if
                         end if
 
-                        if ((i*I_m(dim,1) + j*I_m(dim,2)  + k*I_m(dim,3)) > cons_inner_loop(dim,1)) then
+                        if (((i*I_m(dim,1) + j*I_m(dim,2) + k*I_m(dim,3)) > cons_inner_loop(dim,1)) .or. periodic(dim)) then
                             call &
                                 eos_corrected_species_face_vector(rho_int,Y_int,thermo%molar_masses,species_number,dim,i,j,k,- &
                                 1, &
-                                 v_f%pr(dim)%cells(dim,i,j,k),flux_left_vec)
+                                 v_f%pr(dim)%cells(dim,i,j,k),periodic,cons_inner_loop,flux_left_vec)
                         else
                             if (v_f%pr(dim)%cells(dim,i,j,k) > 0.0_dp) then
                                 do spec = 1,species_number
@@ -3873,12 +3911,15 @@ contains
         end if
     end function charm_face_value
 
-    subroutine eos_corrected_species_face_vector(rho_field,Y_field,molar_masses,species_number,dim,i,j,k,face_side,velocity,phi)
+    subroutine eos_corrected_species_face_vector(rho_field,Y_field,molar_masses,species_number,dim,i,j,k,face_side,velocity, &
+        periodic,inner_bounds,phi)
         type(field_scalar_cons), intent(in) :: rho_field
         type(field_vector_cons), intent(in) :: Y_field
         real(dp), dimension(:), intent(in) :: molar_masses
         integer, intent(in) :: species_number, dim, i, j, k, face_side
         real(dp), intent(in) :: velocity
+        logical, dimension(3), intent(in) :: periodic
+        integer, dimension(3,2), intent(in) :: inner_bounds
         real(dp), dimension(:), intent(out) :: phi
 
         real(dp), dimension(4) :: scalar_array, rho_over_w_array
@@ -3900,9 +3941,7 @@ contains
 
         gamma = 1
         rhoY_max = -huge(1.0_dp)
-        ii = i + gamma_offset*I_m(dim,1)
-        jj = j + gamma_offset*I_m(dim,2)
-        kk = k + gamma_offset*I_m(dim,3)
+        call map_periodic_stencil_index(dim,i,j,k,gamma_offset,periodic,inner_bounds,ii,jj,kk)
         do s = 1,species_number
             rhoY_loc = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
             if (rhoY_loc > rhoY_max) then
@@ -3915,9 +3954,7 @@ contains
         do s = 1,species_number
             do n = 1,4
                 offset = offset0 + n - 1
-                ii = i + offset*I_m(dim,1)
-                jj = j + offset*I_m(dim,2)
-                kk = k + offset*I_m(dim,3)
+                call map_periodic_stencil_index(dim,i,j,k,offset,periodic,inner_bounds,ii,jj,kk)
                 scalar_array(n) = rho_field%cells(ii,jj,kk) * Y_field%pr(s)%cells(ii,jj,kk)
                 rho_over_w_array(n) = rho_over_w_array(n) + scalar_array(n) / molar_masses(s)
             end do
@@ -4137,5 +4174,153 @@ contains
 
         get_time = this%time
     end function
+
+
+    !--------------------------------------------------------------------------
+    ! Periodic synchronization.  Stage 1 deliberately restricts periodic runs
+    ! to one MPI rank, so the conservative exchange entry points reduce to local
+    ! halo wrapping while preserving a future multi-rank API.
+    !--------------------------------------------------------------------------
+    subroutine synchronize_periodic_cell_state(this, include_intermediate)
+        class(fds_solver), intent(inout) :: this
+        logical, intent(in) :: include_intermediate
+        logical, dimension(3) :: periodic
+
+        periodic = this%domain%get_periodic_directions()
+        if (.not. any(periodic)) return
+
+        call this%mpi_support%exchange_conservative_scalar_field(this%rho%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%T%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%p%s_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%v%v_ptr)
+        call this%mpi_support%exchange_conservative_vector_field(this%Y%v_ptr)
+
+        if (include_intermediate) then
+            call this%mpi_support%exchange_conservative_scalar_field(this%rho_int%s_ptr)
+            call this%mpi_support%exchange_conservative_scalar_field(this%rho_old%s_ptr)
+            call this%mpi_support%exchange_conservative_scalar_field(this%h_s%s_ptr)
+            call this%mpi_support%exchange_conservative_scalar_field(this%mix_mol_mass%s_ptr)
+            call this%mpi_support%exchange_conservative_vector_field(this%Y_int%v_ptr)
+            call this%mpi_support%exchange_conservative_vector_field(this%Y_old%v_ptr)
+        end if
+    end subroutine synchronize_periodic_cell_state
+
+
+    subroutine synchronize_periodic_pressure_fields(this)
+        class(fds_solver), intent(inout) :: this
+        logical, dimension(3) :: periodic
+
+        periodic = this%domain%get_periodic_directions()
+        if (.not. any(periodic)) return
+
+        call this%mpi_support%exchange_conservative_scalar_field(this%H%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%H_old%s_ptr)
+        call this%mpi_support%exchange_conservative_scalar_field(this%p_dyn%s_ptr)
+    end subroutine synchronize_periodic_pressure_fields
+
+
+    !> Synchronize the staggered velocity representation across one-rank
+    !! periodic seams.  Longitudinal storage has two representations of the
+    !! same periodic interface; transverse storage follows cell-centred wrapping.
+    subroutine synchronize_periodic_face_velocity(this)
+        class(fds_solver), intent(inout) :: this
+        logical, dimension(3) :: periodic
+        integer, dimension(3,2) :: flow_inner
+        integer :: dimensions, component, face_axis, axis
+
+        periodic = this%domain%get_periodic_directions()
+        if (.not. any(periodic)) return
+
+        dimensions = this%domain%get_domain_dimensions()
+        flow_inner = this%domain%get_local_inner_faces_bounds()
+
+        ! pr(component) stores all face orientations in cells(face_axis,...).
+        ! Synchronize every stored face orientation across each periodic axis.
+        do component = 1, dimensions
+            do face_axis = 1, dimensions
+                do axis = 1, dimensions
+                    if (.not. periodic(axis)) cycle
+                    call synchronize_face_component_axis( &
+                        this%v_f%v_ptr%pr(component)%cells, &
+                        face_axis, axis, flow_inner)
+                    call synchronize_face_component_axis( &
+                        this%v_f_old%v_ptr%pr(component)%cells, &
+                        face_axis, axis, flow_inner)
+                end do
+            end do
+        end do
+    end subroutine synchronize_periodic_face_velocity
+
+
+    subroutine synchronize_face_component_axis(face_field, face_axis, periodic_axis, flow_inner)
+        real(dp), dimension(:,0:,0:,0:), intent(inout) :: face_field
+        integer, intent(in) :: face_axis, periodic_axis
+        integer, dimension(3,2), intent(in) :: flow_inner
+        integer :: lo, hi
+
+        lo = flow_inner(periodic_axis,1)
+        hi = flow_inner(periodic_axis,2)
+
+        select case (periodic_axis)
+        case (1)
+            if (face_axis == periodic_axis) then
+                face_field(face_axis,lo,:,:) = 0.5_dp*( &
+                    face_field(face_axis,lo,:,:) + face_field(face_axis,hi,:,:))
+                face_field(face_axis,hi,:,:) = face_field(face_axis,lo,:,:)
+                face_field(face_axis,lo-1,:,:) = face_field(face_axis,hi-1,:,:)
+                face_field(face_axis,hi+1,:,:) = face_field(face_axis,lo+1,:,:)
+            else
+                face_field(face_axis,lo-1,:,:) = face_field(face_axis,hi-1,:,:)
+                face_field(face_axis,hi,:,:) = face_field(face_axis,lo,:,:)
+            end if
+        case (2)
+            if (face_axis == periodic_axis) then
+                face_field(face_axis,:,lo,:) = 0.5_dp*( &
+                    face_field(face_axis,:,lo,:) + face_field(face_axis,:,hi,:))
+                face_field(face_axis,:,hi,:) = face_field(face_axis,:,lo,:)
+                face_field(face_axis,:,lo-1,:) = face_field(face_axis,:,hi-1,:)
+                face_field(face_axis,:,hi+1,:) = face_field(face_axis,:,lo+1,:)
+            else
+                face_field(face_axis,:,lo-1,:) = face_field(face_axis,:,hi-1,:)
+                face_field(face_axis,:,hi,:) = face_field(face_axis,:,lo,:)
+            end if
+        case (3)
+            if (face_axis == periodic_axis) then
+                face_field(face_axis,:,:,lo) = 0.5_dp*( &
+                    face_field(face_axis,:,:,lo) + face_field(face_axis,:,:,hi))
+                face_field(face_axis,:,:,hi) = face_field(face_axis,:,:,lo)
+                face_field(face_axis,:,:,lo-1) = face_field(face_axis,:,:,hi-1)
+                face_field(face_axis,:,:,hi+1) = face_field(face_axis,:,:,lo+1)
+            else
+                face_field(face_axis,:,:,lo-1) = face_field(face_axis,:,:,hi-1)
+                face_field(face_axis,:,:,hi) = face_field(face_axis,:,:,lo)
+            end if
+        end select
+    end subroutine synchronize_face_component_axis
+
+
+    subroutine map_periodic_stencil_index(dim, i, j, k, offset, periodic, inner_bounds, ii, jj, kk)
+        integer, intent(in) :: dim, i, j, k, offset
+        logical, dimension(3), intent(in) :: periodic
+        integer, dimension(3,2), intent(in) :: inner_bounds
+        integer, intent(out) :: ii, jj, kk
+        integer :: extent
+
+        ii = i + offset*I_m(dim,1)
+        jj = j + offset*I_m(dim,2)
+        kk = k + offset*I_m(dim,3)
+        if (.not. periodic(dim)) return
+
+        extent = inner_bounds(dim,2) - inner_bounds(dim,1) + 1
+        select case (dim)
+        case (1)
+            ii = inner_bounds(1,1) + modulo(ii-inner_bounds(1,1), extent)
+        case (2)
+            jj = inner_bounds(2,1) + modulo(jj-inner_bounds(2,1), extent)
+        case (3)
+            kk = inner_bounds(3,1) + modulo(kk-inner_bounds(3,1), extent)
+        end select
+    end subroutine map_periodic_stencil_index
+
 end module
 
