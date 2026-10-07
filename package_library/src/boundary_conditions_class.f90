@@ -110,6 +110,7 @@ contains
 
 		integer	,dimension(3)	:: processor_number	
 		integer	,dimension(3)	:: processor_grid_coord 
+		logical	,dimension(3)	:: periodic
 
 		integer	:: bound_number ,bound
 		integer	:: i,j,k
@@ -123,6 +124,7 @@ contains
 
 		processor_number		= domain%get_processor_number()
 		processor_grid_coord	= domain%get_processor_grid_coord()
+		periodic                = domain%get_periodic_directions()
 
 		allocate(this%bc_markers(	allocation_bounds(1,1):allocation_bounds(1,2)	, &
 									allocation_bounds(2,1):allocation_bounds(2,2)	, &
@@ -130,16 +132,25 @@ contains
 
 		this%bc_markers = 0
 
-		if (processor_grid_coord(1) == 0) 						this%bc_markers(allocation_bounds(1,1),:,:)	= default_boundary
-		if (processor_grid_coord(1) == processor_number(1)-1) 	this%bc_markers(allocation_bounds(1,2),:,:)	= default_boundary
+		! Periodic ghost planes remain marker 0: they are fluid connectivity,
+		! not physical boundary conditions.  Intersections with a non-periodic
+		! boundary retain that physical boundary's marker.
+		if (.not. periodic(1)) then
+			if (processor_grid_coord(1) == 0) 						this%bc_markers(allocation_bounds(1,1),:,:)	= default_boundary
+			if (processor_grid_coord(1) == processor_number(1)-1) 	this%bc_markers(allocation_bounds(1,2),:,:)	= default_boundary
+		end if
 
 		if(dimensions >= 2) then
-			if (processor_grid_coord(2) == 0) 						this%bc_markers(:,allocation_bounds(2,1),:)	= default_boundary
-			if (processor_grid_coord(2) == processor_number(2)-1) 	this%bc_markers(:,allocation_bounds(2,2),:)	= default_boundary
+			if (.not. periodic(2)) then
+				if (processor_grid_coord(2) == 0) 						this%bc_markers(:,allocation_bounds(2,1),:)	= default_boundary
+				if (processor_grid_coord(2) == processor_number(2)-1) 	this%bc_markers(:,allocation_bounds(2,2),:)	= default_boundary
+			end if
 
 			if(dimensions == 3) then
-				if (processor_grid_coord(3) == 0) 						this%bc_markers(:,:,allocation_bounds(3,1))	= default_boundary
-				if (processor_grid_coord(3) == processor_number(3)-1) 	this%bc_markers(:,:,allocation_bounds(3,2))	= default_boundary				
+				if (.not. periodic(3)) then
+					if (processor_grid_coord(3) == 0) 						this%bc_markers(:,:,allocation_bounds(3,1))	= default_boundary
+					if (processor_grid_coord(3) == processor_number(3)-1) 	this%bc_markers(:,:,allocation_bounds(3,2))	= default_boundary				
+				end if
 			end if
 		end if
 

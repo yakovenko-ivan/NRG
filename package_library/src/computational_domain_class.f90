@@ -21,6 +21,7 @@ module computational_domain_class
 		real(dp)			,dimension(3,2)		:: lengths				! Domain length in meters
 		character(len=5)	,dimension(3)		:: axis_names			! Axis names
 		character(len=20)									:: coordinate_system	! Coordinate system (cartesian/cylindrical/spherical)
+		logical				,dimension(3)					:: periodic = .false.	! Periodic topology by spatial axis
 
 	! MPI Global data
 		integer												:: mpi_communicator			
@@ -52,6 +53,7 @@ module computational_domain_class
 		procedure				:: get_axis_number
 		procedure				:: get_axis_names
 		procedure				:: get_coordinate_system_name
+		procedure				:: get_periodic_directions
 		
 		procedure				:: get_global_cells_number
 		procedure				:: get_global_faces_number
@@ -100,16 +102,17 @@ module computational_domain_class
 
 contains
 
-	type(computational_domain)	function constructor(dimensions,cells_number,coordinate_system,lengths,axis_names)
+	type(computational_domain)	function constructor(dimensions,cells_number,coordinate_system,lengths,axis_names,periodic)
 		integer								,intent(in)	:: dimensions
 		integer				,dimension(3)	,intent(in)	:: cells_number
 		character(len=*)					,intent(in)	:: coordinate_system		
         real(dp)         ,dimension(3,2) ,intent(in) :: lengths
         character(len=*)    ,dimension(3)   ,intent(in) :: axis_names
+        logical             ,dimension(3)   ,intent(in), optional :: periodic
 
 		integer	:: io_unit
 		
-		call constructor%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names)
+		call constructor%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names,periodic)
 		
 		open(newunit = io_unit, file = domain_data_file_name, status = 'replace', form = 'formatted', delim = 'quote')
 		call constructor%write_properties(io_unit)
@@ -133,15 +136,19 @@ contains
 		character(len=20)					:: coordinate_system
         real(dp)         ,dimension(3,2) :: lengths
         character(len=5)    ,dimension(3)   :: axis_names
+        logical             ,dimension(3)   :: periodic
 
-		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system
+		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system, periodic
 		namelist /domain_properties_2/ lengths, axis_names
+		
+		! Old domain_data.inf files do not contain PERIODIC; retain non-periodic behavior.
+		periodic = .false.
 		
 		read(unit = domain_data_unit, nml = domain_properties_1)
 		
 		read(unit = domain_data_unit, nml = domain_properties_2)
 	
-		call this%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names)
+		call this%set_properties(dimensions,cells_number,lengths,coordinate_system,axis_names,periodic)
 	end subroutine
 	
 	subroutine write_properties(this,domain_data_unit)
@@ -153,13 +160,15 @@ contains
 		character(len=20)					:: coordinate_system
         real(dp)         ,dimension(3,2) :: lengths
         character(len=5)    ,dimension(3)   :: axis_names
+        logical             ,dimension(3)   :: periodic
 
-		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system
+		namelist /domain_properties_1/ dimensions, cells_number, coordinate_system, periodic
 		namelist /domain_properties_2/ lengths, axis_names
 		
 		dimensions			= this%dimensions
 		cells_number		= this%cells_number
 		coordinate_system	= this%coordinate_system
+		periodic            = this%periodic
 		
 		axis_names	= this%axis_names
 		lengths		= this%lengths
@@ -168,13 +177,14 @@ contains
 		write(unit = domain_data_unit, nml = domain_properties_2)
 	end subroutine
 	
-	subroutine set_properties(this,dimensions,cells_number,lengths,coordinate_system,axis_names)
+	subroutine set_properties(this,dimensions,cells_number,lengths,coordinate_system,axis_names,periodic)
 		class(computational_domain)			,intent(inout)	:: this
 		integer								,intent(in)		:: dimensions
 		integer		,dimension(3)			,intent(in)		:: cells_number
         real(dp)         ,dimension(3,2) ,intent(in)     :: lengths
 		character(len=*)					,intent(in)		:: coordinate_system
         character(len=*)    ,dimension(3)   ,intent(in)     :: axis_names
+        logical             ,dimension(3)   ,intent(in), optional :: periodic
 		
 		integer	:: dim
 		
@@ -184,9 +194,15 @@ contains
 		this%lengths				= lengths
 		this%coordinate_system		= coordinate_system
 		this%axis_names				= axis_names
+		this%periodic               = .false.
+		if (present(periodic)) this%periodic(1:dimensions) = periodic(1:dimensions)
 
 		this%cells_number(dimensions+1:3) = 1
 		this%faces_number(dimensions+1:3) = 1
+
+		if (any(this%periodic) .and. trim(this%coordinate_system) /= 'cartesian') then
+			error stop 'Periodic boundaries are currently supported only for Cartesian domains.'
+		end if
 
 		this%mpi_communicator_size = 1
 		this%processor_rank = 0
@@ -212,6 +228,7 @@ contains
 		write(log_unit,'(A,E14.7)')	' Domain upper bounds       : ',	this%lengths(1,2)
 		write(log_unit,'(A,A)')		' Domain coordinate system  : ',	this%coordinate_system
 		write(log_unit,'(A,3A)')	' Domain axis names         : ',	this%axis_names	
+		write(log_unit,'(A,3L2)')	' Domain periodic axes      : ',	this%periodic
 		write(log_unit,'(A)')		'************************************************************************************* '
 	end subroutine
 	
@@ -237,6 +254,9 @@ contains
 #ifdef mpi
     	call MPI_COMM_SIZE(MPI_COMM_WORLD, this%mpi_communicator_size, error)
 		call MPI_COMM_RANK(MPI_COMM_WORLD, this%processor_rank, error)
+		if (any(this%periodic) .and. this%mpi_communicator_size > 1) then
+			error stop 'Multi-rank periodic halo exchange is not implemented yet; use one MPI rank/OpenMP.'
+		end if
 #endif
 
 		this%processor_number(1) = this%mpi_communicator_size
@@ -268,7 +288,7 @@ contains
 		end do
 		end do
 
-		is_periodic = .false.
+		is_periodic = this%periodic
 		reorder  	= .false.
 
 		this%processor_grid_coord	= 0
@@ -430,6 +450,13 @@ contains
 		
 		get_coordinate_system_name = this%coordinate_system
 	end function	
+
+	pure function get_periodic_directions(this)
+		class(computational_domain)	,intent(in)	:: this
+		logical, dimension(3)					:: get_periodic_directions
+
+		get_periodic_directions = this%periodic
+	end function
 
 	pure integer function get_processor_rank(this)
 		class(computational_domain)	,intent(in)		:: this
