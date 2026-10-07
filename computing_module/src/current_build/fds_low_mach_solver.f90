@@ -95,7 +95,11 @@ module fds_low_mach_solver_class
 
         ! Lightweight pressure-solver profiling.  One CSV row is emitted for
         ! each predictor/corrector projection call when enabled.
+#ifdef FDS_PRESSURE_PROFILE
+        logical :: pressure_profiling_enabled = .true.
+#else
         logical :: pressure_profiling_enabled = .false.
+#endif
         integer :: pressure_profile_unit = 0
 
         ! FDS-only defect-correction smoothing around the shared multigrid solve.
@@ -154,6 +158,15 @@ module fds_low_mach_solver_class
         ! multigrid adapter.  The obsolete in-class hierarchy has been removed.
         real(dp), dimension(:,:,:), allocatable :: pressure_residual
         real(dp), dimension(:,:,:), allocatable :: pressure_correction
+        ! Previous converged timestep pressure is used only to form the first
+        ! predictor F_b guess. This history is intentionally not a restart field:
+        ! the first timestep after startup/restart therefore uses the baseline
+        ! pressure guess. Extrapolation activates only after a well-converged
+        ! predictor step.
+        real(dp), dimension(:,:,:), allocatable :: pressure_previous_p_dyn
+        logical :: pressure_extrapolation_history_valid = .false.
+        real(dp) :: pressure_extrapolation_previous_dt = 0.0_dp
+        logical :: pressure_previous_predictor_converged = .false.
         ! Compact work arrays for repeated prepared elliptic solves.  The
         ! operator hierarchy itself is owned by pressure_solver.
         real(dp), dimension(:,:,:), allocatable :: pressure_adapter_rhs
@@ -404,6 +417,11 @@ contains
         allocate(constructor%pressure_correction, mold=constructor%pressure_residual)
         constructor%pressure_residual = 0.0_dp
         constructor%pressure_correction = 0.0_dp
+        allocate(constructor%pressure_previous_p_dyn, mold=constructor%pressure_residual)
+        constructor%pressure_previous_p_dyn = 0.0_dp
+        constructor%pressure_extrapolation_history_valid = .false.
+        constructor%pressure_extrapolation_previous_dt = 0.0_dp
+        constructor%pressure_previous_predictor_converged = .false.
 
         cons_inner_loop = manager%domain%get_local_inner_cells_bounds()
         flow_inner_loop    = manager%domain%get_local_inner_faces_bounds()
@@ -1167,6 +1185,8 @@ contains
 		real(dp)	:: F_b_norm_max_local, F_b_norm_max
 		real(dp)	:: F_a_norm_max_local, F_a_norm_max
 		real(dp) :: F_b_convergence_scale
+		real(dp) :: pressure_extrapolation_factor
+		real(dp) :: p_dyn_current_guess, p_dyn_left_guess
 		real(dp), parameter :: F_b_relative_tolerance = 1.0e-3_dp
 		real(dp), parameter :: F_b_absolute_tolerance = 1.0e-10_dp
 		integer, parameter :: maximum_pressure_iterations = 200
@@ -1703,6 +1723,15 @@ contains
 			!$omp end parallel
 
             end associate
+			pressure_extrapolation_factor = 0.0_dp
+			if (predictor .and. this%pressure_extrapolation_history_valid .and. &
+			    this%pressure_previous_predictor_converged) then
+			    if (this%pressure_extrapolation_previous_dt > tiny(1.0_dp)) then
+			        pressure_extrapolation_factor = time_step / &
+			            this%pressure_extrapolation_previous_dt
+			    end if
+			end if
+
 			pressure_iteration	= 0
 			pressure_converged	= .false.
 
@@ -1732,7 +1761,7 @@ contains
                             bc				=> this%boundary%bc_ptr		)
 
 				!$omp parallel default(shared) &
-				!$omp& private(i,j,k,dim,dim2,loop,plus,sign,bound_number,boundary_type_name,lame_coeffs,farfield_velocity,rho_face)
+				!$omp& private(i,j,k,dim,dim2,loop,plus,sign,bound_number,boundary_type_name,lame_coeffs,farfield_velocity,rho_face,p_dyn_current_guess,p_dyn_left_guess)
 
 				do dim = 1, dimensions
 					loop(3,1) = cons_inner_loop(3,1)
@@ -1751,8 +1780,17 @@ contains
 
 						if((bc%bc_markers(i,j,k) == 0).or.(bc%bc_markers(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)) == 0)) then
 							if (predictor) then
-								F_b%cells(dim,i,j,k)=	-	(p_dyn%cells(i,j,k)	*rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
-														+	p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	*rho_old%cells(i,j,k))		&
+							    p_dyn_current_guess = p_dyn%cells(i,j,k)
+							    p_dyn_left_guess = p_dyn%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))
+							    if ((pressure_iteration == 0) .and. (pressure_extrapolation_factor > 0.0_dp)) then
+							        p_dyn_current_guess = p_dyn_current_guess + pressure_extrapolation_factor * &
+							            (p_dyn_current_guess - this%pressure_previous_p_dyn(i,j,k))
+							        p_dyn_left_guess = p_dyn_left_guess + pressure_extrapolation_factor * &
+							            (p_dyn_left_guess - this%pressure_previous_p_dyn( &
+							            i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))
+							    end if
+								F_b%cells(dim,i,j,k)=	-	(p_dyn_current_guess	*rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))		&
+														+	p_dyn_left_guess	*rho_old%cells(i,j,k))		&
 														/	(rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3))	+ rho_old%cells(i,j,k))	&
 														*	(1.0_dp/rho_old%cells(i,j,k)	- 1.0_dp/rho_old%cells(i-I_m(dim,1),j-I_m(dim,2),k-I_m(dim,3)))	/ cell_size(1)
 														! F_b = -p_hat * grad(1/rho), [m/s^2]
@@ -1955,6 +1993,14 @@ contains
 				!$omp end parallel
 
                 end associate
+
+                ! F_b for pressure_iteration==0 has already consumed the old
+                ! converged p_dyn. Preserve it now for the next timestep.
+                if (predictor .and. pressure_iteration == 0) then
+                    this%pressure_previous_p_dyn = this%p_dyn%s_ptr%cells
+                    this%pressure_extrapolation_previous_dt = time_step
+                    this%pressure_extrapolation_history_valid = .true.
+                end if
 
 				beta				= 2.0_dp/3.0_dp
 				v_cycle_converged	= .false.
@@ -2189,7 +2235,9 @@ contains
                     end associate
 
 					this%pressure_correction = 0.0_dp
+                    call fds_multigrid_timer%tic()
                     call this%solve_shared_elliptic_correction(multigrid_statistics)
+                    call fds_multigrid_timer%toc(new_iter=.true.)
                     profile_multigrid_calls = profile_multigrid_calls + 1
                     profile_multigrid_cycles = profile_multigrid_cycles + multigrid_statistics%cycles
                     profile_multigrid_smoothing_iterations = profile_multigrid_smoothing_iterations + &
@@ -2724,6 +2772,10 @@ contains
                 profile_multigrid_serial_smoothing, profile_multigrid_residual_evaluations, &
                 profile_max_hierarchy_levels, profile_multigrid_initial_residual_max, &
                 profile_multigrid_final_residual_max, profile_multigrid_relative_residual_max)
+
+            if (predictor) then
+                this%pressure_previous_predictor_converged = pressure_converged
+            end if
 
 			if (.not.pressure_converged) then
 				print *, 'WARNING: F_b pressure iteration did not converge within the configured iteration limit.'
