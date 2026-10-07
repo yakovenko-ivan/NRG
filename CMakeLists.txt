@@ -179,6 +179,21 @@ elseif(CMAKE_Fortran_COMPILER_ID MATCHES "^(IntelLLVM|Intel)$")
             "$<$<CONFIG:MinSizeRel>:/O1;/fpe:0>"
         )
 
+        # Intel Fortran /traceback stores runtime traceback metadata in the
+        # executable. Incremental linking can prevent that metadata from being
+        # usable, producing "Unknown / Unknown / Unknown" frames even in a
+        # /debug:full build. Keep incremental linking disabled for every
+        # Windows Intel configuration because /traceback is enabled above for
+        # every configuration.
+        #
+        # nrg_build_options is linked PUBLIC through package_library, so this
+        # usage requirement propagates to all NRG executables.
+        target_link_options(nrg_build_options INTERFACE
+            /INCREMENTAL:NO
+        )
+        message(STATUS
+            "Intel Windows traceback: incremental linking disabled")
+
         if(NRG_STATIC_RUNTIME)
             message(STATUS
                 "Intel Windows runtime linkage: static (/MT for non-Debug, /MTd for Debug)")
