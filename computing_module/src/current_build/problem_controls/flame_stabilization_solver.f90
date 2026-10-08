@@ -40,6 +40,7 @@ module flame_stabilization_solver_class
         integer :: flame_loc_unit = -1
         integer :: physics_output_unit = -1
         real(dp) :: previous_correction_time = -huge(1.0_dp)
+        real(dp) :: previous_predictive_safety_time = -huge(1.0_dp)
         real(dp) :: filtered_velocity_save = 0.0_dp
         real(dp) :: diag_filtered_velocity_save = 0.0_dp
         real(dp) :: adaptive_gain = 5.0e-02_dp
@@ -343,6 +344,20 @@ contains
         real(dp), parameter :: multidim_anchor_inlet_change_fraction = 5.0e-02_dp
         real(dp), parameter :: multidim_anchor_inlet_change_abs = 5.0e-03_dp
 
+        ! v4 multidimensional anchoring: ordinary feedback follows a non-reset
+        ! medium diagnostic window, while a predictive safety layer can pre-empt
+        ! the normal ramp/settle cycle when a boundary is being approached.
+        integer, parameter :: multidim_anchor_control_window_samples = 20
+        integer, parameter :: predictive_safety_window_samples = 10
+        integer, parameter :: predictive_safety_min_samples = 8
+        real(dp), parameter :: multidim_row_peak_fraction = 1.0e-03_dp
+        real(dp), parameter :: predictive_velocity_threshold = 2.0e-02_dp
+        real(dp), parameter :: predictive_horizon_factor = 3.0_dp
+        real(dp), parameter :: predictive_velocity_compensation = 7.5e-01_dp
+        real(dp), parameter :: predictive_max_fraction = 1.0_dp
+        real(dp), parameter :: predictive_emergency_ramp_time = 5.0e-04_dp
+        real(dp), parameter :: predictive_retarget_interval = 1.0e-03_dp
+
         integer, parameter :: workflow_flamelet_sl = 1
         integer, parameter :: workflow_anchor_observation = 2
         integer :: active_workflow
@@ -380,6 +395,8 @@ contains
         integer :: active_track_number
         integer :: arming_window_samples_active
         integer :: transverse_count, transverse_index, local_valid_count
+        integer :: i_peak, i_left, i_right, j_local
+        integer, allocatable :: local_qpeak_i(:)
 
         real(dp) :: cell_size(3), cell_volume
         real(dp) :: current_flame_location(3)
@@ -438,6 +455,10 @@ contains
         real(dp) :: anchor_mean_inlet_velocity, anchor_inlet_velocity_slope
         real(dp) :: anchor_inlet_velocity_rms, anchor_velocity_tolerance
         real(dp) :: anchor_inlet_window_change, anchor_inlet_change_tolerance
+        real(dp) :: anchor_control_velocity, safety_velocity
+        real(dp) :: inlet_clearance_to_hard, outlet_clearance_to_hard
+        real(dp) :: predictive_time_to_boundary, predictive_response_horizon
+        real(dp) :: predictive_du, predictive_max_step, local_threshold
         real(dp), allocatable :: local_qmax(:), local_qsum(:), local_xqsum(:)
         real(dp), allocatable :: local_reaction_left(:), local_reaction_right(:)
         real(dp), allocatable :: local_samples(:), local_width_samples(:)
@@ -460,6 +481,8 @@ contains
         logical :: structure_stationary_candidate
         logical :: final_structure_stationary, anchor_velocity_interior
         logical :: multidim_anchor, anchor_quasi_stationary_candidate
+        logical :: predictive_emergency, predictive_inlet_danger
+        logical :: predictive_outlet_danger
 
 
         stabilized = .false.
@@ -628,7 +651,7 @@ contains
             allocate(local_qmax(transverse_count), local_qsum(transverse_count), &
                 local_xqsum(transverse_count), local_reaction_left(transverse_count), &
                 local_reaction_right(transverse_count), local_samples(transverse_count), &
-                local_width_samples(transverse_count))
+                local_width_samples(transverse_count), local_qpeak_i(transverse_count))
         else
             transverse_count = 0
         end if
@@ -652,6 +675,7 @@ contains
                 local_reaction_right = -huge(1.0_dp)
                 local_samples = 0.0_dp
                 local_width_samples = 0.0_dp
+                local_qpeak_i = 0
             end if
             do k = cons_inner_loop(3,1), cons_inner_loop(3,2)
             do j = cons_inner_loop(2,1), cons_inner_loop(2,2)
@@ -662,7 +686,10 @@ contains
                 heat_release_max = max(heat_release_max, qdot)
                 if (multidim_anchor) then
                     transverse_index = j - cons_inner_loop(2,1) + 1
-                    local_qmax(transverse_index) = max(local_qmax(transverse_index), qdot)
+                    if (qdot > local_qmax(transverse_index)) then
+                        local_qmax(transverse_index) = qdot
+                        local_qpeak_i(transverse_index) = i
+                    end if
                 end if
                 temperature_max = max(temperature_max, T%cells(i,j,k))
 
@@ -732,13 +759,6 @@ contains
 
                 if (multidim_anchor) then
                     transverse_index = j - cons_inner_loop(2,1) + 1
-                    if (local_qmax(transverse_index) >= heat_release_valid_limit .and. &
-                        qdot >= reaction_envelope_fraction * local_qmax(transverse_index)) then
-                        local_reaction_left(transverse_index) = &
-                            min(local_reaction_left(transverse_index), s_coord)
-                        local_reaction_right(transverse_index) = &
-                            max(local_reaction_right(transverse_index), s_coord)
-                    end if
                     if (qdot > qdot_cut) then
                         local_qsum(transverse_index) = local_qsum(transverse_index) + qdot
                         local_xqsum(transverse_index) = &
@@ -774,6 +794,43 @@ contains
             end do
             end do
 
+            ! For a cellular 2D flame, a transverse row can intersect several
+            ! disconnected reaction sheets. Measure the contiguous component
+            ! containing the row's strongest heat-release point; otherwise the
+            ! min-to-max span can be dominated by cell separation rather than
+            ! local flame-sheet thickness.
+            if (multidim_anchor) then
+                do transverse_index = 1, transverse_count
+                    if (local_qpeak_i(transverse_index) <= 0) cycle
+                    if (local_qmax(transverse_index) < max(heat_release_valid_limit, &
+                        multidim_row_peak_fraction * heat_release_max)) cycle
+
+                    j_local = cons_inner_loop(2,1) + transverse_index - 1
+                    i_peak = local_qpeak_i(transverse_index)
+                    i_left = i_peak
+                    i_right = i_peak
+                    local_threshold = reaction_envelope_fraction * local_qmax(transverse_index)
+
+                    do i = i_peak - 1, cons_inner_loop(1,1), -1
+                        if (bc%bc_markers(i,j_local,1) /= 0) exit
+                        qdot = max(E_f_prod_chem%cells(i,j_local,1), 0.0_dp)
+                        if (qdot < local_threshold) exit
+                        i_left = i
+                    end do
+                    do i = i_peak + 1, cons_inner_loop(1,2)
+                        if (bc%bc_markers(i,j_local,1) /= 0) exit
+                        qdot = max(E_f_prod_chem%cells(i,j_local,1), 0.0_dp)
+                        if (qdot < local_threshold) exit
+                        i_right = i
+                    end do
+
+                    local_reaction_left(transverse_index) = &
+                        (real(i_left,dp) - 0.5_dp) * cell_size(front_axis)
+                    local_reaction_right(transverse_index) = &
+                        (real(i_right,dp) - 0.5_dp) * cell_size(front_axis)
+                end do
+            end if
+
             thermal_envelope_found = (x_preheat < 0.5_dp * huge(1.0_dp)) .and. &
                 (x_thermal_low < 0.5_dp * huge(1.0_dp)) .and. &
                 (x_thermal_high < 0.5_dp * huge(1.0_dp))
@@ -792,7 +849,8 @@ contains
                 local_valid_count = 0
                 do transverse_index = 1, transverse_count
                     if (local_qsum(transverse_index) > tiny_weight .and. &
-                        local_qmax(transverse_index) >= heat_release_valid_limit .and. &
+                        local_qmax(transverse_index) >= max(heat_release_valid_limit, &
+                            multidim_row_peak_fraction * heat_release_max) .and. &
                         local_reaction_left(transverse_index) < 0.5_dp * huge(1.0_dp) .and. &
                         local_reaction_right(transverse_index) > -0.5_dp * huge(1.0_dp)) then
                         local_valid_count = local_valid_count + 1
@@ -816,7 +874,8 @@ contains
 
                     local_valid_count = 0
                     do transverse_index = 1, transverse_count
-                        if (local_qmax(transverse_index) >= heat_release_valid_limit .and. &
+                        if (local_qmax(transverse_index) >= max(heat_release_valid_limit, &
+                            multidim_row_peak_fraction * heat_release_max) .and. &
                             local_reaction_right(transverse_index) > -0.5_dp * huge(1.0_dp)) then
                             local_valid_count = local_valid_count + 1
                             local_samples(local_valid_count) = &
@@ -968,6 +1027,8 @@ contains
 
             diag_flame_velocity_lsq = 0.0_dp
             diag_flame_velocity_filtered = 0.0_dp
+            anchor_control_velocity = 0.0_dp
+            safety_velocity = 0.0_dp
             if (flame_detected) then
                 call append_diagnostic_history(time, current_front_coord)
                 diag_flame_velocity_lsq = diagnostic_least_squares_velocity()
@@ -978,6 +1039,15 @@ contains
                     diag_flame_velocity_filtered = (1.0_dp - filter_alpha) * this%state%diag_filtered_velocity_save + &
                         filter_alpha * diag_flame_velocity_lsq
                     this%state%diag_filtered_velocity_save = diag_flame_velocity_filtered
+                end if
+                if (multidim_anchor) then
+                    anchor_control_velocity = diagnostic_recent_velocity( &
+                        multidim_anchor_control_window_samples)
+                    safety_velocity = diagnostic_recent_velocity( &
+                        predictive_safety_window_samples)
+                else
+                    anchor_control_velocity = diag_flame_velocity_filtered
+                    safety_velocity = diag_flame_velocity_filtered
                 end if
             else
                 this%state%diag_hist_count = 0
@@ -1039,6 +1109,15 @@ contains
             hard_recovery_deficit = 0.0_dp
             hard_recovery_danger_velocity = 0.0_dp
             hard_recovery_response_time = hard_recovery_response_min
+            predictive_emergency = .false.
+            predictive_inlet_danger = .false.
+            predictive_outlet_danger = .false.
+            inlet_clearance_to_hard = 0.0_dp
+            outlet_clearance_to_hard = 0.0_dp
+            predictive_time_to_boundary = -1.0_dp
+            predictive_response_horizon = 0.0_dp
+            predictive_du = 0.0_dp
+            predictive_max_step = 0.0_dp
 
             if (this%state%front_reference_initialized) then
                 position_error = current_front_coord - this%state%front_reference_coord
@@ -1074,6 +1153,35 @@ contains
                         (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
                         (abs(centroid_position_error) > capture_position_tolerance)
                 end if
+            end if
+
+            ! Predict whether the robust flame envelope will enter a hard
+            ! boundary margin before a fast safety correction can take effect.
+            ! This path is independent of scientific establishment and uses the
+            ! non-reset diagnostic history, so it remains available during ramps.
+            if (multidim_anchor .and. flame_detected .and. &
+                physical_envelope_available .and. &
+                this%state%diag_hist_count >= predictive_safety_min_samples) then
+                inlet_clearance_to_hard = max(inlet_preheat_distance - hard_inlet_margin, 0.0_dp)
+                outlet_clearance_to_hard = max(outlet_reaction_distance - hard_outlet_margin, 0.0_dp)
+                predictive_response_horizon = predictive_horizon_factor * ( &
+                    predictive_emergency_ramp_time + response_settle_capture + 2.0_dp * time_track)
+
+                if (safety_velocity < -predictive_velocity_threshold) then
+                    predictive_time_to_boundary = inlet_clearance_to_hard / &
+                        max(-safety_velocity, predictive_velocity_threshold)
+                    predictive_inlet_danger = &
+                        predictive_time_to_boundary <= predictive_response_horizon
+                else if (safety_velocity > predictive_velocity_threshold) then
+                    predictive_time_to_boundary = outlet_clearance_to_hard / &
+                        max(safety_velocity, predictive_velocity_threshold)
+                    predictive_outlet_danger = &
+                        predictive_time_to_boundary <= predictive_response_horizon
+                end if
+
+                predictive_emergency = predictive_inlet_danger .or. predictive_outlet_danger
+                capture_mode = capture_mode .or. predictive_emergency
+                emergency_mode = emergency_mode .or. predictive_emergency
             end if
 
             if (multidim_anchor) then
@@ -1206,6 +1314,42 @@ contains
                 call reset_hard_recovery_state()
             end if
 
+            ! Predictive safety is allowed to pre-empt a still-running normal
+            ! ramp. Retarget from the velocity actually applied at this instant,
+            ! rather than from the stale target of the interrupted ramp.
+            if (predictive_emergency .and. (.not. this%state%domain_failure) .and. &
+                this%state%control_stage == stage_anchor_control .and. &
+                (time - this%state%previous_predictive_safety_time) >= &
+                    predictive_retarget_interval) then
+                control_velocity = safety_velocity
+                predictive_du = -predictive_velocity_compensation * safety_velocity
+                predictive_max_step = max(predictive_max_fraction * &
+                    max(abs(this%state%inlet_velocity_applied), min_abs_velocity_step), &
+                    min_abs_velocity_step_capture)
+                predictive_du = min(max(predictive_du, -predictive_max_step), predictive_max_step)
+                proposed_inlet_velocity = max( &
+                    this%state%inlet_velocity_applied + predictive_du, 0.0_dp)
+
+                if (abs(proposed_inlet_velocity - this%state%inlet_velocity_applied) > &
+                    min_abs_velocity_step) then
+                    target_step_for_log = proposed_inlet_velocity - &
+                        this%state%inlet_velocity_applied
+                    this%state%inlet_velocity_target = proposed_inlet_velocity
+                    this%state%ramp_start_velocity = this%state%inlet_velocity_applied
+                    this%state%ramp_start_time = time
+                    this%state%active_inlet_ramp_time = predictive_emergency_ramp_time
+                    this%state%active_response_settle_time = response_settle_capture
+                    this%state%previous_predictive_safety_time = time
+                    this%state%previous_correction_time = time
+                    this%state%correction_counter = this%state%correction_counter + 1
+                    ramp_settled = .false.
+                    inlet_ramp_time = predictive_emergency_ramp_time
+                    control_performed = .true.
+                    reset_history_after_log = .true.
+                    call clear_control_history()
+                end if
+            end if
+
             if (capture_mode) then
                 time_control_effective = time_control_capture
             else
@@ -1224,15 +1368,23 @@ contains
 
             if (measurement_enabled) then
                 call append_front_history(time, current_front_coord)
-                flame_velocity_lsq = least_squares_velocity()
-
-                if (this%state%hist_count <= 2) then
-                    flame_velocity_filtered = flame_velocity_lsq
-                    this%state%filtered_velocity_save = flame_velocity_filtered
+                if (multidim_anchor) then
+                    ! Do not let normal anchoring chase cell merging/splitting.
+                    ! The control velocity is estimated from a medium diagnostic
+                    ! window that is not reset after every inlet correction.
+                    flame_velocity_lsq = anchor_control_velocity
+                    flame_velocity_filtered = anchor_control_velocity
                 else
-                    flame_velocity_filtered = (1.0_dp - filter_alpha) * this%state%filtered_velocity_save + &
-                        filter_alpha * flame_velocity_lsq
-                    this%state%filtered_velocity_save = flame_velocity_filtered
+                    flame_velocity_lsq = least_squares_velocity()
+
+                    if (this%state%hist_count <= 2) then
+                        flame_velocity_filtered = flame_velocity_lsq
+                        this%state%filtered_velocity_save = flame_velocity_filtered
+                    else
+                        flame_velocity_filtered = (1.0_dp - filter_alpha) * this%state%filtered_velocity_save + &
+                            filter_alpha * flame_velocity_lsq
+                        this%state%filtered_velocity_save = flame_velocity_filtered
+                    end if
                 end if
 
                 position_error = current_front_coord - this%state%front_reference_coord
@@ -1261,15 +1413,23 @@ contains
                     control_velocity = flame_velocity_filtered + position_velocity
                 end if
                 outlet_distance = domain_front_max - current_front_coord
-                capture_mode = hard_envelope_violation .or. &
-                    (this%state%flame_established .and. &
-                     abs(flame_velocity_filtered) > capture_velocity_threshold)
+                if (multidim_anchor) then
+                    ! In 2D, a large bulk translation is handled by the normal
+                    ! medium-window anchor controller. Capture/emergency are
+                    ! reserved for actual or predicted boundary danger.
+                    capture_mode = hard_envelope_violation .or. predictive_emergency
+                    emergency_mode = hard_envelope_violation .or. predictive_emergency
+                else
+                    capture_mode = hard_envelope_violation .or. &
+                        (this%state%flame_established .and. &
+                         abs(flame_velocity_filtered) > capture_velocity_threshold)
+                    emergency_mode = hard_envelope_violation
+                end if
                 if (.not. physical_envelope_available) then
                     capture_mode = capture_mode .or. &
                         (centroid_position_error /= 0.0_dp) .or. &
                         (outlet_distance < outlet_guard_distance)
                 end if
-                emergency_mode = hard_envelope_violation
                 if (.not. physical_envelope_available) then
                     emergency_mode = emergency_mode .or. &
                         (outlet_distance < 0.5_dp * outlet_guard_distance) .or. &
@@ -1665,7 +1825,9 @@ contains
                 ' "d_inlet_preheat" "d_outlet_reaction"' // &
                 ' "inlet_theta_max" "inlet_margin_ratio" "outlet_margin_ratio"' // &
                 ' "domain_warning" "domain_ok" "domain_failure"' // &
-                ' "correction_free_time"'
+                ' "correction_free_time"' // &
+                ' "anchor_control_velocity" "safety_velocity"' // &
+                ' "predictive_on" "time_to_hard_s" "safety_horizon_s"'
 
             write(this%state%flame_loc_unit,'(A)') trim(av_header)
 
@@ -1891,6 +2053,39 @@ contains
             end if
         end function diagnostic_least_squares_velocity
 
+        function diagnostic_recent_velocity(n_requested) result(vfit)
+            integer, intent(in) :: n_requested
+            real(dp) :: vfit
+            integer :: n, n_use, n_first
+            real(dp) :: t_av, s_av, numerator, denominator
+
+            if (this%state%diag_hist_count < 2) then
+                vfit = 0.0_dp
+                return
+            end if
+
+            n_use = min(max(n_requested, 2), this%state%diag_hist_count)
+            n_first = this%state%diag_hist_count - n_use + 1
+            t_av = sum(this%state%diag_time_hist(n_first:this%state%diag_hist_count)) / &
+                real(n_use, dp)
+            s_av = sum(this%state%diag_front_coord_hist(n_first:this%state%diag_hist_count)) / &
+                real(n_use, dp)
+            numerator = 0.0_dp
+            denominator = 0.0_dp
+            do n = n_first, this%state%diag_hist_count
+                numerator = numerator + (this%state%diag_time_hist(n) - t_av) * &
+                    (this%state%diag_front_coord_hist(n) - s_av)
+                denominator = denominator + (this%state%diag_time_hist(n) - t_av)**2
+            end do
+
+            if (denominator > tiny(denominator)) then
+                vfit = numerator / denominator
+            else
+                vfit = 0.0_dp
+            end if
+        end function diagnostic_recent_velocity
+
+
         function diagnostic_mean_front_position() result(x_mean)
             real(dp) :: x_mean
             if (this%state%diag_hist_count < 1) then
@@ -2073,8 +2268,13 @@ contains
         end function combined_position_error
 
         logical function control_action_needed()
-            control_action_needed = (abs(flame_velocity_filtered) > velocity_tolerance_on) .or. &
-                (abs(position_control_error) > 0.0_dp .and. abs(control_velocity) > velocity_tolerance_on)
+            if (multidim_anchor) then
+                control_action_needed = abs(control_velocity) > velocity_tolerance_on
+            else
+                control_action_needed = (abs(flame_velocity_filtered) > velocity_tolerance_on) .or. &
+                    (abs(position_control_error) > 0.0_dp .and. &
+                     abs(control_velocity) > velocity_tolerance_on)
+            end if
         end function control_action_needed
 
         subroutine update_adaptive_gain(v_current)
@@ -2905,6 +3105,7 @@ contains
             real(dp) :: flame_established_flag
             real(dp) :: containment_flag, hard_recovery_hold_flag
             real(dp) :: final_stationary_flag, anchor_interior_flag
+            real(dp) :: predictive_flag
             real(dp) :: domain_warning_flag, domain_ok_flag, domain_failure_flag
 
             if (measurement_enabled) then
@@ -2948,6 +3149,7 @@ contains
             domain_warning_flag = merge(1.0_dp, 0.0_dp, domain_warning)
             domain_ok_flag = merge(1.0_dp, 0.0_dp, domain_ok)
             domain_failure_flag = merge(1.0_dp, 0.0_dp, this%state%domain_failure)
+            predictive_flag = merge(1.0_dp, 0.0_dp, predictive_emergency)
 
             write(this%state%flame_loc_unit,'(100E20.12)') &
                 time, current_flame_location(1:dimensions), &
@@ -2972,7 +3174,9 @@ contains
                 x_reaction_left, x_reaction_right, reaction_thickness, &
                 inlet_preheat_distance, outlet_reaction_distance, inlet_theta_max, &
                 inlet_margin_ratio, outlet_margin_ratio, domain_warning_flag, domain_ok_flag, &
-                domain_failure_flag, correction_free_time
+                domain_failure_flag, correction_free_time, &
+                anchor_control_velocity, safety_velocity, predictive_flag, &
+                predictive_time_to_boundary, predictive_response_horizon
         end subroutine write_tracking_line
 
     end subroutine solve
