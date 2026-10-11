@@ -19,6 +19,7 @@ module flame_stabilization_solver_class
     type :: flame_stabilization_runtime_state
         real(dp), allocatable :: time_hist(:), front_coord_hist(:)
         real(dp), allocatable :: diag_time_hist(:), diag_front_coord_hist(:)
+        real(dp), allocatable :: diag_inlet_edge_hist(:)
         real(dp), allocatable :: diag_inlet_velocity_hist(:)
         real(dp), allocatable :: arm_metric_hist(:)
         real(dp), allocatable :: stabilized_product_mass_fractions(:)
@@ -357,6 +358,9 @@ contains
         real(dp), parameter :: predictive_max_fraction = 1.0_dp
         real(dp), parameter :: predictive_emergency_ramp_time = 5.0e-04_dp
         real(dp), parameter :: predictive_retarget_interval = 1.0e-03_dp
+        ! Actual inlet-margin violation may re-command immediately after the
+        ! previous emergency ramp has finished, even if the centroid moves away.
+        real(dp), parameter :: inlet_edge_velocity_noise_floor = 1.0e-02_dp
 
         integer, parameter :: workflow_flamelet_sl = 1
         integer, parameter :: workflow_anchor_observation = 2
@@ -456,6 +460,7 @@ contains
         real(dp) :: anchor_inlet_velocity_rms, anchor_velocity_tolerance
         real(dp) :: anchor_inlet_window_change, anchor_inlet_change_tolerance
         real(dp) :: anchor_control_velocity, safety_velocity
+        real(dp) :: inlet_edge_velocity, predicted_inlet_clearance
         real(dp) :: inlet_clearance_to_hard, outlet_clearance_to_hard
         real(dp) :: predictive_time_to_boundary, predictive_response_horizon
         real(dp) :: predictive_du, predictive_max_step, local_threshold
@@ -467,7 +472,7 @@ contains
         character(len=5) :: axis_names(3)
         character(len=200) :: flame_debug_file
         character(len=200) :: flame_physics_file
-        character(len=1000) :: av_header
+        character(len=4096) :: av_header
         character(len=100) :: chemical_mechanism
         logical :: found_inlet_farfield, trace_success, flame_detected, control_performed
         logical :: measurement_enabled, ramp_settled, response_settled, reset_history_after_log
@@ -482,7 +487,8 @@ contains
         logical :: final_structure_stationary, anchor_velocity_interior
         logical :: multidim_anchor, anchor_quasi_stationary_candidate
         logical :: predictive_emergency, predictive_inlet_danger
-        logical :: predictive_outlet_danger
+        logical :: predictive_outlet_danger, inlet_safety_intervention
+        logical :: outlet_reaction_contact
 
 
         stabilized = .false.
@@ -543,9 +549,11 @@ contains
         if (.not. allocated(this%state%diag_time_hist)) then
             allocate(this%state%diag_time_hist(max_diag_hist_size), &
                 this%state%diag_front_coord_hist(max_diag_hist_size), &
+                this%state%diag_inlet_edge_hist(max_diag_hist_size), &
                 this%state%diag_inlet_velocity_hist(max_diag_hist_size))
             this%state%diag_time_hist = 0.0_dp
             this%state%diag_front_coord_hist = 0.0_dp
+            this%state%diag_inlet_edge_hist = 0.0_dp
             this%state%diag_inlet_velocity_hist = 0.0_dp
         end if
 
@@ -945,12 +953,21 @@ contains
                 else
                     envelope_length = max(x_reaction_right - x_preheat, 0.0_dp)
                 end if
-                hard_required_length = hard_inlet_margin + envelope_length + hard_outlet_margin
-                hard_domain_fits = hard_required_length <= domain_front_length
-
-                preferred_shift_min = preferred_inlet_margin - inlet_preheat_distance
-                preferred_shift_max = outlet_reaction_distance - preferred_outlet_margin
-                preferred_domain_fits = preferred_shift_min <= preferred_shift_max
+                if (multidim_anchor) then
+                    ! Only inlet isolation constrains 2D anchoring. A downstream
+                    ! cellular tongue is permitted to leave through an outflow.
+                    hard_required_length = hard_inlet_margin
+                    hard_domain_fits = hard_inlet_margin <= domain_front_length
+                    preferred_shift_min = preferred_inlet_margin - inlet_preheat_distance
+                    preferred_shift_max = huge(1.0_dp)
+                    preferred_domain_fits = .true.
+                else
+                    hard_required_length = hard_inlet_margin + envelope_length + hard_outlet_margin
+                    hard_domain_fits = hard_required_length <= domain_front_length
+                    preferred_shift_min = preferred_inlet_margin - inlet_preheat_distance
+                    preferred_shift_max = outlet_reaction_distance - preferred_outlet_margin
+                    preferred_domain_fits = preferred_shift_min <= preferred_shift_max
+                end if
             else
                 envelope_length = 0.0_dp
                 hard_required_length = huge(1.0_dp)
@@ -962,22 +979,38 @@ contains
 
             physical_envelope_available = thermal_envelope_found .and. reaction_envelope_found
 
-            hard_envelope_violation = physical_envelope_available .and. &
-                (inlet_contaminated .or. (.not. hard_domain_fits) .or. &
-                 hard_inlet_deficit > 0.0_dp .or. hard_outlet_deficit > 0.0_dp)
+            outlet_reaction_contact = reaction_envelope_found .and. &
+                outlet_reaction_tip_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp
 
-            domain_ok = physical_envelope_available .and. &
-                (.not. inlet_contaminated) .and. hard_domain_fits .and. &
-                (inlet_preheat_distance >= hard_inlet_margin) .and. &
-                (outlet_reaction_distance >= hard_outlet_margin)
-
-            domain_warning = thermal_envelope_found .and. reaction_envelope_found .and. &
-                preferred_domain_fits .and. &
-                (preferred_shift_min > 0.0_dp .or. preferred_shift_max < 0.0_dp)
-
-            physical_boundary_violation = physical_envelope_available .and. &
-                (inlet_preheat_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp .or. &
-                 outlet_reaction_tip_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp)
+            if (multidim_anchor) then
+                ! Outlet reaction contact is a diagnostic, never a hard anchor
+                ! failure. It does not enter containment or position feedback.
+                hard_envelope_violation = physical_envelope_available .and. &
+                    (inlet_contaminated .or. (.not. hard_domain_fits) .or. &
+                     hard_inlet_deficit > 0.0_dp)
+                domain_ok = physical_envelope_available .and. &
+                    (.not. inlet_contaminated) .and. hard_domain_fits .and. &
+                    (inlet_preheat_distance >= hard_inlet_margin)
+                domain_warning = physical_envelope_available .and. &
+                    preferred_shift_min > 0.0_dp
+                physical_boundary_violation = thermal_envelope_found .and. &
+                    (inlet_preheat_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp)
+            else
+                ! Preserve 1D LBV's symmetric containment semantics.
+                hard_envelope_violation = physical_envelope_available .and. &
+                    (inlet_contaminated .or. (.not. hard_domain_fits) .or. &
+                     hard_inlet_deficit > 0.0_dp .or. hard_outlet_deficit > 0.0_dp)
+                domain_ok = physical_envelope_available .and. &
+                    (.not. inlet_contaminated) .and. hard_domain_fits .and. &
+                    (inlet_preheat_distance >= hard_inlet_margin) .and. &
+                    (outlet_reaction_distance >= hard_outlet_margin)
+                domain_warning = thermal_envelope_found .and. reaction_envelope_found .and. &
+                    preferred_domain_fits .and. &
+                    (preferred_shift_min > 0.0_dp .or. preferred_shift_max < 0.0_dp)
+                physical_boundary_violation = physical_envelope_available .and. &
+                    (inlet_preheat_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp .or. &
+                     outlet_reaction_tip_distance <= 0.5_dp * cell_size(front_axis) + 1.0e-12_dp)
+            end if
 
             envelope_position_error = 0.0_dp
             if (preferred_domain_fits) then
@@ -1029,8 +1062,10 @@ contains
             diag_flame_velocity_filtered = 0.0_dp
             anchor_control_velocity = 0.0_dp
             safety_velocity = 0.0_dp
+            inlet_edge_velocity = 0.0_dp
             if (flame_detected) then
-                call append_diagnostic_history(time, current_front_coord)
+                call append_diagnostic_history(time, current_front_coord, &
+                    merge(x_preheat, current_front_coord, thermal_envelope_found))
                 diag_flame_velocity_lsq = diagnostic_least_squares_velocity()
                 if (this%state%diag_hist_count <= 2) then
                     diag_flame_velocity_filtered = diag_flame_velocity_lsq
@@ -1043,8 +1078,9 @@ contains
                 if (multidim_anchor) then
                     anchor_control_velocity = diagnostic_recent_velocity( &
                         multidim_anchor_control_window_samples)
-                    safety_velocity = diagnostic_recent_velocity( &
+                    inlet_edge_velocity = diagnostic_recent_inlet_edge_velocity( &
                         predictive_safety_window_samples)
+                    safety_velocity = inlet_edge_velocity
                 else
                     anchor_control_velocity = diag_flame_velocity_filtered
                     safety_velocity = diag_flame_velocity_filtered
@@ -1155,33 +1191,32 @@ contains
                 end if
             end if
 
-            ! Predict whether the robust flame envelope will enter a hard
-            ! boundary margin before a fast safety correction can take effect.
-            ! This path is independent of scientific establishment and uses the
-            ! non-reset diagnostic history, so it remains available during ramps.
+            ! v5: independent inlet-tip prediction, regardless of mean-front
+            ! motion. Strong outbound tongues must not provoke inlet commands.
+            inlet_safety_intervention = .false.
+            predicted_inlet_clearance = 0.0_dp
             if (multidim_anchor .and. flame_detected .and. &
-                physical_envelope_available .and. &
-                this%state%diag_hist_count >= predictive_safety_min_samples) then
-                inlet_clearance_to_hard = max(inlet_preheat_distance - hard_inlet_margin, 0.0_dp)
-                outlet_clearance_to_hard = max(outlet_reaction_distance - hard_outlet_margin, 0.0_dp)
+                thermal_envelope_found) then
+                inlet_clearance_to_hard = inlet_preheat_distance - hard_inlet_margin
                 predictive_response_horizon = predictive_horizon_factor * ( &
                     predictive_emergency_ramp_time + response_settle_capture + 2.0_dp * time_track)
-
-                if (safety_velocity < -predictive_velocity_threshold) then
-                    predictive_time_to_boundary = inlet_clearance_to_hard / &
-                        max(-safety_velocity, predictive_velocity_threshold)
+                if (this%state%diag_hist_count >= predictive_safety_min_samples .and. &
+                    inlet_edge_velocity < -max(predictive_velocity_threshold, &
+                                              inlet_edge_velocity_noise_floor)) then
+                    predictive_time_to_boundary = max(inlet_clearance_to_hard, 0.0_dp) / &
+                        max(-inlet_edge_velocity, predictive_velocity_threshold)
+                    predicted_inlet_clearance = inlet_clearance_to_hard + &
+                        inlet_edge_velocity * predictive_response_horizon
                     predictive_inlet_danger = &
-                        predictive_time_to_boundary <= predictive_response_horizon
-                else if (safety_velocity > predictive_velocity_threshold) then
-                    predictive_time_to_boundary = outlet_clearance_to_hard / &
-                        max(safety_velocity, predictive_velocity_threshold)
-                    predictive_outlet_danger = &
-                        predictive_time_to_boundary <= predictive_response_horizon
+                        predicted_inlet_clearance <= 0.0_dp
                 end if
-
-                predictive_emergency = predictive_inlet_danger .or. predictive_outlet_danger
-                capture_mode = capture_mode .or. predictive_emergency
-                emergency_mode = emergency_mode .or. predictive_emergency
+                ! A current inlet hard-margin violation must pre-empt ramps
+                ! regardless of history length or whether the centroid is moving.
+                inlet_safety_intervention = predictive_inlet_danger .or. &
+                    (inlet_clearance_to_hard < 0.0_dp)
+                predictive_emergency = inlet_safety_intervention
+                capture_mode = capture_mode .or. inlet_safety_intervention
+                emergency_mode = emergency_mode .or. inlet_safety_intervention
             end if
 
             if (multidim_anchor) then
@@ -1215,21 +1250,26 @@ contains
             ! For a recoverable hard-margin violation, wait long enough after
             ! each correction for the broad flame structure to respond before
             ! spending another correction.
-            hard_recovery_deficit = max(hard_inlet_deficit, 0.0_dp) + &
-                max(hard_outlet_deficit, 0.0_dp)
-            if (hard_outlet_deficit >= hard_inlet_deficit .and. &
-                hard_outlet_deficit > 0.0_dp) then
-                hard_recovery_danger_velocity = max(diag_flame_velocity_filtered, 0.0_dp)
-            else if (hard_inlet_deficit > 0.0_dp) then
-                hard_recovery_danger_velocity = max(-diag_flame_velocity_filtered, 0.0_dp)
+            if (multidim_anchor) then
+                hard_recovery_deficit = max(hard_inlet_deficit, 0.0_dp)
+                hard_recovery_danger_velocity = max(-inlet_edge_velocity, 0.0_dp)
             else
-                hard_recovery_danger_velocity = 0.0_dp
+                hard_recovery_deficit = max(hard_inlet_deficit, 0.0_dp) + &
+                    max(hard_outlet_deficit, 0.0_dp)
+                if (hard_outlet_deficit >= hard_inlet_deficit .and. &
+                    hard_outlet_deficit > 0.0_dp) then
+                    hard_recovery_danger_velocity = max(diag_flame_velocity_filtered, 0.0_dp)
+                else if (hard_inlet_deficit > 0.0_dp) then
+                    hard_recovery_danger_velocity = max(-diag_flame_velocity_filtered, 0.0_dp)
+                else
+                    hard_recovery_danger_velocity = 0.0_dp
+                end if
             end if
 
             if (multidim_anchor) then
                 hard_recovery_response_time = hard_recovery_response_fraction * &
-                    max(reaction_thickness_safety, cell_size(front_axis)) / &
-                    max(abs(diag_flame_velocity_filtered), velocity_tolerance_on)
+                    max(thermal_thickness, cell_size(front_axis)) / &
+                    max(abs(inlet_edge_velocity), velocity_tolerance_on)
                 hard_recovery_response_time = max(hard_recovery_response_min, &
                     min(hard_recovery_response_max, hard_recovery_response_time))
             else if (thermal_envelope_found) then
@@ -1317,20 +1357,27 @@ contains
             ! Predictive safety is allowed to pre-empt a still-running normal
             ! ramp. Retarget from the velocity actually applied at this instant,
             ! rather than from the stale target of the interrupted ramp.
-            if (predictive_emergency .and. (.not. this%state%domain_failure) .and. &
+            if (multidim_anchor .and. inlet_safety_intervention .and. &
+                (.not. this%state%domain_failure) .and. &
                 this%state%control_stage == stage_anchor_control .and. &
-                (time - this%state%previous_predictive_safety_time) >= &
-                    predictive_retarget_interval) then
-                control_velocity = safety_velocity
-                predictive_du = -predictive_velocity_compensation * safety_velocity
+                ((time - this%state%previous_predictive_safety_time) >= &
+                    predictive_retarget_interval .or. &
+                 (inlet_clearance_to_hard < 0.0_dp .and. &
+                  (time - this%state%previous_predictive_safety_time) >= &
+                    predictive_emergency_ramp_time))) then
+                control_velocity = inlet_edge_velocity
+                predictive_du = predictive_velocity_compensation * max( &
+                    -inlet_edge_velocity, &
+                    max(hard_inlet_margin - inlet_preheat_distance, 0.0_dp) / &
+                        max(predictive_response_horizon, time_track))
                 predictive_max_step = max(predictive_max_fraction * &
                     max(abs(this%state%inlet_velocity_applied), min_abs_velocity_step), &
                     min_abs_velocity_step_capture)
-                predictive_du = min(max(predictive_du, -predictive_max_step), predictive_max_step)
-                proposed_inlet_velocity = max( &
-                    this%state%inlet_velocity_applied + predictive_du, 0.0_dp)
+                predictive_du = min(max(predictive_du, 0.0_dp), predictive_max_step)
+                proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
+                    this%state%inlet_velocity_applied + predictive_du)
 
-                if (abs(proposed_inlet_velocity - this%state%inlet_velocity_applied) > &
+                if (proposed_inlet_velocity - this%state%inlet_velocity_target > &
                     min_abs_velocity_step) then
                     target_step_for_log = proposed_inlet_velocity - &
                         this%state%inlet_velocity_applied
@@ -1417,8 +1464,8 @@ contains
                     ! In 2D, a large bulk translation is handled by the normal
                     ! medium-window anchor controller. Capture/emergency are
                     ! reserved for actual or predicted boundary danger.
-                    capture_mode = hard_envelope_violation .or. predictive_emergency
-                    emergency_mode = hard_envelope_violation .or. predictive_emergency
+                    capture_mode = hard_envelope_violation .or. inlet_safety_intervention
+                    emergency_mode = hard_envelope_violation .or. inlet_safety_intervention
                 else
                     capture_mode = hard_envelope_violation .or. &
                         (this%state%flame_established .and. &
@@ -1550,6 +1597,12 @@ contains
                         call update_bracket(measured_inlet_velocity, control_velocity)
                         call choose_new_inlet_target(measured_inlet_velocity, control_velocity, &
                             proposed_inlet_velocity, du_raw, du_limited)
+
+                        if (multidim_anchor .and. inlet_safety_intervention) then
+                            ! Never let normal anchoring decrease inlet speed
+                            ! while the upstream reaction/preheat edge is unsafe.
+                            proposed_inlet_velocity = max(proposed_inlet_velocity, measured_inlet_velocity)
+                        end if
 
                         if (abs(proposed_inlet_velocity - measured_inlet_velocity) > 0.0_dp) then
                             this%state%inlet_velocity_target = proposed_inlet_velocity
@@ -1827,7 +1880,8 @@ contains
                 ' "domain_warning" "domain_ok" "domain_failure"' // &
                 ' "correction_free_time"' // &
                 ' "anchor_control_velocity" "safety_velocity"' // &
-                ' "predictive_on" "time_to_hard_s" "safety_horizon_s"'
+                ' "predictive_on" "time_to_hard_s" "safety_horizon_s"' // &
+                ' "inlet_edge_velocity" "outlet_reaction_contact"'
 
             write(this%state%flame_loc_unit,'(A)') trim(av_header)
 
@@ -1918,13 +1972,14 @@ contains
             end if
         end subroutine append_front_history
 
-        subroutine append_diagnostic_history(t_new, s_new)
-            real(dp), intent(in) :: t_new, s_new
+        subroutine append_diagnostic_history(t_new, s_new, inlet_edge_new)
+            real(dp), intent(in) :: t_new, s_new, inlet_edge_new
 
             if (this%state%diag_hist_count < max_diag_hist_size) then
                 this%state%diag_hist_count = this%state%diag_hist_count + 1
                 this%state%diag_time_hist(this%state%diag_hist_count) = t_new
                 this%state%diag_front_coord_hist(this%state%diag_hist_count) = s_new
+                this%state%diag_inlet_edge_hist(this%state%diag_hist_count) = inlet_edge_new
                 this%state%diag_inlet_velocity_hist(this%state%diag_hist_count) = &
                     this%state%inlet_velocity_applied
             else
@@ -1932,10 +1987,13 @@ contains
                     this%state%diag_time_hist(2:max_diag_hist_size)
                 this%state%diag_front_coord_hist(1:max_diag_hist_size-1) = &
                     this%state%diag_front_coord_hist(2:max_diag_hist_size)
+                this%state%diag_inlet_edge_hist(1:max_diag_hist_size-1) = &
+                    this%state%diag_inlet_edge_hist(2:max_diag_hist_size)
                 this%state%diag_inlet_velocity_hist(1:max_diag_hist_size-1) = &
                     this%state%diag_inlet_velocity_hist(2:max_diag_hist_size)
                 this%state%diag_time_hist(max_diag_hist_size) = t_new
                 this%state%diag_front_coord_hist(max_diag_hist_size) = s_new
+                this%state%diag_inlet_edge_hist(max_diag_hist_size) = inlet_edge_new
                 this%state%diag_inlet_velocity_hist(max_diag_hist_size) = &
                     this%state%inlet_velocity_applied
             end if
@@ -2052,6 +2110,27 @@ contains
                 vfit = 0.0_dp
             end if
         end function diagnostic_least_squares_velocity
+
+        function diagnostic_recent_inlet_edge_velocity(n_requested) result(vfit)
+            integer, intent(in) :: n_requested
+            real(dp) :: vfit, tmean, xmean, numerator, denominator
+            integer :: n, n0, nuse
+
+            vfit = 0.0_dp
+            if (this%state%diag_hist_count < 2) return
+            nuse = min(max(n_requested,2), this%state%diag_hist_count)
+            n0 = this%state%diag_hist_count - nuse + 1
+            tmean = sum(this%state%diag_time_hist(n0:this%state%diag_hist_count)) / real(nuse,dp)
+            xmean = sum(this%state%diag_inlet_edge_hist(n0:this%state%diag_hist_count)) / real(nuse,dp)
+            numerator = 0.0_dp
+            denominator = 0.0_dp
+            do n = n0, this%state%diag_hist_count
+                numerator = numerator + (this%state%diag_time_hist(n)-tmean) * &
+                    (this%state%diag_inlet_edge_hist(n)-xmean)
+                denominator = denominator + (this%state%diag_time_hist(n)-tmean)**2
+            end do
+            if (denominator > tiny(denominator)) vfit = numerator / denominator
+        end function diagnostic_recent_inlet_edge_velocity
 
         function diagnostic_recent_velocity(n_requested) result(vfit)
             integer, intent(in) :: n_requested
@@ -3176,7 +3255,8 @@ contains
                 inlet_margin_ratio, outlet_margin_ratio, domain_warning_flag, domain_ok_flag, &
                 domain_failure_flag, correction_free_time, &
                 anchor_control_velocity, safety_velocity, predictive_flag, &
-                predictive_time_to_boundary, predictive_response_horizon
+                predictive_time_to_boundary, predictive_response_horizon, &
+                inlet_edge_velocity, merge(1.0_dp, 0.0_dp, outlet_reaction_contact)
         end subroutine write_tracking_line
 
     end subroutine solve
