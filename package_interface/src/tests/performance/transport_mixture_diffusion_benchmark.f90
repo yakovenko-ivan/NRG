@@ -40,7 +40,7 @@ program transport_mixture_diffusion_benchmark
     ! that ./task_setup/chemical_mechanisms and ./task_setup/thermophysical_data
     ! resolve exactly as they do in a normal package-interface setup generator.
     chemistry = chemical_properties_c( &
-        chemical_mechanism_file_name='KEROMNES.txt', &
+        chemical_mechanism_file_name='hydrogen/KEROMNES.txt', &
         default_enhanced_efficiencies=1.0_dp, &
         E_act_units='cal.mol')
 

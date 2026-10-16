@@ -276,7 +276,7 @@ program package_interface
     select case (trim(to_lower(mechanism_id)))
     case ('keromnes')
         mech_name = 'KEROMNES'
-        mech_file = 'KEROMNES.txt'
+        mech_file = 'hydrogen/KEROMNES.txt'
         thermo_file = 'KEROMNES_THERMO.txt'
         transdata_file = 'KEROMNES_TRANSDATA.txt'
     case default

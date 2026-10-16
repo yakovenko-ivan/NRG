@@ -101,7 +101,7 @@ program package_interface
 																								1.0_dp,1.0_dp,1.0_dp/),(/3,2/)),	&
 															axis_names			=	(/'x','y','z'/))
 	
-		problem_chemistry		= chemical_properties_c(chemical_mechanism_file_name	= 'KEROMNES.txt'	,	&
+		problem_chemistry		= chemical_properties_c(chemical_mechanism_file_name	= 'hydrogen/KEROMNES.txt'	,	&
 														default_enhanced_efficiencies	= 1.0_dp			,	&
 														E_act_units						= 'cal.mol')
 					
