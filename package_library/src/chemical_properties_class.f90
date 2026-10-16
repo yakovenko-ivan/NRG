@@ -10,7 +10,7 @@ module chemical_properties_class
     private
     public :: chemical_properties, chemical_properties_pointer, chemical_properties_c
 
-    integer, parameter :: mechanism_line_length = 1024
+    integer, parameter :: mechanism_line_length = 4096
     integer, parameter :: parser_message_length = 512
 
     type :: chemical_properties_pointer
@@ -45,6 +45,8 @@ module chemical_properties_class
         procedure, private :: read_chemical_reactions_number
         procedure, private :: read_chemical_reactions_properties
         procedure, private :: chemical_reaction_parser
+        procedure, private :: count_standard_chemkin_reactions
+        procedure, private :: read_standard_chemkin_reactions
 
         procedure :: get_chemical_specie_index
         procedure :: get_chemical_specie_name
@@ -181,6 +183,8 @@ contains
         integer :: reaction_number
         integer :: io_status
         logical :: file_exists
+        character(len=20) :: amount_units
+        real(dp) :: amount_factor
 
         character(len=mechanism_line_length) :: mechanism_path
         character(len=parser_message_length) :: io_message
@@ -221,6 +225,10 @@ contains
             error stop 'Chemical mechanism open failure'
         end if
 
+        ! Only the standard CHEMKIN grammar is supported.  File extensions
+        ! do not select an alternative reader.
+        amount_units='MOLES'
+
         this%species_number = &
             this%read_chemical_species_number(chemical_mechanism_data_file_unit)
 
@@ -234,7 +242,7 @@ contains
         call this%read_chemical_species_names(chemical_mechanism_data_file_unit)
 
         this%reactions_number = &
-            this%read_chemical_reactions_number(chemical_mechanism_data_file_unit)
+            this%count_standard_chemkin_reactions(chemical_mechanism_data_file_unit)
 
         if (this%reactions_number <= 0) then
             error stop 'Chemical mechanism contains no supported reactions'
@@ -263,8 +271,8 @@ contains
         this%Troe_coeffs = 0.0_dp
         this%enhanced_efficiencies = this%default_enhanced_efficiencies
 
-        call this%read_chemical_reactions_properties( &
-            chemical_mechanism_data_file_unit)
+        call this%read_standard_chemkin_reactions( &
+            chemical_mechanism_data_file_unit,amount_units)
 
         close(chemical_mechanism_data_file_unit)
 
@@ -278,6 +286,8 @@ contains
         case ('kcal.mol')
             activation_energy_coefficient = &
                 r_gase_J/r_gase_cal*1000.0_dp
+        case ('kelvins')
+            activation_energy_coefficient = r_gase_J
         case default
             write(error_unit,'(A,A)') &
                 'Chemical properties: unsupported activation-energy units: ', &
@@ -285,7 +295,24 @@ contains
             error stop 'Unsupported activation-energy units'
         end select
 
+        amount_factor=1.0_dp
+        if (trim(amount_units)=='MOLECULES') &
+            amount_factor=N_A
+
         do reaction_number = 1, this%reactions_number
+
+            ! CHEMKIN MOLECULES: rates in particles/cm3/s; native NRG uses
+            ! mol/cm3/s before the existing cm3 -> m3 conversion below.
+            if (amount_factor /= 1.0_dp) then
+                this%A(reaction_number)=this%A(reaction_number)* &
+                    amount_factor**(this%chemical_coeffs(1,reaction_number,1)-1)
+                if (this%reactions_type(reaction_number)==2 .or. &
+                    this%reactions_type(reaction_number)==3 .or. &
+                    this%reactions_type(reaction_number)==7) then
+                    this%A_low(reaction_number)=this%A_low(reaction_number)* &
+                        amount_factor**this%chemical_coeffs(1,reaction_number,1)
+                end if
+            end if
 
             if (this%chemical_coeffs(1,reaction_number,1) == 2) then
                 this%A(reaction_number) = &
@@ -936,7 +963,7 @@ contains
         character(len=20) :: mechanism_name
         integer :: index_type
 
-        index_type = index(this%chemical_mechanism_file_name,'.txt')
+        index_type = scan(trim(this%chemical_mechanism_file_name),'.',back=.true.)
 
         if (index_type > 1) then
             mechanism_name = this%chemical_mechanism_file_name(:index_type-1)
@@ -1188,5 +1215,427 @@ contains
             character_value == achar(13)
 
     end function is_parser_whitespace
+
+    ! Read a standard CHEMKIN REACTIONS section without an intermediate format.
+    ! The mechanism filename extension does not control parser selection.
+    integer function count_standard_chemkin_reactions(this, file_unit) result(nreactions)
+        class(chemical_properties), intent(inout) :: this
+        integer, intent(in) :: file_unit
+        character(len=mechanism_line_length) :: line
+        integer :: ios
+        logical :: terminated
+        nreactions = 0
+        terminated = .false.
+        call seek_section(file_unit, 'REACTIONS')
+        do
+            read(file_unit,'(A)',iostat=ios) line
+            if (ios == iostat_end) exit
+            if (ios /= 0) error stop 'CHEMKIN: reading REACTIONS failed'
+            call strip_chemkin_comment(line)
+            line = adjustl(line)
+            if (len_trim(line) == 0) cycle
+            if (upper_chemkin(trim(line)) == 'END') then
+                terminated = .true.
+                exit
+            end if
+            if (index(line,'=') > 0) nreactions = nreactions + 1
+        end do
+        if (.not. terminated) error stop 'CHEMKIN: missing REACTIONS END'
+        rewind(file_unit)
+    end function count_standard_chemkin_reactions
+
+    subroutine read_standard_chemkin_reactions(this, file_unit, amount_units)
+        class(chemical_properties), intent(inout) :: this
+        integer, intent(in) :: file_unit
+        character(len=*), intent(out) :: amount_units
+        character(len=mechanism_line_length) :: line, equation
+        character(len=128) :: parts(128), keyword
+        character(len=20) :: energy_units
+        integer :: ios, n, r, i
+        logical :: is_falloff, third_body, has_low, has_troe, terminated
+        logical :: seen_reaction
+        amount_units = 'MOLES'
+        ! CHEMKIN defaults: CAL/MOLE and MOLES, independent of the legacy
+        ! E_act_units constructor argument.  Header declarations override.
+        energy_units = 'cal.mol'
+        call seek_section(file_unit, 'REACTIONS')
+        ! seek_section has consumed the header: read its options separately.
+        call read_standard_chemkin_units(file_unit,energy_units,amount_units)
+        this%E_act_units = energy_units
+        r = 0
+        has_low = .false.
+        has_troe = .false.
+        is_falloff = .false.
+        third_body = .false.
+        terminated = .false.
+        seen_reaction = .false.
+        do
+            read(file_unit,'(A)',iostat=ios) line
+            if (ios == iostat_end) exit
+            if (ios /= 0) error stop 'CHEMKIN: reaction file read failure'
+            call strip_chemkin_comment(line)
+            line = adjustl(line)
+            if (len_trim(line) == 0) cycle
+            call split_chemkin_words(line,parts,n)
+            keyword = upper_chemkin(trim(parts(1)))
+            if (keyword == 'END') then
+                if (is_falloff .and. .not. has_low) &
+                    error stop 'CHEMKIN: missing LOW for falloff reaction'
+                terminated = .true.
+                exit
+            end if
+            if (index(line,'=') > 0) then
+                if (is_falloff .and. .not. has_low) &
+                    error stop 'CHEMKIN: missing LOW for falloff reaction'
+                r = r + 1
+                if (r > this%reactions_number) error stop 'CHEMKIN: inconsistent reaction count'
+                if (n < 4) error stop 'CHEMKIN: missing Arrhenius parameters'
+                equation = ''
+                do i=1,n-3
+                    equation = trim(equation)//trim(parts(i))
+                end do
+                call parse_standard_chemkin_equation(this,trim(equation),r,is_falloff,third_body)
+                call parse_chemkin_real(parts(n-2),this%A(r))
+                call parse_chemkin_real(parts(n-1),this%beta(r))
+                call parse_chemkin_real(parts(n),this%E_act(r))
+                if (this%A(r) < 0.0_dp) error stop 'CHEMKIN: negative Arrhenius A unsupported'
+                has_low = .false.
+                has_troe = .false.
+                seen_reaction = .true.
+                cycle
+            end if
+            if (.not. seen_reaction) error stop 'CHEMKIN: modifier before first reaction'
+            if (keyword == 'DUP' .or. keyword == 'DUPLICATE') cycle
+            select case (trim(keyword))
+            case ('PLOG','CHEB','TCHEB','PCHEB','SRI','REV','FORD','RORD', &
+                  'HIGH','LT','RLT','UNITS','STICK','COV','MWON','MWOFF')
+                write(error_unit,'(A,A)') &
+                    'CHEMKIN: unsupported kinetics directive: ',trim(keyword)
+                error stop 'CHEMKIN: unsupported kinetics model'
+            end select
+            if (chemkin_starts_with(line,'LOW')) then
+                if (.not. is_falloff .or. has_low) &
+                    error stop 'CHEMKIN: unexpected or repeated LOW'
+                call parse_chemkin_parameters(line,'LOW',3,3,parts,n)
+                call parse_chemkin_real(parts(1),this%A_low(r))
+                call parse_chemkin_real(parts(2),this%beta_low(r))
+                call parse_chemkin_real(parts(3),this%E_act_low(r))
+                if (this%A_low(r) <= 0.0_dp) error stop 'CHEMKIN: invalid LOW A'
+                has_low = .true.
+            else if (chemkin_starts_with(line,'TROE')) then
+                if (.not. is_falloff .or. .not. has_low .or. has_troe) &
+                    error stop 'CHEMKIN: unexpected or repeated TROE'
+                call parse_chemkin_parameters(line,'TROE',3,4,parts,n)
+                do i=1,n
+                    call parse_chemkin_real(parts(i),this%Troe_coeffs(r,i))
+                end do
+                has_troe = .true.
+                if (this%reactions_type(r) == 2) this%reactions_type(r) = 3
+                ! Irreversible falloff remains type 7; presence of TROE_coeffs
+                ! tells chemical_kinetics_core_class to apply Troe broadening.
+            else if (index(line,'/') > 0) then
+                if (.not. third_body) error stop 'CHEMKIN: efficiencies without third body'
+                call parse_standard_chemkin_efficiencies(this,line,r)
+            else
+                write(error_unit,'(A,A)') 'CHEMKIN: unsupported directive: ',trim(line)
+                error stop 'CHEMKIN: unsupported reaction model'
+            end if
+        end do
+        if (.not. terminated .or. r /= this%reactions_number) &
+            error stop 'CHEMKIN: incorrect reaction count or missing END'
+        rewind(file_unit)
+    end subroutine read_standard_chemkin_reactions
+
+    subroutine read_standard_chemkin_units(file_unit,energy_units,amount_units)
+        integer, intent(in) :: file_unit
+        character(len=*), intent(inout) :: energy_units, amount_units
+        character(len=mechanism_line_length) :: line
+        character(len=128) :: words(128), option
+        integer :: n, i, ios
+        rewind(file_unit)
+        do
+            read(file_unit,'(A)',iostat=ios) line
+            if (ios /= 0) error stop 'CHEMKIN: missing REACTIONS header'
+            call strip_chemkin_comment(line)
+            line = adjustl(line)
+            call split_chemkin_words(line,words,n)
+            if (n == 0) cycle
+            if (upper_chemkin(trim(words(1))) == 'REACTIONS') exit
+        end do
+        do i=2,n
+            option=upper_chemkin(trim(words(i)))
+            select case(trim(option))
+            case ('MOLES','MOLE')
+                amount_units='MOLES'
+            case ('MOLECULES','MOLECULE')
+                amount_units='MOLECULES'
+            case ('CAL/MOLE','CAL/MOL','CALORIES/MOLE')
+                energy_units='cal.mol'
+            case ('KCAL/MOLE','KCAL/MOL','KCALORIES/MOLE')
+                energy_units='kcal.mol'
+            case ('JOULES/MOLE','JOULE/MOLE','JOULES/MOL')
+                energy_units='J.mol'
+            case ('KJOULES/MOLE','KJOULES/MOL','KJOULE/MOLE')
+                energy_units='kJ.mol'
+            case ('KELVINS','KELVIN')
+                energy_units='kelvins'
+            case default
+                write(error_unit,'(A,A)') 'CHEMKIN: unknown REACTIONS option ', trim(option)
+                error stop 'CHEMKIN: unsupported units'
+            end select
+        end do
+    end subroutine read_standard_chemkin_units
+
+    subroutine parse_standard_chemkin_equation(this,equation,reaction,falloff,thirdbody)
+        class(chemical_properties), intent(inout) :: this
+        character(len=*), intent(in) :: equation
+        integer, intent(in) :: reaction
+        logical, intent(out) :: falloff,thirdbody
+        character(len=mechanism_line_length) :: left,right,compact
+        integer :: arrow, arrow_len, i, nleft, nright, nmleft, nmright
+        logical :: reversible
+        compact = ''
+        do i=1,len_trim(equation)
+            if (equation(i:i) /= ' ' .and. equation(i:i) /= achar(9)) &
+                compact = trim(compact)//equation(i:i)
+        end do
+        arrow = index(compact,'<=>')
+        reversible = arrow > 0
+        arrow_len = 3
+        if (.not. reversible) then
+            arrow = index(compact,'=>')
+            arrow_len = 2
+        end if
+        if (arrow == 0) then
+            arrow = index(compact,'=')
+            arrow_len = 1
+            reversible = .true.
+        end if
+        if (arrow == 0 .or. (index(compact,'<=') > 0 .and. &
+            index(compact,'<=>') == 0)) &
+            error stop 'CHEMKIN: unsupported reaction arrow'
+        left = compact(:arrow-1)
+        right = compact(arrow+arrow_len:)
+        falloff = index(left,'(+M)') > 0 .or. index(right,'(+M)') > 0
+        if (falloff) then
+            if (index(left,'(+M)') == 0 .or. index(right,'(+M)') == 0) &
+                error stop 'CHEMKIN: unmatched (+M) collider'
+            call erase_chemkin_falloff(left)
+            call erase_chemkin_falloff(right)
+        end if
+        call parse_standard_chemkin_side(this,trim(left), &
+            this%chemical_coeffs(:,reaction,1),nleft,nmleft)
+        call parse_standard_chemkin_side(this,trim(right), &
+            this%chemical_coeffs(:,reaction,2),nright,nmright)
+        if (nmleft /= nmright) error stop 'CHEMKIN: unmatched explicit third body'
+        if (nmleft > 1 .or. nmright > 1) error stop 'CHEMKIN: repeated collider M'
+        if (falloff .and. nmleft > 0) error stop 'CHEMKIN: mixed M and (+M)'
+        thirdbody = falloff .or. nmleft > 0
+        if (falloff) then
+            if (reversible) then
+                this%reactions_type(reaction)=2
+            else
+                this%reactions_type(reaction)=7
+            end if
+        else if (thirdbody) then
+            if (reversible) then
+                this%reactions_type(reaction)=1
+            else
+                this%reactions_type(reaction)=6
+            end if
+        else
+            if (reversible) then
+                this%reactions_type(reaction)=0
+            else
+                this%reactions_type(reaction)=5
+            end if
+        end if
+    end subroutine parse_standard_chemkin_equation
+
+    subroutine erase_chemkin_falloff(side)
+        character(len=*), intent(inout) :: side
+        integer :: pos
+        pos=index(side,'(+M)')
+        if (pos > 0) side=side(:pos-1)//side(pos+4:)
+    end subroutine erase_chemkin_falloff
+
+    subroutine parse_standard_chemkin_side(this,side,output,nparticipants,ncolliders)
+        class(chemical_properties), intent(inout) :: this
+        character(len=*), intent(in) :: side
+        integer, intent(out) :: output(4),nparticipants,ncolliders
+        character(len=mechanism_line_length) :: remaining,token
+        integer :: next, coefficient, i, spec, ios, total
+        output=0
+        total=0
+        ncolliders=0
+        remaining=trim(side)
+        do
+            if (len_trim(remaining)==0) error stop 'CHEMKIN: empty reaction participant'
+            next=index(remaining,'+')
+            if (next > 0) then
+                token=remaining(:next-1)
+                remaining=remaining(next+1:)
+            else
+                token=remaining
+                remaining=''
+            end if
+            token=adjustl(token)
+            coefficient=1
+            ! An exact species name takes precedence over a numeric prefix: some
+            ! Chemkin species identifiers begin with a digit.
+            spec=this%get_chemical_specie_index(trim(token))
+            i=1
+            if (spec==0) then
+            do while (i<=len_trim(token))
+                if (index('0123456789',token(i:i))==0) exit
+                i=i+1
+            end do
+            if (i>1) then
+                read(token(:i-1),*,iostat=ios) coefficient
+                if (ios/=0 .or. coefficient<1) error stop 'CHEMKIN: invalid stoichiometry'
+                token=adjustl(token(i:))
+            end if
+            end if
+            if (len_trim(token)==0) error stop 'CHEMKIN: missing species name'
+            if (index(token,'.')/=0) error stop 'CHEMKIN: fractional stoichiometry unsupported'
+            spec=this%get_chemical_specie_index(trim(token))
+            if (spec==0) then
+                write(error_unit,'(A,A)') 'CHEMKIN: unknown species: ',trim(token)
+                error stop 'CHEMKIN: unknown reaction species'
+            end if
+            if (spec==this%species_number+1) ncolliders=ncolliders+coefficient
+            if (total+coefficient>3) error stop 'CHEMKIN: >3 reactant/product occurrences unsupported'
+            output(total+2:total+coefficient+1)=spec
+            total=total+coefficient
+            if (next==0) exit
+        end do
+        nparticipants=total
+        output(1)=total
+    end subroutine parse_standard_chemkin_side
+
+    subroutine parse_standard_chemkin_efficiencies(this,record,reaction)
+        class(chemical_properties), intent(inout) :: this
+        character(len=*), intent(in) :: record
+        integer, intent(in) :: reaction
+        character(len=mechanism_line_length) :: rest,name,value
+        integer :: slash1, slash2, spec
+        rest=adjustl(record)
+        if (rest(1:1)=="'" .or. rest(1:1)=='"') &
+            error stop 'CHEMKIN: quoted efficiency lists are nonstandard'
+        do
+            rest=adjustl(rest)
+            if (len_trim(rest)==0) exit
+            if (len_trim(rest)==0) exit
+            slash1=index(rest,'/')
+            if (slash1<2) error stop 'CHEMKIN: malformed third-body efficiency'
+            name=trim(adjustl(rest(:slash1-1)))
+            spec=this%get_chemical_specie_index(trim(name))
+            if (spec < 1 .or. spec > this%species_number) then
+                write(error_unit,'(A,A)') 'CHEMKIN: unknown efficiency species: ',trim(name)
+                error stop 'CHEMKIN: unknown third-body species'
+            end if
+            rest=adjustl(rest(slash1+1:))
+            slash2=index(rest,'/')
+            if (slash2<2) error stop 'CHEMKIN: malformed efficiency value'
+            value=trim(adjustl(rest(:slash2-1)))
+            call parse_chemkin_real(trim(value),this%enhanced_efficiencies(reaction,spec))
+            if (this%enhanced_efficiencies(reaction,spec)<0.0_dp) &
+                error stop 'CHEMKIN: negative third-body efficiency'
+            rest=rest(slash2+1:)
+        end do
+    end subroutine parse_standard_chemkin_efficiencies
+
+    subroutine parse_chemkin_parameters(line,keyword,min_n,max_n,parts,n)
+        character(len=*), intent(in) :: line,keyword
+        integer, intent(in) :: min_n,max_n
+        character(len=*), intent(out) :: parts(:)
+        integer, intent(out) :: n
+        character(len=mechanism_line_length) :: rest
+        integer :: first,last
+        rest=adjustl(line(len_trim(keyword)+1:))
+        if (len_trim(rest)==0) error stop 'CHEMKIN: missing reaction parameters'
+        first=index(rest,'/')
+        if (first==0) error stop 'CHEMKIN: standard LOW/TROE require slash delimiters'
+        if (len_trim(rest(:first-1))>0) error stop 'CHEMKIN: malformed modifier'
+        rest=adjustl(rest(first+1:))
+        last=index(rest,'/')
+        if (last==0) error stop 'CHEMKIN: missing closing delimiter'
+        if (len_trim(rest(last+1:))>0) error stop 'CHEMKIN: trailing data after modifier'
+        rest=rest(:last-1)
+        call split_chemkin_words(rest,parts,n)
+        if (n<min_n .or. n>max_n) error stop 'CHEMKIN: invalid parameter count'
+    end subroutine parse_chemkin_parameters
+
+    subroutine parse_chemkin_real(token,value)
+        character(len=*), intent(in) :: token
+        real(dp), intent(out) :: value
+        integer :: ios
+        read(token,*,iostat=ios) value
+        if (ios/=0) then
+            write(error_unit,'(A,A)') 'CHEMKIN: invalid number: ',trim(token)
+            error stop 'CHEMKIN: non-numeric reaction parameter'
+        end if
+    end subroutine parse_chemkin_real
+
+    subroutine strip_chemkin_comment(line)
+        character(len=*), intent(inout) :: line
+        integer :: i
+        i=index(line,'!')
+        if (i>0) line(i:)=' '
+    end subroutine strip_chemkin_comment
+
+    subroutine split_chemkin_words(line,words,n)
+        character(len=*), intent(in) :: line
+        character(len=*), intent(out) :: words(:)
+        integer, intent(out) :: n
+        integer :: i,j,L
+        L=len_trim(line)
+        words=''
+        n=0
+        i=1
+        do while (i<=L)
+            if (line(i:i)==' ' .or. line(i:i)==achar(9) .or. line(i:i)==achar(13)) then
+                i=i+1
+                cycle
+            end if
+            j=i
+            do while (j<=L)
+                if (line(j:j)==' ' .or. line(j:j)==achar(9) .or. line(j:j)==achar(13)) exit
+                j=j+1
+            end do
+            n=n+1
+            if (n>size(words)) error stop 'CHEMKIN: too many words on one record'
+            if (j-i>len(words(1))) error stop 'CHEMKIN: oversized input token'
+            words(n)=line(i:j-1)
+            i=j
+        end do
+    end subroutine split_chemkin_words
+
+    pure function upper_chemkin(src) result(dst)
+        character(len=*), intent(in) :: src
+        character(len=len(src)) :: dst
+        integer :: i,j
+        dst=src
+        do i=1,len(dst)
+            j=iachar(dst(i:i))
+            if (j>=iachar('a') .and. j<=iachar('z')) dst(i:i)=achar(j-32)
+        end do
+    end function upper_chemkin
+
+    logical function chemkin_starts_with(line,key) result(found)
+        character(len=*), intent(in) :: line,key
+        character(len=mechanism_line_length) :: tmp
+        integer :: n
+        tmp=upper_chemkin(adjustl(line))
+        n=len_trim(key)
+        found=.false.
+        if (len_trim(tmp)<n) return
+        if (tmp(:n)/=key) return
+        if (len_trim(tmp)==n) then
+            found=.true.
+        else
+            found=tmp(n+1:n+1)==' ' .or. tmp(n+1:n+1)=='/'
+        end if
+    end function chemkin_starts_with
 
 end module chemical_properties_class

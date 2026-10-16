@@ -22,13 +22,14 @@ program package_interface
     use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
 
     use kind_parameters, only: dp
+    use global_data, only: r_gase_J
     use global_data, only: P_atm
     use chemical_properties_class, only: chemical_properties, &
         chemical_properties_c
     use thermophysical_properties_class, only: thermophysical_properties, &
         thermophysical_properties_c
     use chemical_kinetics_core_class, only: chemical_kinetics_core, &
-        chemical_kinetics_core_c, reaction_rate_diagnostics
+        chemical_kinetics_core_c, reaction_rate_diagnostics, chemical_rate_state
     use chemical_equilibrium_class, only: chemical_equilibrium, &
         chemical_equilibrium_c, equilibrium_state, equilibrium_diagnostics
     use chemical_kinetics_diagnostics, only: hydrogen_crossover_diagnostics, &
@@ -47,7 +48,7 @@ program package_interface
     type(hydrogen_crossover_diagnostics) :: crossover_diagnostics
 
     character(len=16) :: mode
-    character(len=64) :: mechanism_file,thermo_file,transport_file
+    character(len=128) :: mechanism_file,thermo_file,transport_file
     character(len=64) :: component_species(maximum_components)
     real(dp) :: component_moles(maximum_components)
     integer :: components_number
@@ -145,11 +146,13 @@ program package_interface
     initial_x = initial_moles/sum(initial_moles)
 
     call write_input_summary()
+    call write_chemkin_validation_audits()
 
     if (do_tp) then
         call equilibrium%equilibrate_tp(tp_temperature,pressure,initial_moles, &
             tp_state,tp_diagnostics)
         call write_equilibrium_state('TP',tp_state,tp_diagnostics)
+        call write_equilibrium_kinetics(tp_state)
         call write_equilibrium_stdout('TP',tp_state,tp_diagnostics)
     end if
 
@@ -174,6 +177,222 @@ program package_interface
     end if
 
 contains
+
+    ! NRG_CHEMKIN_VALIDATION_AUDIT_V3
+    ! Diagnostics only: the normal TP, HP and crossover calculations are unchanged.
+    subroutine write_chemkin_validation_audits()
+        type(chemical_rate_state) :: rate_state
+        character(len=256) :: filename
+        real(dp), allocatable :: c(:), wdot(:)
+        real(dp) :: temps(12), temp
+        integer :: unit, r, k, j, i
+
+        ! Species order is essential when comparing with Cantera.
+        filename=trim(output_prefix)//'_species.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'species_index,species'
+        do k=1,chemistry%species_number
+            write(unit,'(I0,",",A)') k,trim(chemistry%species_names(k))
+        end do
+        close(unit)
+
+        ! Verify the elemental composition read from NASA fixed-width headers.
+        filename=trim(output_prefix)//'_elements.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'species,element,atom_count'
+        do k=1,chemistry%species_number
+          do i=1,thermophysics%elements_number
+            if (thermophysics%species_element_counts(i,k)>0.0_dp) then
+              write(unit,'(A,",",A,",",ES24.16E3)') &
+                trim(chemistry%species_names(k)), &
+                trim(thermophysics%element_names(i)), &
+                thermophysics%species_element_counts(i,k)
+            end if
+          end do
+        end do
+        close(unit)
+
+        ! NRG retains epsilon/kB in kelvin and converts sigma from Angstrom
+        ! to nanometres. Verify these values against source CHEMKIN data.
+        filename=trim(output_prefix)//'_transport.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'species,well_depth_K,diameter_nm'
+        do k=1,chemistry%species_number
+          write(unit,'(A,2(",",ES24.16E3))') &
+            trim(chemistry%species_names(k)), &
+            thermophysics%potential_well_depth(k), &
+            thermophysics%collision_diameter(k)
+        end do
+        close(unit)
+
+        ! Parameters here are *NRG internal* SI (mol, m, J, K, s), not
+        ! the original Chemkin A and Ea values.
+        filename=trim(output_prefix)//'_reaction_parameters.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') &
+          'reaction,type,A_SI,beta,Ea_Jmol,A_low_SI,beta_low,Ea_low_Jmol,'// &
+          'Troe1,Troe2,Troe3,Troe4,Lcount,L1,L2,L3,Rcount,R1,R2,R3'
+        do r=1,chemistry%reactions_number
+          write(unit,'(I0,",",I0,10(",",ES24.16E3),8(",",I0))') &
+             r,chemistry%reactions_type(r), &
+             chemistry%A(r),chemistry%beta(r),chemistry%E_act(r), &
+             chemistry%A_low(r),chemistry%beta_low(r),chemistry%E_act_low(r), &
+             chemistry%Troe_coeffs(r,:), &
+             chemistry%chemical_coeffs(:,r,1),chemistry%chemical_coeffs(:,r,2)
+        end do
+        close(unit)
+
+        filename=trim(output_prefix)//'_third_body_efficiencies.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'reaction,species,efficiency'
+        do r=1,chemistry%reactions_number
+          do k=1,chemistry%species_number
+            write(unit,'(I0,",",A,",",ES24.16E3)') &
+               r,trim(chemistry%species_names(k)), &
+               chemistry%enhanced_efficiencies(r,k)
+          end do
+        end do
+        close(unit)
+
+        ! Thermodynamic properties are in NRG's molar convention (J/mol).
+        ! Test temperatures avoid extrapolation below 300 K.
+        temps=[300.0_dp,400.0_dp,800.0_dp,999.0_dp,1001.0_dp, &
+              1100.0_dp,1200.0_dp,1380.0_dp,1390.0_dp, &
+              1400.0_dp,2000.0_dp,3000.0_dp]
+        filename=trim(output_prefix)//'_thermodynamics.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'species,T_K,cp_JmolK,h_Jmol,s_JmolK,M_kgmol'
+        do j=1,size(temps)
+          temp=temps(j)
+          do k=1,chemistry%species_number
+            write(unit,'(A,5(",",ES24.16E3))') &
+              trim(chemistry%species_names(k)),temp, &
+              thermophysics%specie_cp_molar(temp,k), &
+              thermophysics%specie_enthalpy_molar(temp,k), &
+              thermophysics%specie_entropy_molar(temp,k), &
+              thermophysics%molar_masses(k)
+          end do
+        end do
+        close(unit)
+
+        ! Source vectors use concentration in mol/m^3. Cantera's public
+        ! net_production_rates uses kmol/m^3/s; multiply by 1000 to compare.
+        allocate(c(chemistry%species_number),wdot(chemistry%species_number))
+        c=initial_x*pressure/(r_gase_J*tp_temperature)
+        call kinetics_core%prepare_rate_state(tp_temperature,rate_state)
+        call kinetics_core%calculate_species_rates(rate_state,c,wdot)
+        filename=trim(output_prefix)//'_kinetics_source.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'species,T_K,P_Pa,concentration_molm3,wdot_molm3s'
+        do k=1,chemistry%species_number
+          write(unit,'(A,4(",",ES24.16E3))') &
+            trim(chemistry%species_names(k)),tp_temperature,pressure,c(k),wdot(k)
+        end do
+        close(unit)
+        call rate_state%clear()
+        call write_kinetics_grid()
+    end subroutine write_chemkin_validation_audits
+
+
+    ! Exercise every reaction using nonzero concentrations for every species,
+    ! including species not present in the initial fuel/oxidizer mixture.
+    ! Each state is reproducible and independent of mechanism identity.
+    subroutine write_kinetics_grid()
+        type(chemical_rate_state) :: rate_state
+        character(len=256) :: filename
+        character(len=16) :: state_name
+        real(dp), allocatable :: c(:), x(:), wdot(:)
+        real(dp) :: t_grid(4), p_grid(4), temp, pres
+        real(dp) :: kf,kr,m_eff,total_c,forward,reverse,net
+        integer :: unit_species,unit_rxn,nstate,k,r,j,power,idx
+
+        t_grid=[800.0_dp,1200.0_dp,1500.0_dp,2100.0_dp]
+        p_grid=[101325.0_dp,101325.0_dp,1013250.0_dp,10132.5_dp]
+        allocate(c(chemistry%species_number),x(chemistry%species_number), &
+                 wdot(chemistry%species_number))
+        filename=trim(output_prefix)//'_kinetics_grid.csv'
+        open(newunit=unit_species,file=trim(filename),status='replace')
+        write(unit_species,'(A)') 'state,T_K,P_Pa,species,concentration_molm3,wdot_molm3s'
+        filename=trim(output_prefix)//'_reaction_rop.csv'
+        open(newunit=unit_rxn,file=trim(filename),status='replace')
+        write(unit_rxn,'(A)') 'state,reaction,forward_molm3s,reverse_molm3s,net_molm3s'
+
+        do nstate=1,size(t_grid)
+            write(state_name,'("grid_",I0)') nstate
+            temp=t_grid(nstate)
+            pres=p_grid(nstate)
+            x=max(initial_x,0.0_dp)+1.0e-4_dp
+            x=x/sum(x)
+            c=x*pres/(r_gase_J*temp)
+            total_c=sum(c)
+            call kinetics_core%prepare_rate_state(temp,rate_state)
+            call kinetics_core%calculate_species_rates(rate_state,c,wdot)
+            do k=1,chemistry%species_number
+                write(unit_species,'(A,2(",",ES24.16E3),",",A,2(",",ES24.16E3))') &
+                    trim(state_name),temp,pres,trim(chemistry%species_names(k)),c(k),wdot(k)
+            end do
+
+            do r=1,chemistry%reactions_number
+                m_eff=0.0_dp
+                if (kinetics_core%reaction_uses_third_body(r)) then
+                    m_eff=kinetics_core%third_body_concentration(r,c,total_c)
+                end if
+                call kinetics_core%effective_rate_constants( &
+                    rate_state,r,m_eff,kf,kr)
+                forward=kf
+                reverse=kr
+                do j=1,kinetics_core%reactant_count(r)
+                    idx=kinetics_core%reactant_species(j,r)
+                    do power=1,kinetics_core%reactant_multiplicity(j,r)
+                        forward=forward*max(c(idx),0.0_dp)
+                    end do
+                end do
+                do power=1,kinetics_core%forward_third_body_power(r)
+                    forward=forward*m_eff
+                end do
+                do j=1,kinetics_core%product_count(r)
+                    idx=kinetics_core%product_species(j,r)
+                    do power=1,kinetics_core%product_multiplicity(j,r)
+                        reverse=reverse*max(c(idx),0.0_dp)
+                    end do
+                end do
+                do power=1,kinetics_core%reverse_third_body_power(r)
+                    reverse=reverse*m_eff
+                end do
+                net=forward-reverse
+                write(unit_rxn,'(A,",",I0,3(",",ES24.16E3))') &
+                    trim(state_name),r,forward,reverse,net
+            end do
+            call rate_state%clear()
+        end do
+        close(unit_species)
+        close(unit_rxn)
+    end subroutine write_kinetics_grid
+
+    ! At thermodynamic TP equilibrium, reversible chemistry should also be
+    ! stationary under the detailed-balance kinetics implementation. Explicit
+    ! irreversible mechanisms (e.g. Varatharajan) are exempt from this rule.
+    subroutine write_equilibrium_kinetics(state)
+        type(equilibrium_state), intent(in) :: state
+        type(chemical_rate_state) :: rate_state
+        real(dp), allocatable :: c(:),wdot(:)
+        character(len=256) :: filename
+        integer :: k,unit
+        if (state%temperature <= 0.0_dp) return
+        allocate(c(chemistry%species_number),wdot(chemistry%species_number))
+        c=max(state%mole_fractions,0.0_dp)*pressure/(r_gase_J*state%temperature)
+        call kinetics_core%prepare_rate_state(state%temperature,rate_state)
+        call kinetics_core%calculate_species_rates(rate_state,c,wdot)
+        filename=trim(output_prefix)//'_tp_equilibrium_rates.csv'
+        open(newunit=unit,file=trim(filename),status='replace')
+        write(unit,'(A)') 'species,wdot_equilibrium_molm3s'
+        do k=1,chemistry%species_number
+          write(unit,'(A,",",ES24.16E3)') &
+             trim(chemistry%species_names(k)),wdot(k)
+        end do
+        close(unit)
+        call rate_state%clear()
+    end subroutine write_equilibrium_kinetics
 
     subroutine validate_configuration()
         integer :: i

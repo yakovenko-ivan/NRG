@@ -1,0 +1,43 @@
+! Reconstructed directly from Varatharajan & Williams (2001), Table 2 (p. 636).
+! 25-step short mechanism for C2H2 detonation, NOT their full 114-step mechanism.
+! Table uses kJ/mol for E; prefactors in mol, cm3, s, K.
+! Paper calls formyl CHO; NRG uses standard species alias HCO (same composition).
+! Table gives separate one-way elementary reactions; no artificial reversibility introduced.
+ELEMENTS
+H O C N AR
+END
+SPECIES
+C2H2 O2 N2 O H OH H2O CO CO2 CH2O CH2CO HCCO HCO HO2 H2 CH3 AR
+END
+REACTIONS KJOULES/MOLE
+H+O2=>OH+O                                3.52E+16   -0.70       71.4
+OH+O=>H+O2                                1.15E+14   -0.32       -0.7
+OH+H2=>H2O+H                              1.17E+09    1.30       15.2
+O+H2O=>2OH                                7.60E+00    3.84       53.5
+2OH=>O+H2O                                2.45E-01    3.97      -19.0
+H+O2+M=>HO2+M                             6.76E+19   -1.40        0.0
+    CO/1.9/ CO2/3.8/ H2/2.5/ H2O/12.0/
+HO2+H=>2OH                                1.70E+14    0.00        3.7
+HO2+H=>H2+O2                              4.28E+13    0.00        5.9
+HO2+OH=>H2O+O2                            2.89E+13    0.00       -2.1
+H+OH+M=>H2O+M                             2.20E+22   -2.00        0.0
+    CO/1.9/ CO2/3.8/ H2/2.5/ H2O/12.0/
+H2O+M=>H+OH+M                             2.18E+23   -1.93      499.0
+    CO/1.9/ CO2/3.8/ H2/2.5/ H2O/12.0/
+CO+OH=>CO2+H                              4.40E+06    1.50       -3.1
+CO2+H=>CO+OH                              4.97E+08    1.50       89.7
+C2H2+O2=>CH2O+CO                          4.60E+15   -0.54      188.0
+C2H2+O=>HCCO+H                            4.00E+14    0.00       44.6
+C2H2+OH=>CH2CO+H                          1.90E+07    1.70        4.2
+CH2CO+O=>HCCO+OH                          1.00E+13    0.00        8.4
+CH2CO+H=>CH3+CO                           1.11E+07    2.00        8.4
+HCCO+O2=>2CO+OH                           2.88E+07    1.70        4.2
+CH2O+M=>HCO+H+M                           6.26E+16    0.00      326.0
+    CO/1.9/ CO2/3.8/ H2/2.5/ H2O/16.3/
+CH2O+H=>HCO+H2                            1.26E+08    1.62        9.1
+CH2O+OH=>HCO+H2O                          3.90E+10    0.89        1.7
+HCO+M=>CO+H+M                             1.86E+17   -1.00       71.1
+    CO/2.5/ CO2/2.5/ H2/1.9/ H2O/12.0/
+HCO+H=>CO+H2                              1.00E+14    0.00        0.0
+CH3+O=>CH2O+H                             8.43E+13    0.00        0.0
+END

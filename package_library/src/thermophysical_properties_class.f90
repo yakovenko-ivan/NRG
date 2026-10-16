@@ -23,8 +23,8 @@ module thermophysical_properties_class
     end type
 
     type :: thermophysical_properties
-        character(len=30) :: thermo_data_file_name
-        character(len=30) :: transport_data_file_name
+        character(len=64) :: thermo_data_file_name
+        character(len=64) :: transport_data_file_name
 
         ! Kept only for backward compatibility with existing package-interface
         ! calls and previously generated /thermo_properties/ namelists.  The
@@ -45,6 +45,7 @@ module thermophysical_properties_class
         real(dp), allocatable :: species_element_counts(:,:)
         real(dp), dimension(:,:), allocatable :: binary_diffusivity_constant
         real(dp), dimension(:,:,:), allocatable :: a_coeffs
+        real(dp), allocatable :: nasa_midpoint_temperature(:)
         real(dp), dimension(2,2,8) :: omega_c
     contains
         procedure, private :: read_properties
@@ -209,6 +210,7 @@ contains
                  this%collision_diameter(species_number))
         allocate(this%binary_diffusivity_constant(species_number,species_number))
         allocate(this%a_coeffs(7,2,species_number))
+        allocate(this%nasa_midpoint_temperature(species_number))
         this%binary_diffusivity_constant = 0.0_dp
 
         open(newunit=thermo_data_file_unit, &
@@ -238,7 +240,8 @@ contains
         ! fields of the same NASA/CHEMKIN thermo record used for a_coeffs.
         do spec_num=1,species_number
             this%a_coeffs(:,:,spec_num) = get_a_coeffs( &
-                chemistry%species_names(spec_num),thermo_data_file_unit)
+                chemistry%species_names(spec_num),thermo_data_file_unit, &
+                this%nasa_midpoint_temperature(spec_num))
             this%a_coeffs(:,:,spec_num) = &
                 this%a_coeffs(:,:,spec_num)*r_gase_J
 
@@ -348,7 +351,7 @@ contains
 
         coeff_set = 1
         temp = this%clip_temperature(temperature)
-        if (temp >= 1000.0_dp) coeff_set = 2
+        if (temp >= this%nasa_midpoint_temperature(specie_number)) coeff_set = 2
 
         cp_molar = this%a_coeffs(5,coeff_set,specie_number)
         do i=4,1,-1
@@ -366,7 +369,7 @@ contains
 
         coeff_set = 1
         temp = this%clip_temperature(temperature)
-        if (temp >= 1000.0_dp) coeff_set = 2
+        if (temp >= this%nasa_midpoint_temperature(specie_number)) coeff_set = 2
 
         hs_molar = this%a_coeffs(5,coeff_set,specie_number)/5.0_dp
         do i=4,1,-1
@@ -387,7 +390,7 @@ contains
 
         coeff_set = 1
         temp = this%clip_temperature(temperature)
-        if (temp >= 1000.0_dp) coeff_set = 2
+        if (temp >= this%nasa_midpoint_temperature(specie_number)) coeff_set = 2
 
         s_molar = this%a_coeffs(5,coeff_set,specie_number)/4.0_dp
         do i=4,2,-1
@@ -1178,17 +1181,19 @@ contains
 
 !# Thermo I/O functions
 
-    function get_a_coeffs(specie_name,thermo_data_file_unit) result(a_coeffs)
+    function get_a_coeffs(specie_name,thermo_data_file_unit,midpoint) result(a_coeffs)
         ! Read a standard four-record NASA-7/CHEMKIN thermo entry.  Coefficients
         ! occupy fixed 15-character fields in columns 1:75; comments after the
         ! record marker therefore cannot interfere with conversion.
         character(len=*), intent(in) :: specie_name
         integer, intent(in) :: thermo_data_file_unit
+        real(dp), intent(out) :: midpoint
         real(dp), dimension(7,2) :: a_coeffs
 
         character(len=256) :: header,line2,line3,line4,adjusted_header
         character(len=64) :: record_species
-        integer :: io_status
+        integer :: io_status, phase_position
+        real(dp) :: temp_low, temp_high
         logical :: found
 
         a_coeffs=0.0_dp
@@ -1211,6 +1216,18 @@ contains
             if (io_status/=0) cycle
             if (trim(record_species)=='END') exit
             if (trim(record_species)/=trim(specie_name)) cycle
+
+            ! Standard NASA-7 header: phase code and Tmin Tmax Tmid.
+            ! Accept existing NRG headers with noncanonical leading fields.
+            phase_position=index(header(35:50),'G')
+            if (phase_position==0) &
+                error stop 'NASA-7: missing gas-phase marker in thermo header'
+            phase_position=phase_position+34
+            read(header(phase_position+1:),*,iostat=io_status) &
+                temp_low,temp_high,midpoint
+            if (io_status/=0) error stop 'NASA-7: invalid temperature fields'
+            if (temp_low<=0.0_dp .or. midpoint<=temp_low .or. &
+                midpoint>=temp_high) error stop 'NASA-7: invalid temperature intervals'
 
             read(thermo_data_file_unit,'(A)',iostat=io_status) line2
             if (io_status/=0) error stop 'thermophysical_properties: NASA thermo line 2 read failure'
@@ -1517,33 +1534,44 @@ contains
     subroutine get_transport_properties(potential_well_depth,collision_diameter, &
             specie_name,transport_data_file_unit)
         real(dp), intent(inout) :: potential_well_depth,collision_diameter
-        character(len=10), intent(in) :: specie_name
+        character(len=*), intent(in) :: specie_name
         integer, intent(in) :: transport_data_file_unit
 
         character(len=100) :: string
+        character(len=512) :: line
         real(dp) :: potential_well_depth_in_file,collision_diameter_in_file
         integer :: dummy,error
+        logical :: found
 
         potential_well_depth=0.0_dp
         collision_diameter=0.0_dp
-
-        read(transport_data_file_unit,*,iostat=error) string
+        found=.false.
+        rewind(transport_data_file_unit)
         do
-            read(transport_data_file_unit,*,iostat=error) string,dummy, &
+            read(transport_data_file_unit,'(A)',iostat=error) line
+            if (error<0) exit
+            if (error/=0) error stop 'CHEMKIN transport file read failure'
+            line=adjustl(line)
+            if (len_trim(line)==0) cycle
+            if (line(1:1)=='!' .or. line(1:1)=='#') cycle
+            read(line,*,iostat=error) string,dummy, &
                 potential_well_depth_in_file,collision_diameter_in_file
-            if (error/=0) then
-                print *, 'Error: unsuccessufull transport properties reading for specie:', &
-                    specie_name
-                error stop 'thermophysical_properties: transport property read failure'
-            end if
-            if (string==specie_name) then
+            ! A title/header is tolerated without discarding the first data line.
+            if (error/=0) cycle
+            if (trim(string)==trim(specie_name)) then
                 collision_diameter=collision_diameter_in_file
                 potential_well_depth=potential_well_depth_in_file
+                found=.true.
                 exit
             end if
         end do
-
-        collision_diameter=collision_diameter*0.1_dp ! Angstrem -> nanometer
+        if (.not.found) then
+            print *, 'Transport properties absent for species: ',trim(specie_name)
+            error stop 'thermophysical_properties: missing CHEMKIN transport record'
+        end if
+        if (collision_diameter<=0.0_dp .or. potential_well_depth<=0.0_dp) &
+            error stop 'CHEMKIN transport parameters must be positive'
+        collision_diameter=collision_diameter*0.1_dp ! Angstrom -> nanometer
         rewind(transport_data_file_unit)
     end subroutine get_transport_properties
 
