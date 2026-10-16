@@ -42,6 +42,10 @@ module flame_stabilization_solver_class
         integer :: physics_output_unit = -1
         real(dp) :: previous_correction_time = -huge(1.0_dp)
         real(dp) :: previous_predictive_safety_time = -huge(1.0_dp)
+        ! v5b: retain fast-capture state independently of the normal history.
+        real(dp) :: v5b_last_fast_command_time = -huge(1.0_dp)
+        real(dp) :: v5b_last_inlet_rescue_time = -huge(1.0_dp)
+        logical :: v5b_post_capture_active = .false.
         real(dp) :: filtered_velocity_save = 0.0_dp
         real(dp) :: diag_filtered_velocity_save = 0.0_dp
         real(dp) :: adaptive_gain = 5.0e-02_dp
@@ -361,6 +365,33 @@ contains
         ! Actual inlet-margin violation may re-command immediately after the
         ! previous emergency ramp has finished, even if the centroid moves away.
         real(dp), parameter :: inlet_edge_velocity_noise_floor = 1.0e-02_dp
+        ! v5b: large startup drift is corrected before inlet emergency is needed.
+        ! Emergency authority and post-emergency recovery are separately bounded.
+        integer, parameter :: v5b_fast_window_samples = 10
+        integer, parameter :: v5b_fast_min_samples = 8
+        real(dp), parameter :: v5b_fast_cadence = 1.0e-03_dp
+        real(dp), parameter :: v5b_recovery_cadence = 8.0e-04_dp
+        real(dp), parameter :: v5b_fast_ramp_time = 5.0e-04_dp
+        real(dp), parameter :: v5b_startup_velocity_threshold = 1.2e-01_dp
+        real(dp), parameter :: v5b_startup_gain = 0.55_dp
+        real(dp), parameter :: v5b_startup_max_du = 1.5e-01_dp
+        real(dp), parameter :: v5b_emergency_max_du = 2.5e-01_dp
+        real(dp), parameter :: v5b_recovery_gain = 0.7_dp
+        real(dp), parameter :: v5b_recovery_max_du = 2.0e-01_dp
+        real(dp), parameter :: v5b_recovery_velocity_threshold = 5.0e-02_dp
+        real(dp), parameter :: v5b_outlet_soft_fraction = 0.10_dp
+        real(dp), parameter :: v5b_outlet_prediction_horizon = 3.0e-03_dp
+        ! v5c: enable recovery only when it will not strand the bulk flame
+        ! upstream of the permitted anchor corridor. Recenter slowly enough
+        ! to observe the hydrodynamic response after each commanded change.
+        real(dp), parameter :: v5c_bulk_lookahead_time = 5.0e-03_dp
+        real(dp), parameter :: v5c_capture_latch_max_age = 4.0e-03_dp
+        real(dp), parameter :: v5c_capture_latch_min_age = 2.0e-03_dp
+        real(dp), parameter :: v5c_recenter_cadence = 2.5e-03_dp
+        real(dp), parameter :: v5c_recenter_position_time = 2.0e-02_dp
+        real(dp), parameter :: v5c_recenter_position_gain = 0.30_dp
+        real(dp), parameter :: v5c_recenter_velocity_gain = 0.55_dp
+        real(dp), parameter :: v5c_recenter_max_du = 8.0e-02_dp
 
         integer, parameter :: workflow_flamelet_sl = 1
         integer, parameter :: workflow_anchor_observation = 2
@@ -461,6 +492,9 @@ contains
         real(dp) :: anchor_inlet_window_change, anchor_inlet_change_tolerance
         real(dp) :: anchor_control_velocity, safety_velocity
         real(dp) :: inlet_edge_velocity, predicted_inlet_clearance
+        real(dp) :: v5b_bulk_fast_velocity, v5b_outlet_soft_limit
+        real(dp) :: v5b_bulk_outlet_eta, v5b_fast_step, v5b_clearance
+        real(dp) :: v5c_predicted_bulk_x, v5c_anchor_lower_x, v5c_recenter_du
         real(dp) :: inlet_clearance_to_hard, outlet_clearance_to_hard
         real(dp) :: predictive_time_to_boundary, predictive_response_horizon
         real(dp) :: predictive_du, predictive_max_step, local_threshold
@@ -489,6 +523,11 @@ contains
         logical :: predictive_emergency, predictive_inlet_danger
         logical :: predictive_outlet_danger, inlet_safety_intervention
         logical :: outlet_reaction_contact
+        logical :: v5b_startup_active, v5b_recovery_active
+        logical :: v5b_bulk_outlet_warning, v5b_bulk_blowout
+        logical :: v5b_recovery_clearance_ok
+        logical :: v5c_recenter_needed, v5c_recovery_position_ok
+        logical :: v5c_recenter_active
 
 
         stabilized = .false.
@@ -1063,6 +1102,7 @@ contains
             anchor_control_velocity = 0.0_dp
             safety_velocity = 0.0_dp
             inlet_edge_velocity = 0.0_dp
+            v5b_bulk_fast_velocity = 0.0_dp
             if (flame_detected) then
                 call append_diagnostic_history(time, current_front_coord, &
                     merge(x_preheat, current_front_coord, thermal_envelope_found))
@@ -1080,6 +1120,8 @@ contains
                         multidim_anchor_control_window_samples)
                     inlet_edge_velocity = diagnostic_recent_inlet_edge_velocity( &
                         predictive_safety_window_samples)
+                    v5b_bulk_fast_velocity = diagnostic_recent_velocity( &
+                        v5b_fast_window_samples)
                     safety_velocity = inlet_edge_velocity
                 else
                     anchor_control_velocity = diag_flame_velocity_filtered
@@ -1154,6 +1196,39 @@ contains
             predictive_response_horizon = 0.0_dp
             predictive_du = 0.0_dp
             predictive_max_step = 0.0_dp
+            v5b_startup_active = .false.
+            v5b_recovery_active = .false.
+            v5b_bulk_outlet_warning = .false.
+            v5b_bulk_blowout = .false.
+            v5b_recovery_clearance_ok = .false.
+            v5c_recenter_active = .false.
+            v5c_recenter_needed = .false.
+            v5c_recovery_position_ok = .false.
+            v5c_predicted_bulk_x = current_front_coord
+            v5c_anchor_lower_x = domain_front_min
+            v5c_recenter_du = 0.0_dp
+            v5b_fast_step = 0.0_dp
+            v5b_clearance = 0.0_dp
+            v5b_bulk_outlet_eta = -1.0_dp
+            v5b_outlet_soft_limit = domain_boundary_max - max( &
+                real(12,dp)*cell_size(front_axis), &
+                v5b_outlet_soft_fraction*domain_front_length)
+            if (multidim_anchor .and. flame_detected .and. &
+                this%state%diag_hist_count >= v5b_fast_min_samples) then
+                if (v5b_bulk_fast_velocity > v5b_recovery_velocity_threshold) then
+                    v5b_bulk_outlet_eta = max(v5b_outlet_soft_limit - &
+                        current_front_coord, 0.0_dp) / max(v5b_bulk_fast_velocity, &
+                        v5b_recovery_velocity_threshold)
+                    v5b_bulk_outlet_warning = &
+                        (v5b_bulk_outlet_eta <= v5b_outlet_prediction_horizon)
+                end if
+            end if
+            ! Distinct from a harmless outlet tongue: this means virtually the
+            ! entire heat-release-weighted bulk flame has left the usable box.
+            v5b_bulk_blowout = multidim_anchor .and. flame_detected .and. &
+                (current_front_coord >= domain_boundary_max - &
+                2.0_dp*cell_size(front_axis)) .and. &
+                (v5b_bulk_fast_velocity > 0.0_dp)
 
             if (this%state%front_reference_initialized) then
                 position_error = current_front_coord - this%state%front_reference_coord
@@ -1321,7 +1396,7 @@ contains
             ! ignition/development transient complete.
             safety_control_active = capture_mode .or. emergency_mode .or. containment_mode
 
-            if (physical_boundary_violation) then
+            if (physical_boundary_violation .or. v5b_bulk_blowout) then
                 this%state%domain_failure = .true.
                 this%state%domain_invalid_counter = 0
                 call reset_hard_recovery_state()
@@ -1354,47 +1429,146 @@ contains
                 call reset_hard_recovery_state()
             end if
 
-            ! Predictive safety is allowed to pre-empt a still-running normal
-            ! ramp. Retarget from the velocity actually applied at this instant,
-            ! rather than from the stale target of the interrupted ramp.
-            if (multidim_anchor .and. inlet_safety_intervention .and. &
+            ! v5b fast command priorities:
+            ! (1) inlet rescue, (2) downstream-bulk recovery, (3) startup capture.
+            ! The normal controller below remains low-frequency. Neither
+            ! reaction-tail contact nor a harmless outgoing pocket is penalized.
+            if (multidim_anchor .and. flame_detected .and. &
                 (.not. this%state%domain_failure) .and. &
-                this%state%control_stage == stage_anchor_control .and. &
-                ((time - this%state%previous_predictive_safety_time) >= &
-                    predictive_retarget_interval .or. &
-                 (inlet_clearance_to_hard < 0.0_dp .and. &
-                  (time - this%state%previous_predictive_safety_time) >= &
-                    predictive_emergency_ramp_time))) then
-                control_velocity = inlet_edge_velocity
-                predictive_du = predictive_velocity_compensation * max( &
-                    -inlet_edge_velocity, &
-                    max(hard_inlet_margin - inlet_preheat_distance, 0.0_dp) / &
-                        max(predictive_response_horizon, time_track))
-                predictive_max_step = max(predictive_max_fraction * &
-                    max(abs(this%state%inlet_velocity_applied), min_abs_velocity_step), &
-                    min_abs_velocity_step_capture)
-                predictive_du = min(max(predictive_du, 0.0_dp), predictive_max_step)
-                proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
-                    this%state%inlet_velocity_applied + predictive_du)
+                this%state%control_stage == stage_anchor_control) then
 
-                if (proposed_inlet_velocity - this%state%inlet_velocity_target > &
-                    min_abs_velocity_step) then
-                    target_step_for_log = proposed_inlet_velocity - &
-                        this%state%inlet_velocity_applied
-                    this%state%inlet_velocity_target = proposed_inlet_velocity
-                    this%state%ramp_start_velocity = this%state%inlet_velocity_applied
-                    this%state%ramp_start_time = time
-                    this%state%active_inlet_ramp_time = predictive_emergency_ramp_time
-                    this%state%active_response_settle_time = response_settle_capture
-                    this%state%previous_predictive_safety_time = time
-                    this%state%previous_correction_time = time
-                    this%state%correction_counter = this%state%correction_counter + 1
-                    ramp_settled = .false.
-                    inlet_ramp_time = predictive_emergency_ramp_time
-                    control_performed = .true.
-                    reset_history_after_log = .true.
-                    call clear_control_history()
+                v5b_clearance = inlet_preheat_distance - hard_inlet_margin
+                v5b_recovery_clearance_ok = &
+                    v5b_clearance > max(8.0_dp*cell_size(front_axis), &
+                                        2.0e-04_dp) .and. &
+                    inlet_edge_velocity > -v5b_recovery_velocity_threshold .and. &
+                    (.not. inlet_safety_intervention)
+
+                ! A recovery is justified by position, not velocity sign alone.
+                ! Normal anchoring keeps the original reference, restricted to
+                ! the usable bulk-outlet window; the outlet reaction tip is free.
+                v5c_anchor_lower_x = min(this%state%front_reference_coord, &
+                    v5b_outlet_soft_limit) - max( &
+                    real(multidim_anchor_position_cells,dp)*cell_size(front_axis), &
+                    multidim_anchor_position_fraction*domain_front_length)
+                v5c_predicted_bulk_x = current_front_coord + &
+                    v5c_bulk_lookahead_time*v5b_bulk_fast_velocity
+                v5c_recovery_position_ok = v5b_bulk_outlet_warning .or. &
+                    v5c_predicted_bulk_x >= v5c_anchor_lower_x
+                v5c_recenter_needed = &
+                    (v5c_predicted_bulk_x < v5c_anchor_lower_x) .and. &
+                    (.not. inlet_safety_intervention)
+
+                ! The old v5b latch could persist indefinitely if the bulk
+                ! flame remained far upstream. End it after a bounded period;
+                ! any later rescue re-arms it with a fresh timestamp.
+                if (this%state%v5b_post_capture_active .and. &
+                    (.not. inlet_safety_intervention)) then
+                    if (time-this%state%v5b_last_inlet_rescue_time >= &
+                        v5c_capture_latch_max_age .or. &
+                        ((time-this%state%v5b_last_inlet_rescue_time) >= &
+                          v5c_capture_latch_min_age .and. &
+                          v5b_bulk_fast_velocity <= &
+                            v5b_recovery_velocity_threshold)) then
+                        this%state%v5b_post_capture_active = .false.
+                    end if
                 end if
+
+                if (inlet_safety_intervention) then
+                    ! Immediate rescue is still possible, but it is not allowed
+                    ! to double the velocity repeatedly on stale measurements.
+                    if ((time-this%state%previous_predictive_safety_time) >= &
+                        predictive_retarget_interval .or. &
+                        (v5b_clearance < 0.0_dp .and. &
+                         (time-this%state%previous_predictive_safety_time) >= &
+                         predictive_emergency_ramp_time)) then
+                        predictive_du = predictive_velocity_compensation * max( &
+                            -inlet_edge_velocity, &
+                            max(hard_inlet_margin-inlet_preheat_distance,0.0_dp) / &
+                                max(predictive_response_horizon,time_track))
+                        predictive_du = min(max(predictive_du,0.0_dp), &
+                            min(v5b_emergency_max_du, max(0.18_dp, &
+                                0.5_dp*this%state%inlet_velocity_applied)))
+                        proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
+                            this%state%inlet_velocity_applied + predictive_du)
+                        if (proposed_inlet_velocity - this%state%inlet_velocity_target > &
+                            min_abs_velocity_step) then
+                            call v5b_command_velocity(proposed_inlet_velocity, time)
+                            this%state%previous_predictive_safety_time = time
+                            this%state%v5b_last_inlet_rescue_time = time
+                            this%state%v5b_post_capture_active = .true.
+                        end if
+                    end if
+
+                else if (v5b_recovery_clearance_ok .and. &
+                    v5c_recovery_position_ok .and. &
+                    this%state%diag_hist_count >= v5b_fast_min_samples .and. &
+                    (this%state%v5b_post_capture_active .or. &
+                     v5b_bulk_outlet_warning) .and. &
+                    (v5b_bulk_fast_velocity > v5b_recovery_velocity_threshold) .and. &
+                    (time-this%state%v5b_last_fast_command_time) >= &
+                    v5b_recovery_cadence) then
+                    ! Rapidly unwind emergency excess when upstream edge is safe.
+                    ! This is a bounded ramp, not an instantaneous velocity jump.
+                    v5b_fast_step = min(v5b_recovery_gain*v5b_bulk_fast_velocity, &
+                        v5b_recovery_max_du, &
+                        0.30_dp*this%state%inlet_velocity_applied)
+                    proposed_inlet_velocity = max(0.0_dp, &
+                        this%state%inlet_velocity_applied - v5b_fast_step)
+                    if (this%state%inlet_velocity_target - proposed_inlet_velocity > &
+                        min_abs_velocity_step) then
+                        call v5b_command_velocity(proposed_inlet_velocity, time)
+                        v5b_recovery_active = .true.
+                    end if
+
+                else if (v5c_recenter_needed .and. &
+                    this%state%diag_hist_count >= v5b_fast_min_samples .and. &
+                    (time-this%state%v5b_last_fast_command_time) >= &
+                      v5c_recenter_cadence .and. &
+                    (time-this%state%previous_correction_time) >= &
+                      v5c_recenter_cadence) then
+                    ! Position error retains priority over a short positive
+                    ! centroid-velocity fluctuation when far upstream.
+                    v5c_recenter_du = max(0.0_dp, &
+                        v5c_recenter_position_gain * &
+                        (v5c_anchor_lower_x-current_front_coord) / &
+                        v5c_recenter_position_time + &
+                        v5c_recenter_velocity_gain * &
+                        max(-v5b_bulk_fast_velocity,0.0_dp))
+                    v5c_recenter_du = min(v5c_recenter_du, &
+                        v5c_recenter_max_du)
+                    proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
+                        this%state%inlet_velocity_applied+v5c_recenter_du)
+                    if (proposed_inlet_velocity-this%state%inlet_velocity_target > &
+                        min_abs_velocity_step) then
+                        call v5b_command_velocity(proposed_inlet_velocity,time)
+                        v5c_recenter_active = .true.
+                    end if
+
+                else if ((.not. this%state%v5b_post_capture_active) .and. &
+                    this%state%diag_hist_count >= v5b_fast_min_samples .and. &
+                    v5b_bulk_fast_velocity < -v5b_startup_velocity_threshold .and. &
+                    inlet_edge_velocity < -inlet_edge_velocity_noise_floor .and. &
+                    (time-this%state%v5b_last_fast_command_time) >= &
+                    v5b_fast_cadence .and. &
+                    (time-this%state%previous_correction_time) >= &
+                    v5b_fast_cadence) then
+                    ! Early bulk correction keeps 17% hydrogen flame out of the
+                    ! near-inlet region before a large emergency command is needed.
+                    v5b_fast_step = min( &
+                        -v5b_startup_gain*v5b_bulk_fast_velocity, &
+                        v5b_startup_max_du)
+                    proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
+                        this%state%inlet_velocity_applied + v5b_fast_step)
+                    if (proposed_inlet_velocity-this%state%inlet_velocity_target > &
+                        min_abs_velocity_step) then
+                        call v5b_command_velocity(proposed_inlet_velocity,time)
+                        v5b_startup_active = .true.
+                    end if
+                end if
+
+                ! v5c clears the post-capture latch above using a bounded
+                ! elapsed-time/velocity condition, not the bulk position.
             end if
 
             if (capture_mode) then
@@ -1599,9 +1773,18 @@ contains
                             proposed_inlet_velocity, du_raw, du_limited)
 
                         if (multidim_anchor .and. inlet_safety_intervention) then
-                            ! Never let normal anchoring decrease inlet speed
-                            ! while the upstream reaction/preheat edge is unsafe.
+                            ! Never decrease the inlet flow during flashback risk.
                             proposed_inlet_velocity = max(proposed_inlet_velocity, measured_inlet_velocity)
+                        else if (multidim_anchor .and. v5c_recenter_needed) then
+                            ! A momentary positive velocity far upstream must
+                            ! not undo the positional correction.
+                            proposed_inlet_velocity = max(proposed_inlet_velocity, measured_inlet_velocity)
+                        else if (multidim_anchor .and. &
+                            v5c_recovery_position_ok .and. &
+                            (this%state%v5b_post_capture_active .or. &
+                             v5b_bulk_outlet_warning) .and. &
+                            v5b_bulk_fast_velocity > v5b_recovery_velocity_threshold) then
+                            proposed_inlet_velocity = min(proposed_inlet_velocity, measured_inlet_velocity)
                         end if
 
                         if (abs(proposed_inlet_velocity - measured_inlet_velocity) > 0.0_dp) then
@@ -1881,7 +2064,13 @@ contains
                 ' "correction_free_time"' // &
                 ' "anchor_control_velocity" "safety_velocity"' // &
                 ' "predictive_on" "time_to_hard_s" "safety_horizon_s"' // &
-                ' "inlet_edge_velocity" "outlet_reaction_contact"'
+                ' "inlet_edge_velocity" "outlet_reaction_contact"' // &
+                ' "v5b_phase_startup" "v5b_phase_recovery"' // &
+                ' "v5b_bulk_velocity" "v5b_bulk_outlet_warning"' // &
+                ' "v5b_bulk_blowout" "v5b_post_capture"' // &
+                ' "v5b_bulk_outlet_eta_s"' // &
+                ' "v5c_phase_recenter" "v5c_recovery_position_ok"' // &
+                ' "v5c_predicted_bulk_x_m" "v5c_anchor_lower_x_m"'
 
             write(this%state%flame_loc_unit,'(A)') trim(av_header)
 
@@ -1971,6 +2160,25 @@ contains
                 this%state%front_coord_hist(max_hist_size) = s_new
             end if
         end subroutine append_front_history
+
+        subroutine v5b_command_velocity(u_new, t_command)
+            real(dp), intent(in) :: u_new, t_command
+
+            target_step_for_log = u_new - this%state%inlet_velocity_target
+            this%state%inlet_velocity_target = u_new
+            this%state%ramp_start_velocity = this%state%inlet_velocity_applied
+            this%state%ramp_start_time = t_command
+            this%state%active_inlet_ramp_time = v5b_fast_ramp_time
+            this%state%active_response_settle_time = response_settle_capture
+            this%state%previous_correction_time = t_command
+            this%state%v5b_last_fast_command_time = t_command
+            this%state%correction_counter = this%state%correction_counter + 1
+            ramp_settled = .false.
+            inlet_ramp_time = v5b_fast_ramp_time
+            control_performed = .true.
+            reset_history_after_log = .true.
+            call clear_control_history()
+        end subroutine v5b_command_velocity
 
         subroutine append_diagnostic_history(t_new, s_new, inlet_edge_new)
             real(dp), intent(in) :: t_new, s_new, inlet_edge_new
@@ -2738,6 +2946,8 @@ contains
 
             if (physical_boundary_violation) then
                 failure_status = 'physical_boundary_reached'
+            else if (v5b_bulk_blowout) then
+                failure_status = 'bulk_flame_blowout'
             else if (.not. hard_domain_fits) then
                 failure_status = 'hard_envelope_does_not_fit'
             else
@@ -3256,7 +3466,16 @@ contains
                 domain_failure_flag, correction_free_time, &
                 anchor_control_velocity, safety_velocity, predictive_flag, &
                 predictive_time_to_boundary, predictive_response_horizon, &
-                inlet_edge_velocity, merge(1.0_dp, 0.0_dp, outlet_reaction_contact)
+                inlet_edge_velocity, merge(1.0_dp, 0.0_dp, outlet_reaction_contact), &
+                merge(1.0_dp,0.0_dp,v5b_startup_active), &
+                merge(1.0_dp,0.0_dp,v5b_recovery_active), &
+                v5b_bulk_fast_velocity, merge(1.0_dp,0.0_dp,v5b_bulk_outlet_warning), &
+                merge(1.0_dp,0.0_dp,v5b_bulk_blowout), &
+                merge(1.0_dp,0.0_dp,this%state%v5b_post_capture_active), &
+                v5b_bulk_outlet_eta, &
+                merge(1.0_dp,0.0_dp,v5c_recenter_active), &
+                merge(1.0_dp,0.0_dp,v5c_recovery_position_ok), &
+                v5c_predicted_bulk_x, v5c_anchor_lower_x
         end subroutine write_tracking_line
 
     end subroutine solve
