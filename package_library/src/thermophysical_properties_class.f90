@@ -30,7 +30,7 @@ module thermophysical_properties_class
         ! calls and previously generated /thermo_properties/ namelists.  The
         ! file is no longer opened or used: species molar masses are derived
         ! from the elemental composition in the NASA/CHEMKIN thermo headers.
-        character(len=30) :: molar_masses_data_file_name
+        character(len=64) :: molar_masses_data_file_name
 
         real(dp), dimension(:), allocatable :: potential_well_depth
         real(dp), dimension(:), allocatable :: collision_diameter
@@ -139,9 +139,9 @@ contains
         class(thermophysical_properties), intent(in) :: this
         integer, intent(in) :: thermo_data_unit
 
-        character(len=30) :: thermo_data_file_name
-        character(len=30) :: transport_data_file_name
-        character(len=30) :: molar_masses_data_file_name
+        character(len=64) :: thermo_data_file_name
+        character(len=64) :: transport_data_file_name
+        character(len=64) :: molar_masses_data_file_name
 
         ! molar_masses_data_file_name remains in the namelist for compatibility
         ! with existing task_setup files, but is no longer used by this class.
@@ -161,9 +161,9 @@ contains
         type(chemical_properties), intent(in) :: chemistry
         integer, intent(in) :: thermo_data_unit
 
-        character(len=30) :: thermo_data_file_name
-        character(len=30) :: transport_data_file_name
-        character(len=30) :: molar_masses_data_file_name
+        character(len=64) :: thermo_data_file_name
+        character(len=64) :: transport_data_file_name
+        character(len=64) :: molar_masses_data_file_name
 
         namelist /thermo_properties/ thermo_data_file_name, &
             transport_data_file_name, molar_masses_data_file_name
