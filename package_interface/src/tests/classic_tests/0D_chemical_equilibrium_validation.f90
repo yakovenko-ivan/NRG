@@ -70,7 +70,7 @@ program package_interface
 
     ! Defaults form a stoichiometric H2-air validation case for KEROMNES.
     mode = 'all'
-    mechanism_file = 'KEROMNES.txt'
+    mechanism_file = 'hydrogen/KEROMNES.txt'
     thermo_file = 'KEROMNES_THERMO.txt'
     transport_file = 'KEROMNES_TRANSDATA.txt'
     components_number = 3

@@ -796,19 +796,19 @@ contains
         select case(trim(mechanism_id))
         case('keromnes')
             mechanism_name = 'KEROMNES'
-            mech_file = 'KEROMNES.txt'
+            mech_file = 'hydrogen/KEROMNES.txt'
             thermo_data_file = 'KEROMNES_THERMO.txt'
             transport_data_file = 'KEROMNES_TRANSDATA.txt'
 
         case('konnov')
             mechanism_name = 'KONNOV'
-            mech_file = 'KONNOV.txt'
+            mech_file = 'hydrogen/KONNOV.txt'
             thermo_data_file = 'KONNOV_THERMO.txt'
             transport_data_file = 'KONNOV_TRANSDATA.txt'
 
         case('zhang')
             mechanism_name = 'ZHANG'
-            mech_file = 'ZHANG.txt'
+            mech_file = 'hydrogen/ZHANG.txt'
             thermo_data_file = 'ZHANG_THERMO.txt'
             transport_data_file = 'ZHANG_TRANSDATA.txt'
 
@@ -838,7 +838,7 @@ contains
             
         case('tereza')
             mechanism_name = 'TEREZA'
-            mech_file = 'TEREZA.txt'
+            mech_file = 'hydrogen/TEREZA.txt'
             thermo_data_file = 'TEREZA_THERMO.txt'
             transport_data_file = 'TEREZA_TRANSDATA.txt'
             

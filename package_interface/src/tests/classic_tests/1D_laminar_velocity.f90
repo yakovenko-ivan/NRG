@@ -283,19 +283,19 @@ program package_interface
             case(1)
                 mech_name      = 'KEROMNES'
                 work_dir = trim(work_dir) // trim(fold_sep) // trim(mech_name)
-                mech_file      = trim(mech_name) // '.txt'
+                mech_file      = 'hydrogen/'//trim(mech_name) // '.txt'
                 thermo_file    = trim(mech_name) // '_THERMO.txt'
                 transdata_file = trim(mech_name) // '_TRANSDATA.txt'
             case(2)
                 mech_name      = 'KONNOV'
                 work_dir = trim(work_dir) // trim(fold_sep) // trim(mech_name)
-                mech_file      = trim(mech_name) // '.txt'
+                mech_file      = 'hydrogen/'//trim(mech_name) // '.txt'
                 thermo_file    = trim(mech_name) // '_THERMO.txt'
                 transdata_file = trim(mech_name) // '_TRANSDATA.txt'
             case(3)
                 mech_name      = 'ZHANG'
                 work_dir = trim(work_dir) // trim(fold_sep) // trim(mech_name)
-                mech_file      = trim(mech_name) // '.txt'
+                mech_file      = 'hydrogen/'//trim(mech_name) // '.txt'
                 thermo_file    = trim(mech_name) // '_THERMO.txt'
                 transdata_file = trim(mech_name) // '_TRANSDATA.txt'
         end select

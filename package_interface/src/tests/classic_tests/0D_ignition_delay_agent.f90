@@ -451,7 +451,7 @@ contains
             error stop 3
         end select
 
-        mech_file      = trim(mechanism_name)//'.txt'
+        mech_file      = 'hydrogen/'//trim(mechanism_name)//'.txt'
         thermo_file    = trim(mechanism_name)//'_THERMO.txt'
         transdata_file = trim(mechanism_name)//'_TRANSDATA.txt'
     end subroutine resolve_mechanism

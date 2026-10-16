@@ -1,6 +1,6 @@
 &equilibrium_validation
   mode = 'all'
-  mechanism_file = 'KEROMNES.txt'
+  mechanism_file = 'hydrogen/KEROMNES.txt'
   thermo_file = 'KEROMNES_THERMO.txt'
   transport_file = 'KEROMNES_TRANSDATA.txt'
 
