@@ -122,10 +122,13 @@ program package_interface
 
     character(len=64) :: thermo_data_file
     character(len=64) :: transport_data_file
+    ! Optional NRG-only mechanism reduction (canonical CHEMKIN unchanged).
+    integer :: excluded_species_count
+    character(len=20) :: excluded_species(64)
 
     namelist /physics_config/ mechanism_id, thermo_data_file, &
     transport_data_file, solver_id, initial_time_step, &
-    cfl_enabled, cfl_coefficient
+    cfl_enabled, cfl_coefficient, excluded_species_count, excluded_species
 
     !--------------------------------------------------------------------------
     ! Chemistry backend
@@ -241,6 +244,8 @@ program package_interface
     
     thermo_data_file        = 'KEROMNES_THERMO.txt'
     transport_data_file     = 'KEROMNES_TRANSDATA.txt'
+    excluded_species_count = 0
+    excluded_species = ''
 
     chemistry_backend = 'qss2'
     chemistry_cvode_relative_tolerance = 1.0e-8_dp
@@ -305,6 +310,11 @@ program package_interface
 
     call normalize_and_validate_configuration()
     call resolve_mechanism()
+    if (any(excluded_species(1:excluded_species_count) == &
+        trim(fuel_specie_name)) .or. &
+        any(excluded_species(1:excluded_species_count) == 'O2') .or. &
+        any(excluded_species(1:excluded_species_count) == 'N2')) &
+        error stop 'ERROR: cannot exclude fuel, O2, or N2 from the initial mixture'
     call resolve_solver()
 
     ! Fuel + nu O2 + (N2/O2)*nu N2.
@@ -366,7 +376,8 @@ program package_interface
     problem_chemistry = chemical_properties_c( &
         chemical_mechanism_file_name  = trim(mech_file), &
         default_enhanced_efficiencies = 1.0_dp, &
-        E_act_units                   = 'cal.mol')
+        E_act_units                   = 'cal.mol', &
+        excluded_species = excluded_species(1:excluded_species_count))
 
     problem_thermophysics = thermophysical_properties_c( &
         chemistry                   = problem_chemistry, &
@@ -642,6 +653,18 @@ contains
         write(info_unit,'(A,L1)') 'CFL enabled: ', cfl_enabled
         write(info_unit,'(A,F10.4)') 'CFL coefficient: ', cfl_coefficient
         write(info_unit,'(A,I0)') 'Species count: ', problem_chemistry%species_number
+        write(info_unit,'(A,I0)') 'Canonical species count: ', &
+            problem_chemistry%original_species_number
+        write(info_unit,'(A,I0)') 'Canonical reaction count: ', &
+            problem_chemistry%original_reactions_number
+        write(info_unit,'(A,I0)') 'Active reaction count: ', &
+            problem_chemistry%reactions_number
+        write(info_unit,'(A,I0)') 'Excluded species count: ', &
+            excluded_species_count
+        do species_index = 1, excluded_species_count
+            write(info_unit,'(A,A)') 'Excluded species: ', &
+                trim(excluded_species(species_index))
+        end do
         write(info_unit,'(A)',advance='no') 'Species: '
         do species_index = 1, problem_chemistry%species_number
             if (species_index > 1) write(info_unit,'(A)',advance='no') ', '
@@ -731,6 +754,12 @@ contains
         if (initial_time_step <= 0.0_dp) then
             error stop 'ERROR: initial_time_step must be positive.'
         end if
+        if (excluded_species_count < 0 .or. excluded_species_count > 64) &
+            error stop 'ERROR: excluded_species_count must be in [0,64]'
+        do spec = 1, excluded_species_count
+            if (len_trim(excluded_species(spec)) == 0) &
+                error stop 'ERROR: blank name in excluded_species'
+        end do
         select case(trim(chemistry_backend))
         case('slatec','cvode','qss1','qss2')
         case default

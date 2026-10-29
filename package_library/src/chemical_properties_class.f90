@@ -12,6 +12,7 @@ module chemical_properties_class
 
     integer, parameter :: mechanism_line_length = 4096
     integer, parameter :: parser_message_length = 512
+    integer, parameter :: maximum_excluded_species = 64
 
     type :: chemical_properties_pointer
         type(chemical_properties), pointer :: chem_ptr
@@ -33,6 +34,11 @@ module chemical_properties_class
         real(dp), dimension(:,:), allocatable :: Troe_coeffs
 
         character(len=20) :: activation_energy_units
+        ! A reduced in-memory mechanism; the source CHEMKIN file is unchanged.
+        character(len=20), allocatable :: excluded_species(:)
+        integer :: original_species_number = 0
+        integer :: original_reactions_number = 0
+        integer, allocatable :: source_reaction_indices(:)
 
     contains
 
@@ -47,6 +53,7 @@ module chemical_properties_class
         procedure, private :: chemical_reaction_parser
         procedure, private :: count_standard_chemkin_reactions
         procedure, private :: read_standard_chemkin_reactions
+        procedure, private :: reduce_mechanism
 
         procedure :: get_chemical_specie_index
         procedure :: get_chemical_specie_name
@@ -65,17 +72,18 @@ contains
 
     type(chemical_properties) function constructor( &
             chemical_mechanism_file_name, default_enhanced_efficiencies, &
-            E_act_units)
+            E_act_units, excluded_species)
 
         character(len=*), intent(in) :: chemical_mechanism_file_name
         real(dp), intent(in) :: default_enhanced_efficiencies
         character(len=*), intent(in) :: E_act_units
+        character(len=*), intent(in), optional :: excluded_species(:)
 
         integer :: io_unit, io_status
         character(len=parser_message_length) :: io_message
 
         call constructor%set_properties(chemical_mechanism_file_name, &
-            default_enhanced_efficiencies, E_act_units)
+            default_enhanced_efficiencies, E_act_units, excluded_species)
 
         open(newunit=io_unit, file=chemical_data_file_name, status='replace', &
             form='formatted', action='write', delim='quote', &
@@ -125,12 +133,17 @@ contains
         character(len=50) :: chemical_mechanism_file_name
         real(dp) :: default_enhanced_efficiencies
         character(len=15) :: E_act_units
+        integer :: excluded_species_count
+        character(len=20) :: excluded_species(maximum_excluded_species)
         integer :: io_status
         character(len=parser_message_length) :: io_message
 
         namelist /chemical_properties/ chemical_mechanism_file_name, &
-            default_enhanced_efficiencies, E_act_units
+            default_enhanced_efficiencies, E_act_units, &
+            excluded_species_count, excluded_species
 
+        excluded_species_count = 0
+        excluded_species = ''
         read(unit=chemical_data_unit, nml=chemical_properties, &
             iostat=io_status, iomsg=io_message)
 
@@ -141,8 +154,13 @@ contains
             error stop 'Chemical properties namelist read failure'
         end if
 
+        if (excluded_species_count < 0 .or. &
+            excluded_species_count > maximum_excluded_species) then
+            error stop 'CHEMKIN: invalid excluded_species_count in setup file'
+        end if
         call this%set_properties(chemical_mechanism_file_name, &
-            default_enhanced_efficiencies, E_act_units)
+            default_enhanced_efficiencies, E_act_units, &
+            excluded_species(1:excluded_species_count))
 
     end subroutine read_properties
 
@@ -155,13 +173,20 @@ contains
         character(len=50) :: chemical_mechanism_file_name
         real(dp) :: default_enhanced_efficiencies
         character(len=15) :: E_act_units
+        integer :: excluded_species_count
+        character(len=20) :: excluded_species(maximum_excluded_species)
 
         namelist /chemical_properties/ chemical_mechanism_file_name, &
-            default_enhanced_efficiencies, E_act_units
+            default_enhanced_efficiencies, E_act_units, &
+            excluded_species_count, excluded_species
 
         chemical_mechanism_file_name = this%chemical_mechanism_file_name
         default_enhanced_efficiencies = this%default_enhanced_efficiencies
         E_act_units = this%E_act_units
+        excluded_species_count = size(this%excluded_species)
+        excluded_species = ''
+        if (excluded_species_count > 0) &
+            excluded_species(1:excluded_species_count) = this%excluded_species
 
         write(unit=chemical_data_unit, nml=chemical_properties)
 
@@ -169,13 +194,14 @@ contains
 
 
     subroutine set_properties(this, chemical_mechanism_file_name, &
-            default_enhanced_efficiencies, E_act_units)
+            default_enhanced_efficiencies, E_act_units, excluded_species)
 
         class(chemical_properties), intent(inout) :: this
 
         character(len=*), intent(in) :: chemical_mechanism_file_name
         real(dp), intent(in) :: default_enhanced_efficiencies
         character(len=*), intent(in) :: E_act_units
+        character(len=*), intent(in), optional :: excluded_species(:)
 
         real(dp) :: activation_energy_coefficient
 
@@ -192,6 +218,13 @@ contains
         this%chemical_mechanism_file_name = trim(chemical_mechanism_file_name)
         this%default_enhanced_efficiencies = default_enhanced_efficiencies
         this%E_act_units = trim(E_act_units)
+        if (present(excluded_species)) then
+            if (size(excluded_species) > maximum_excluded_species) &
+                error stop 'CHEMKIN: too many excluded species'
+            this%excluded_species = excluded_species
+        else
+            allocate(this%excluded_species(0))
+        end if
 
         mechanism_path = trim(task_setup_folder)//trim(fold_sep)// &
             trim(chemical_mechanisms_folder)//trim(fold_sep)// &
@@ -342,8 +375,129 @@ contains
 
         end do
 
+        this%original_species_number = this%species_number
+        this%original_reactions_number = this%reactions_number
+        allocate(this%source_reaction_indices(this%reactions_number))
+        do reaction_number = 1, this%reactions_number
+            this%source_reaction_indices(reaction_number) = reaction_number
+        end do
+        if (size(this%excluded_species) > 0) call this%reduce_mechanism()
+
     end subroutine set_properties
 
+
+    ! Operate only on fully validated, fully parsed and SI-converted arrays.
+    ! The source file remains standard CHEMKIN and is never modified.
+    subroutine reduce_mechanism(this)
+        class(chemical_properties), intent(inout) :: this
+        integer :: ns, nr, i, j, r, side, part, idx, nactive, nkept, new_r
+        integer, allocatable :: mapping(:), reaction_ids(:)
+        integer, allocatable :: new_type(:), new_coeffs(:,:,:)
+        logical, allocatable :: keep(:)
+        character(len=20), allocatable :: new_names(:)
+        real(dp), allocatable :: new_a(:), new_beta(:), new_e(:)
+        real(dp), allocatable :: new_alow(:), new_blow(:), new_elow(:)
+        real(dp), allocatable :: new_eff(:,:), new_troe(:,:)
+
+        ns = this%species_number
+        nr = this%reactions_number
+        allocate(mapping(ns+1), keep(nr))
+        mapping = 0
+        do i = 1, size(this%excluded_species)
+            if (len_trim(this%excluded_species(i)) == 0 .or. &
+                trim(this%excluded_species(i)) == 'M') &
+                error stop 'CHEMKIN: blank or pseudo-species exclusion'
+            idx = this%get_chemical_specie_index(trim(this%excluded_species(i)))
+            if (idx < 1 .or. idx > ns) then
+                write(error_unit,'(A,A)') &
+                    'CHEMKIN: excluded species not found in canonical mechanism: ', &
+                    trim(this%excluded_species(i))
+                error stop 'CHEMKIN: invalid excluded species'
+            end if
+            do j = 1, i-1
+                if (trim(this%excluded_species(i)) == &
+                    trim(this%excluded_species(j))) &
+                    error stop 'CHEMKIN: duplicate excluded species'
+            end do
+            mapping(idx) = -1
+        end do
+
+        nactive = 0
+        do i = 1, ns
+            if (mapping(i) < 0) cycle
+            nactive = nactive + 1
+            mapping(i) = nactive
+        end do
+        if (nactive == 0) error stop 'CHEMKIN: no active species after exclusion'
+        ! The generic collider M is a virtual species at ns+1.
+        mapping(ns+1) = nactive+1
+
+        keep = .true.
+        do r = 1, nr
+            do side = 1, 2
+                do part = 2, this%chemical_coeffs(1,r,side)+1
+                    idx = this%chemical_coeffs(part,r,side)
+                    if (idx < 1 .or. idx > ns+1) &
+                        error stop 'CHEMKIN: invalid parsed reaction participant'
+                    if (mapping(idx) < 1) keep(r) = .false.
+                end do
+            end do
+        end do
+        nkept = count(keep)
+        if (nkept == 0) error stop 'CHEMKIN: exclusion removes all reactions'
+
+        allocate(new_names(nactive+1), new_type(nkept), &
+            new_coeffs(4,nkept,2), reaction_ids(nkept), &
+            new_a(nkept), new_beta(nkept), new_e(nkept), &
+            new_alow(nkept), new_blow(nkept), new_elow(nkept), &
+            new_eff(nkept,nactive), new_troe(nkept,4))
+        do i = 1, ns
+            if (mapping(i) > 0) &
+                new_names(mapping(i)) = this%species_names(i)
+        end do
+        new_names(nactive+1) = 'M'
+        new_r = 0
+        do r = 1, nr
+            if (.not. keep(r)) cycle
+            new_r = new_r+1
+            reaction_ids(new_r) = this%source_reaction_indices(r)
+            new_type(new_r) = this%reactions_type(r)
+            new_coeffs(:,new_r,:) = this%chemical_coeffs(:,r,:)
+            do side = 1, 2
+                do part = 2, new_coeffs(1,new_r,side)+1
+                    idx = new_coeffs(part,new_r,side)
+                    new_coeffs(part,new_r,side) = mapping(idx)
+                end do
+            end do
+            new_a(new_r) = this%A(r)
+            new_beta(new_r) = this%beta(r)
+            new_e(new_r) = this%E_act(r)
+            new_alow(new_r) = this%A_low(r)
+            new_blow(new_r) = this%beta_low(r)
+            new_elow(new_r) = this%E_act_low(r)
+            new_troe(new_r,:) = this%Troe_coeffs(r,:)
+            do i = 1, ns
+                if (mapping(i) > 0) &
+                    new_eff(new_r,mapping(i)) = &
+                        this%enhanced_efficiencies(r,i)
+            end do
+        end do
+
+        call move_alloc(new_names,this%species_names)
+        call move_alloc(new_type,this%reactions_type)
+        call move_alloc(new_coeffs,this%chemical_coeffs)
+        call move_alloc(new_a,this%A)
+        call move_alloc(new_beta,this%beta)
+        call move_alloc(new_e,this%E_act)
+        call move_alloc(new_alow,this%A_low)
+        call move_alloc(new_blow,this%beta_low)
+        call move_alloc(new_elow,this%E_act_low)
+        call move_alloc(new_eff,this%enhanced_efficiencies)
+        call move_alloc(new_troe,this%Troe_coeffs)
+        call move_alloc(reaction_ids,this%source_reaction_indices)
+        this%species_number = nactive
+        this%reactions_number = nkept
+    end subroutine reduce_mechanism
 
     subroutine write_log(this, log_unit)
 
@@ -368,6 +522,19 @@ contains
         write(log_unit,*) this%species_names(1:this%species_number)
         write(log_unit,'(A,I4)') &
             ' Reactions_number                     : ', this%reactions_number
+        write(log_unit,'(A,I0,A,I0)') &
+            ' Source/reduced species               : ', &
+            this%original_species_number, ' / ', this%species_number
+        write(log_unit,'(A,I0,A,I0)') &
+            ' Source/reduced reactions             : ', &
+            this%original_reactions_number, ' / ', this%reactions_number
+        if (size(this%excluded_species) > 0) then
+            write(log_unit,'(A)',advance='no') ' Excluded species                      : '
+            write(log_unit,*) this%excluded_species
+            write(log_unit,'(A)') &
+                ' Retained source reaction indices:'
+            write(log_unit,*) this%source_reaction_indices
+        end if
         write(log_unit,'(A)') &
             '*************************************************************************************'
 
