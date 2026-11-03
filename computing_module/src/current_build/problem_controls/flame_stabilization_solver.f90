@@ -392,6 +392,22 @@ contains
         real(dp), parameter :: v5c_recenter_position_gain = 0.30_dp
         real(dp), parameter :: v5c_recenter_velocity_gain = 0.55_dp
         real(dp), parameter :: v5c_recenter_max_du = 8.0e-02_dp
+        ! v5e: only explicit 2D anchor targets enable downstream recentering.
+        ! Keep each deceleration below the v5b emergency recovery authority.
+        real(dp), parameter :: v5e_downstream_position_gain = 0.50_dp
+        real(dp), parameter :: v5e_downstream_velocity_gain = 0.35_dp
+        real(dp), parameter :: v5e_downstream_max_du = 6.0e-02_dp
+        real(dp), parameter :: v5e_downstream_max_fraction = 0.12_dp
+        ! v5f: unified bulk-position tracking replaces v5b/v5c/v5e
+        ! competing routine commands; fast inlet/outlet safety stays.
+        integer, parameter :: v5f_tracking_samples = 60
+        integer, parameter :: v5f_min_tracking_samples = 20
+        real(dp), parameter :: v5f_position_time = 3.0e-02_dp
+        real(dp), parameter :: v5f_max_desired_drift = 5.0e-02_dp
+        real(dp), parameter :: v5f_tracking_gain = 3.5e-01_dp
+        real(dp), parameter :: v5f_max_step = 2.5e-02_dp
+        real(dp), parameter :: v5f_max_fraction = 6.0e-02_dp
+        real(dp), parameter :: v5f_velocity_deadband = 8.0e-03_dp
 
         integer, parameter :: workflow_flamelet_sl = 1
         integer, parameter :: workflow_anchor_observation = 2
@@ -495,6 +511,10 @@ contains
         real(dp) :: v5b_bulk_fast_velocity, v5b_outlet_soft_limit
         real(dp) :: v5b_bulk_outlet_eta, v5b_fast_step, v5b_clearance
         real(dp) :: v5c_predicted_bulk_x, v5c_anchor_lower_x, v5c_recenter_du
+        real(dp) :: v5e_anchor_upper_x, v5e_downstream_du
+        real(dp) :: v5f_bulk_mean_x, v5f_bulk_mean_v
+        real(dp) :: v5f_position_error, v5f_desired_velocity
+        real(dp) :: v5f_tracking_velocity_error
         real(dp) :: inlet_clearance_to_hard, outlet_clearance_to_hard
         real(dp) :: predictive_time_to_boundary, predictive_response_horizon
         real(dp) :: predictive_du, predictive_max_step, local_threshold
@@ -528,6 +548,9 @@ contains
         logical :: v5b_recovery_clearance_ok
         logical :: v5c_recenter_needed, v5c_recovery_position_ok
         logical :: v5c_recenter_active
+        logical :: v5e_explicit_target, v5e_downstream_recenter_needed
+        logical :: v5e_downstream_recenter_active
+        logical :: v5f_tracking_active, v5f_downward_safe
 
 
         stabilized = .false.
@@ -1086,7 +1109,16 @@ contains
 
             current_front_coord = current_flame_location(front_axis)
             if (flame_detected .and. .not. this%state%front_reference_initialized) then
-                this%state%front_reference_coord = current_front_coord
+                ! Override ONLY for multidimensional anchor runs.
+                ! All position regulators use this single shared reference.
+                if (multidim_anchor .and. &
+                    this%flame_stabilization%get_anchor_target_fraction() > 0.0_dp) then
+                    this%state%front_reference_coord = domain_boundary_min + &
+                        this%flame_stabilization%get_anchor_target_fraction() * &
+                        domain_front_length
+                else
+                    this%state%front_reference_coord = current_front_coord
+                end if
                 this%state%front_reference_initialized = .true.
             end if
 
@@ -1207,6 +1239,45 @@ contains
             v5c_predicted_bulk_x = current_front_coord
             v5c_anchor_lower_x = domain_front_min
             v5c_recenter_du = 0.0_dp
+            v5e_explicit_target = multidim_anchor .and. &
+                this%flame_stabilization%get_anchor_target_fraction() > 0.0_dp
+            v5e_downstream_recenter_needed = .false.
+            v5e_downstream_recenter_active = .false.
+            v5e_anchor_upper_x = domain_front_max
+            v5e_downstream_du = 0.0_dp
+            v5f_bulk_mean_x = current_front_coord
+            v5f_bulk_mean_v = 0.0_dp
+            v5f_position_error = 0.0_dp
+            v5f_desired_velocity = 0.0_dp
+            v5f_tracking_velocity_error = 0.0_dp
+            v5f_tracking_active = .false.
+            v5f_downward_safe = .false.
+            ! Update 6 ms bulk observables after the diagnostic
+            ! history is appended, BEFORE computing desired drift.
+            if (multidim_anchor .and. flame_detected .and. &
+                this%state%diag_hist_count >= 2) then
+                v5f_bulk_mean_v = diagnostic_recent_velocity( &
+                    v5f_tracking_samples)
+                v5f_bulk_mean_x = diagnostic_recent_mean_position( &
+                    v5f_tracking_samples)
+            end if
+            if (multidim_anchor .and. flame_detected .and. &
+                this%state%front_reference_initialized .and. &
+                this%state%diag_hist_count >= v5f_min_tracking_samples) then
+                anchor_position_band = max( &
+                    real(multidim_anchor_position_cells,dp)*cell_size(front_axis), &
+                    multidim_anchor_position_fraction*domain_front_length)
+                v5f_position_error = safe_window_error( &
+                    v5f_bulk_mean_x, &
+                    this%state%front_reference_coord-anchor_position_band, &
+                    this%state%front_reference_coord+anchor_position_band)
+                v5f_desired_velocity = max(-v5f_max_desired_drift, &
+                    min(v5f_max_desired_drift, &
+                    -v5f_position_error/v5f_position_time))
+                v5f_tracking_velocity_error = &
+                    v5f_bulk_mean_v-v5f_desired_velocity
+                v5f_tracking_active = .true.
+            end if
             v5b_fast_step = 0.0_dp
             v5b_clearance = 0.0_dp
             v5b_bulk_outlet_eta = -1.0_dp
@@ -1443,6 +1514,11 @@ contains
                                         2.0e-04_dp) .and. &
                     inlet_edge_velocity > -v5b_recovery_velocity_threshold .and. &
                     (.not. inlet_safety_intervention)
+                v5f_downward_safe = (.not. inlet_safety_intervention) .and. &
+                    v5b_clearance > max(8.0_dp*cell_size(front_axis),2.0e-04_dp) .and. &
+                    v5b_clearance + min(inlet_edge_velocity,0.0_dp) * &
+                      predictive_response_horizon > &
+                      max(4.0_dp*cell_size(front_axis),1.0e-04_dp)
 
                 ! A recovery is justified by position, not velocity sign alone.
                 ! Normal anchoring keeps the original reference, restricted to
@@ -1457,6 +1533,19 @@ contains
                     v5c_predicted_bulk_x >= v5c_anchor_lower_x
                 v5c_recenter_needed = &
                     (v5c_predicted_bulk_x < v5c_anchor_lower_x) .and. &
+                    (.not. inlet_safety_intervention)
+
+                ! Move an explicitly targeted flame back from the outlet.
+                ! Evaluate the same short-horizon bulk predictor used
+                ! in v5c, but now against the upper corridor boundary.
+                v5e_anchor_upper_x = min( &
+                    this%state%front_reference_coord + max( &
+                        real(multidim_anchor_position_cells,dp)*cell_size(front_axis), &
+                        multidim_anchor_position_fraction*domain_front_length), &
+                    v5b_outlet_soft_limit)
+                v5e_downstream_recenter_needed = v5e_explicit_target .and. &
+                    (v5c_predicted_bulk_x > v5e_anchor_upper_x) .and. &
+                    v5b_recovery_clearance_ok .and. &
                     (.not. inlet_safety_intervention)
 
                 ! The old v5b latch could persist indefinitely if the bulk
@@ -1521,45 +1610,24 @@ contains
                         v5b_recovery_active = .true.
                     end if
 
-                else if (v5c_recenter_needed .and. &
-                    this%state%diag_hist_count >= v5b_fast_min_samples .and. &
-                    (time-this%state%v5b_last_fast_command_time) >= &
-                      v5c_recenter_cadence .and. &
-                    (time-this%state%previous_correction_time) >= &
-                      v5c_recenter_cadence) then
-                    ! Position error retains priority over a short positive
-                    ! centroid-velocity fluctuation when far upstream.
-                    v5c_recenter_du = max(0.0_dp, &
-                        v5c_recenter_position_gain * &
-                        (v5c_anchor_lower_x-current_front_coord) / &
-                        v5c_recenter_position_time + &
-                        v5c_recenter_velocity_gain * &
-                        max(-v5b_bulk_fast_velocity,0.0_dp))
-                    v5c_recenter_du = min(v5c_recenter_du, &
-                        v5c_recenter_max_du)
-                    proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
-                        this%state%inlet_velocity_applied+v5c_recenter_du)
-                    if (proposed_inlet_velocity-this%state%inlet_velocity_target > &
-                        min_abs_velocity_step) then
-                        call v5b_command_velocity(proposed_inlet_velocity,time)
-                        v5c_recenter_active = .true.
-                    end if
-
-                else if ((.not. this%state%v5b_post_capture_active) .and. &
+                else if ((.not. this%state%controller_armed) .and. &
+                    (.not. this%state%v5b_post_capture_active) .and. &
                     this%state%diag_hist_count >= v5b_fast_min_samples .and. &
                     v5b_bulk_fast_velocity < -v5b_startup_velocity_threshold .and. &
                     inlet_edge_velocity < -inlet_edge_velocity_noise_floor .and. &
                     (time-this%state%v5b_last_fast_command_time) >= &
-                    v5b_fast_cadence .and. &
+                      v5b_fast_cadence .and. &
                     (time-this%state%previous_correction_time) >= &
-                    v5b_fast_cadence) then
-                    ! Early bulk correction keeps 17% hydrogen flame out of the
-                    ! near-inlet region before a large emergency command is needed.
+                      v5b_fast_cadence) then
+                    ! Pre-armed capture is retained to avoid early
+                    ! flashback before the tracking history is ready.
+                    ! Once armed, this path NEVER competes with the
+                    ! requested upstream translation of the flame.
                     v5b_fast_step = min( &
                         -v5b_startup_gain*v5b_bulk_fast_velocity, &
                         v5b_startup_max_du)
                     proposed_inlet_velocity = max(this%state%inlet_velocity_target, &
-                        this%state%inlet_velocity_applied + v5b_fast_step)
+                        this%state%inlet_velocity_applied+v5b_fast_step)
                     if (proposed_inlet_velocity-this%state%inlet_velocity_target > &
                         min_abs_velocity_step) then
                         call v5b_command_velocity(proposed_inlet_velocity,time)
@@ -1567,6 +1635,8 @@ contains
                     end if
                 end if
 
+                ! v5f: no competing routine fast recentering after
+                ! arming. Physical safety and pre-armed capture remain.
                 ! v5c clears the post-capture latch above using a bounded
                 ! elapsed-time/velocity condition, not the bulk position.
             end if
@@ -1590,9 +1660,8 @@ contains
             if (measurement_enabled) then
                 call append_front_history(time, current_front_coord)
                 if (multidim_anchor) then
-                    ! Do not let normal anchoring chase cell merging/splitting.
-                    ! The control velocity is estimated from a medium diagnostic
-                    ! window that is not reset after every inlet correction.
+                    ! Ordinary translation control is computed from a
+                    ! non-reset 6 ms history; retain existing Vfl diagnostics.
                     flame_velocity_lsq = anchor_control_velocity
                     flame_velocity_filtered = anchor_control_velocity
                 else
@@ -1628,7 +1697,11 @@ contains
                     position_control_error = centroid_position_error
                 end if
                 position_velocity = position_control_error / max(position_relaxation_time, time_track)
-                if (containment_mode) then
+                if (multidim_anchor) then
+                    ! Signed error = measured bulk translation minus
+                    ! desired translation into the target corridor.
+                    control_velocity = v5f_tracking_velocity_error
+                else if (containment_mode) then
                     control_velocity = position_velocity
                 else
                     control_velocity = flame_velocity_filtered + position_velocity
@@ -1762,29 +1835,32 @@ contains
             end if
 
             if (measurement_enabled .and. (.not. hard_recovery_hold) .and. &
+                (.not. (multidim_anchor .and. &
+                    (inlet_safety_intervention .or. v5b_recovery_active))) .and. &
+                (.not. multidim_anchor .or. v5f_tracking_active) .and. &
                 this%state%hist_count >= merge(min_hist_for_capture, min_hist_for_control, capture_mode)) then
                 if ((time - this%state%previous_correction_time) >= time_control_effective) then
                     if (control_action_needed()) then
                         measured_inlet_velocity = this%state%inlet_velocity_target
 
-                        call update_adaptive_gain(control_velocity)
-                        call update_bracket(measured_inlet_velocity, control_velocity)
+                        if (multidim_anchor) then
+                            ! Do not use stale flame-speed brackets for
+                            ! moving-target control. They remain a 1D tool.
+                            this%state%has_bracket = .false.
+                            this%state%have_previous_control_point = .false.
+                        else
+                            call update_adaptive_gain(control_velocity)
+                            call update_bracket(measured_inlet_velocity, control_velocity)
+                        end if
                         call choose_new_inlet_target(measured_inlet_velocity, control_velocity, &
                             proposed_inlet_velocity, du_raw, du_limited)
 
-                        if (multidim_anchor .and. inlet_safety_intervention) then
-                            ! Never decrease the inlet flow during flashback risk.
-                            proposed_inlet_velocity = max(proposed_inlet_velocity, measured_inlet_velocity)
-                        else if (multidim_anchor .and. v5c_recenter_needed) then
-                            ! A momentary positive velocity far upstream must
-                            ! not undo the positional correction.
-                            proposed_inlet_velocity = max(proposed_inlet_velocity, measured_inlet_velocity)
-                        else if (multidim_anchor .and. &
-                            v5c_recovery_position_ok .and. &
-                            (this%state%v5b_post_capture_active .or. &
-                             v5b_bulk_outlet_warning) .and. &
-                            v5b_bulk_fast_velocity > v5b_recovery_velocity_threshold) then
-                            proposed_inlet_velocity = min(proposed_inlet_velocity, measured_inlet_velocity)
+                        if (multidim_anchor .and. &
+                            proposed_inlet_velocity < measured_inlet_velocity .and. &
+                            (.not. v5f_downward_safe)) then
+                            ! Cannot command upstream relocation until
+                            ! adequate thermal inlet isolation is measured.
+                            proposed_inlet_velocity = measured_inlet_velocity
                         end if
 
                         if (abs(proposed_inlet_velocity - measured_inlet_velocity) > 0.0_dp) then
@@ -2070,7 +2146,12 @@ contains
                 ' "v5b_bulk_blowout" "v5b_post_capture"' // &
                 ' "v5b_bulk_outlet_eta_s"' // &
                 ' "v5c_phase_recenter" "v5c_recovery_position_ok"' // &
-                ' "v5c_predicted_bulk_x_m" "v5c_anchor_lower_x_m"'
+                ' "v5c_predicted_bulk_x_m" "v5c_anchor_lower_x_m"' // &
+                ' "v5e_phase_recenter_down" "v5e_need_recenter_down"' // &
+                ' "v5e_anchor_upper_x_m"' // &
+                ' "v5f_x_mean_m" "v5f_v_mean_m_s"' // &
+                ' "v5f_v_desired_m_s" "v5f_velocity_error_m_s"' // &
+                ' "v5f_phase_tracking" "v5f_decrease_safe"'
 
             write(this%state%flame_loc_unit,'(A)') trim(av_header)
 
@@ -2373,6 +2454,18 @@ contains
         end function diagnostic_recent_velocity
 
 
+        function diagnostic_recent_mean_position(n_requested) result(x_mean)
+            integer, intent(in) :: n_requested
+            real(dp) :: x_mean
+            integer :: n_use, n_first
+            x_mean = 0.0_dp
+            if (this%state%diag_hist_count < 1) return
+            n_use = min(max(n_requested,1),this%state%diag_hist_count)
+            n_first = this%state%diag_hist_count-n_use+1
+            x_mean = sum(this%state%diag_front_coord_hist( &
+                n_first:this%state%diag_hist_count))/real(n_use,dp)
+        end function diagnostic_recent_mean_position
+
         function diagnostic_mean_front_position() result(x_mean)
             real(dp) :: x_mean
             if (this%state%diag_hist_count < 1) then
@@ -2619,6 +2712,19 @@ contains
             real(dp) :: dU, dV, response_slope, secant_step, bracket_target
             real(dp) :: gain_effective, max_fraction_effective, min_step_effective
 
+            if (multidim_anchor) then
+                du_unlimited = -v5f_tracking_gain*v_current
+                du_final = 0.0_dp
+                if (abs(v_current) > v5f_velocity_deadband) then
+                    du_final = max(-v5f_max_step, &
+                        min(v5f_max_step, du_unlimited))
+                    du_final = max(-v5f_max_fraction*max(u_current,0.1_dp), &
+                        min(v5f_max_fraction*max(u_current,0.1_dp),du_final))
+                end if
+                u_new = max(0.0_dp,u_current+du_final)
+                return
+            end if
+
             if (emergency_mode) then
                 gain_effective = controller_gain_capture
                 max_fraction_effective = controller_max_fraction_emergency
@@ -2818,6 +2924,13 @@ contains
             write(result_unit,'(A)') '  "provenance": {'
             write(result_unit,'(A)') '    "solver": "fds_low_mach",'
             write(result_unit,'(A)') '    "control_mode": "anchor",'
+            if (this%flame_stabilization%get_anchor_target_fraction() > 0.0_dp) then
+                write(result_unit,'(A)') &
+                    '    "anchor_reference_policy": "configured_fraction",'
+            else
+                write(result_unit,'(A)') &
+                    '    "anchor_reference_policy": "first_detected_front",'
+            end if
             write(result_unit,'(A)') '    "setup": "' // &
                 trim(this%flame_stabilization%get_case_setup()) // '",'
             write(result_unit,'(A)') '    "coordinate_system": "' // &
@@ -3475,7 +3588,14 @@ contains
                 v5b_bulk_outlet_eta, &
                 merge(1.0_dp,0.0_dp,v5c_recenter_active), &
                 merge(1.0_dp,0.0_dp,v5c_recovery_position_ok), &
-                v5c_predicted_bulk_x, v5c_anchor_lower_x
+                v5c_predicted_bulk_x, v5c_anchor_lower_x, &
+                merge(1.0_dp,0.0_dp,v5e_downstream_recenter_active), &
+                merge(1.0_dp,0.0_dp,v5e_downstream_recenter_needed), &
+                v5e_anchor_upper_x, &
+                v5f_bulk_mean_x, v5f_bulk_mean_v, &
+                v5f_desired_velocity, v5f_tracking_velocity_error, &
+                merge(1.0_dp,0.0_dp,v5f_tracking_active), &
+                merge(1.0_dp,0.0_dp,v5f_downward_safe)
         end subroutine write_tracking_line
 
     end subroutine solve

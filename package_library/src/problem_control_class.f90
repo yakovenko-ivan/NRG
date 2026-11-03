@@ -1,6 +1,7 @@
 module problem_control_class
 
     use kind_parameters, only: dp
+    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
     use global_data, only: problem_controls_data_file_name
 
     implicit none
@@ -19,6 +20,8 @@ module problem_control_class
     integer, parameter :: scientific_title_length = 240
     integer, parameter :: case_setup_length = 80
 
+    ! Negative sentinel retains historical first-detection anchoring.
+    real(dp), parameter :: default_anchor_target_fraction = -1.0_dp
     real(dp), parameter :: default_time_delay = 1.0e-03_dp
     real(dp), parameter :: default_time_track = 1.0e-04_dp
     real(dp), parameter :: default_time_control = 5.0e-04_dp
@@ -32,6 +35,7 @@ module problem_control_class
         character(len=scientific_title_length) :: scientific_result_title = &
             'NRG laminar flame result'
         character(len=case_setup_length) :: case_setup = 'unspecified'
+        real(dp) :: anchor_target_fraction = default_anchor_target_fraction
         real(dp) :: time_delay = default_time_delay
         real(dp) :: time_track = default_time_track
         real(dp) :: time_control = default_time_control
@@ -49,6 +53,8 @@ module problem_control_class
         procedure :: get_scientific_result_title => &
             get_flame_stabilization_scientific_result_title
         procedure :: get_case_setup => get_flame_stabilization_case_setup
+        procedure :: get_anchor_target_fraction => &
+            get_flame_stabilization_anchor_target_fraction
         procedure :: get_time_delay => get_flame_stabilization_time_delay
         procedure :: get_time_track => get_flame_stabilization_time_track
         procedure :: get_time_control => get_flame_stabilization_time_control
@@ -155,7 +161,7 @@ contains
     type(flame_stabilization_control) function flame_stabilization_constructor( &
             mode, time_delay, time_track, time_control, response_settle_time, &
             measurement_max_duration, measurement_min_displacement_cells, &
-            scientific_result_title, case_setup)
+            scientific_result_title, case_setup, anchor_target_fraction)
 
         character(len=*), intent(in) :: mode
         character(len=*), intent(in), optional :: scientific_result_title
@@ -166,10 +172,12 @@ contains
         real(dp), intent(in), optional :: response_settle_time
         real(dp), intent(in), optional :: measurement_max_duration
         real(dp), intent(in), optional :: measurement_min_displacement_cells
+        real(dp), intent(in), optional :: anchor_target_fraction
 
         real(dp) :: time_delay_set, time_track_set, time_control_set
         real(dp) :: response_settle_time_set, measurement_max_duration_set
         real(dp) :: measurement_min_displacement_cells_set
+        real(dp) :: anchor_target_fraction_set
         character(len=scientific_title_length) :: scientific_result_title_set
         character(len=case_setup_length) :: case_setup_set
 
@@ -182,10 +190,13 @@ contains
             default_measurement_min_displacement_cells
         scientific_result_title_set = 'NRG laminar flame result'
         case_setup_set = 'unspecified'
+        anchor_target_fraction_set = default_anchor_target_fraction
 
         if (present(scientific_result_title)) &
             scientific_result_title_set = trim(scientific_result_title)
         if (present(case_setup)) case_setup_set = trim(case_setup)
+        if (present(anchor_target_fraction)) &
+            anchor_target_fraction_set = anchor_target_fraction
         if (present(time_delay)) time_delay_set = time_delay
         if (present(time_track)) time_track_set = time_track
         if (present(time_control)) time_control_set = time_control
@@ -201,7 +212,7 @@ contains
             mode, time_delay_set, time_track_set, time_control_set, &
             response_settle_time_set, measurement_max_duration_set, &
             measurement_min_displacement_cells_set, scientific_result_title_set, &
-            case_setup_set)
+            case_setup_set, anchor_target_fraction_set)
     end function flame_stabilization_constructor
 
 
@@ -329,7 +340,7 @@ contains
     subroutine set_flame_stabilization_properties(this, mode, time_delay, &
             time_track, time_control, response_settle_time, &
             measurement_max_duration, measurement_min_displacement_cells, &
-            scientific_result_title, case_setup)
+            scientific_result_title, case_setup, anchor_target_fraction)
         class(flame_stabilization_control), intent(inout) :: this
         character(len=*), intent(in) :: mode
         character(len=*), intent(in) :: scientific_result_title
@@ -337,6 +348,7 @@ contains
         real(dp), intent(in) :: time_delay, time_track, time_control
         real(dp), intent(in) :: response_settle_time, measurement_max_duration
         real(dp), intent(in) :: measurement_min_displacement_cells
+        real(dp), intent(in) :: anchor_target_fraction
         character(len=mode_length) :: normalized_mode
 
         normalized_mode = normalize_mode(mode)
@@ -359,12 +371,23 @@ contains
         if (measurement_min_displacement_cells <= 0.0_dp) &
             error stop 'problem_controls: measurement displacement must be positive'
 
+        if (.not. ieee_is_finite(anchor_target_fraction)) &
+            error stop 'problem_controls: anchor target fraction must be finite'
+        if (anchor_target_fraction /= default_anchor_target_fraction) then
+            if (anchor_target_fraction <= 0.0_dp .or. &
+                anchor_target_fraction >= 1.0_dp) &
+                error stop 'problem_controls: anchor target fraction must be in (0,1)'
+            if (trim(normalized_mode) /= 'anchor') &
+                error stop 'problem_controls: anchor target fraction requires anchor mode'
+        end if
+
         if (len_trim(scientific_result_title) == 0) &
             error stop 'problem_controls: scientific result title cannot be empty'
         if (len_trim(case_setup) == 0) &
             error stop 'problem_controls: case setup cannot be empty'
 
         this%mode = normalized_mode
+        this%anchor_target_fraction = anchor_target_fraction
         this%scientific_result_title = trim(scientific_result_title)
         this%case_setup = trim(case_setup)
         this%time_delay = time_delay
@@ -468,6 +491,7 @@ contains
         character(len=case_setup_length) :: case_setup
         real(dp) :: time_delay, time_track, time_control, response_settle_time
         real(dp) :: measurement_max_duration, measurement_min_displacement_cells
+        real(dp) :: anchor_target_fraction
         character(len=mode_length) :: energy_ignition_mode
         real(dp) :: ignition_start_time, ignition_duration, ignition_total_energy
         real(dp), dimension(3) :: ignition_center
@@ -482,7 +506,8 @@ contains
         namelist /problem_controls_parameters/ flame_stabilization_mode, &
             scientific_result_title, case_setup, &
             time_delay, time_track, time_control, response_settle_time, &
-            measurement_max_duration, measurement_min_displacement_cells
+            measurement_max_duration, measurement_min_displacement_cells, &
+            anchor_target_fraction
         namelist /energy_ignition_parameters/ energy_ignition_mode, &
             ignition_start_time, ignition_duration, ignition_total_energy, &
             ignition_center, ignition_radius
@@ -496,6 +521,8 @@ contains
         scientific_result_title = &
             this%flame_stabilization%get_scientific_result_title()
         case_setup = this%flame_stabilization%get_case_setup()
+        anchor_target_fraction = &
+            this%flame_stabilization%get_anchor_target_fraction()
         time_delay = this%flame_stabilization%get_time_delay()
         time_track = this%flame_stabilization%get_time_track()
         time_control = this%flame_stabilization%get_time_control()
@@ -539,6 +566,7 @@ contains
         character(len=case_setup_length) :: case_setup
         real(dp) :: time_delay, time_track, time_control, response_settle_time
         real(dp) :: measurement_max_duration, measurement_min_displacement_cells
+        real(dp) :: anchor_target_fraction
         character(len=mode_length) :: energy_ignition_mode
         real(dp) :: ignition_start_time, ignition_duration, ignition_total_energy
         real(dp), dimension(3) :: ignition_center
@@ -554,7 +582,8 @@ contains
         namelist /problem_controls_parameters/ flame_stabilization_mode, &
             scientific_result_title, case_setup, &
             time_delay, time_track, time_control, response_settle_time, &
-            measurement_max_duration, measurement_min_displacement_cells
+            measurement_max_duration, measurement_min_displacement_cells, &
+            anchor_target_fraction
         namelist /energy_ignition_parameters/ energy_ignition_mode, &
             ignition_start_time, ignition_duration, ignition_total_energy, &
             ignition_center, ignition_radius
@@ -567,6 +596,7 @@ contains
         flame_stabilization_mode = 'none'
         scientific_result_title = 'NRG laminar flame result'
         case_setup = 'unspecified'
+        anchor_target_fraction = default_anchor_target_fraction
         time_delay = default_time_delay
         time_track = default_time_track
         time_control = default_time_control
@@ -587,7 +617,8 @@ contains
             measurement_min_displacement_cells= &
                 measurement_min_displacement_cells, &
             scientific_result_title=trim(scientific_result_title), &
-            case_setup=trim(case_setup))
+            case_setup=trim(case_setup), &
+            anchor_target_fraction=anchor_target_fraction)
 
         energy_ignition_mode = 'none'
         ignition_start_time = 0.0_dp
@@ -779,6 +810,10 @@ contains
         character(len=case_setup_length) :: value
         value = this%case_setup
     end function get_flame_stabilization_case_setup
+    real(dp) function get_flame_stabilization_anchor_target_fraction(this)
+        class(flame_stabilization_control), intent(in) :: this
+        get_flame_stabilization_anchor_target_fraction = this%anchor_target_fraction
+    end function get_flame_stabilization_anchor_target_fraction
     real(dp) function get_flame_stabilization_time_delay(this)
         class(flame_stabilization_control), intent(in) :: this
         get_flame_stabilization_time_delay = this%time_delay

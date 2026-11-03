@@ -153,6 +153,9 @@ program package_interface
     character(len=40) :: flame_stabilization_mode
     character(len=240) :: scientific_result_title
     character(len=80) :: flame_case_setup
+    ! Negative: use the first detected bulk flame location (legacy mode).
+    ! Positive fraction in (0,1): explicit bulk anchor target.
+    real(dp) :: anchor_target_fraction
     real(dp) :: flame_time_delay
     real(dp) :: flame_time_track
     real(dp) :: flame_time_control
@@ -161,7 +164,8 @@ program package_interface
     real(dp) :: flame_measurement_min_displacement_cells
 
     namelist /flame_stabilization_config/ flame_stabilization_mode, &
-        scientific_result_title, flame_case_setup, flame_time_delay, &
+        scientific_result_title, flame_case_setup, anchor_target_fraction, &
+        flame_time_delay, &
         flame_time_track, flame_time_control, flame_response_settle_time, &
         flame_measurement_max_duration, flame_measurement_min_displacement_cells
 
@@ -261,6 +265,7 @@ program package_interface
     initial_time_step = 1.0e-7_dp
 
     flame_stabilization_mode = 'anchor'
+    anchor_target_fraction = -1.0_dp
     scientific_result_title = &
         '2D inlet-stabilized 15 percent H2-air flame at 5 atm'
     flame_case_setup = '2D_inlet_stabilized'
@@ -445,6 +450,7 @@ program package_interface
         mode=trim(flame_stabilization_mode), &
         scientific_result_title=trim(scientific_result_title), &
         case_setup=trim(flame_case_setup), &
+        anchor_target_fraction=anchor_target_fraction, &
         time_delay=flame_time_delay, &
         time_track=flame_time_track, &
         time_control=flame_time_control, &
