@@ -27,9 +27,14 @@ module lagrangian_particles_solver_class
         real(dp), dimension(3) :: coordinates = 0.0_dp
         real(dp), dimension(3) :: previous_coordinates = 0.0_dp
         real(dp), dimension(3) :: initial_coordinates = 0.0_dp
+        real(dp), dimension(3) :: unwrapped_coordinates = 0.0_dp
         real(dp), dimension(3) :: velocity = 0.0_dp
         real(dp) :: temperature = 300.0_dp
         real(dp) :: mass = 0.0_dp
+        ! Dynamics-only activity state.  Force is in newtons; orientation is unitless.
+        real(dp), dimension(3) :: orientation = (/0.0_dp, 0.0_dp, 1.0_dp/)
+        real(dp), dimension(3) :: active_force = 0.0_dp
+        real(dp) :: next_reorientation = 0.0_dp
         logical :: active = .false.
     end type lagrangian_particle
 
@@ -91,6 +96,7 @@ module lagrangian_particles_solver_class
         procedure, private :: drag_relaxation_rate
         procedure, private :: cell_volume
         procedure, private :: write_snapshot
+        procedure, private :: update_active_orientation
     end type lagrangian_particles_solver
 
     interface lagrangian_particles_solver_c
@@ -121,6 +127,15 @@ contains
         constructor%chemistry%chem_ptr => manager%chemistry%chem_ptr
         constructor%thermophysics%thermo_ptr => manager%thermophysics%thermo_ptr
         constructor%gravity = manager%solver_options%get_grav_acc()
+        if (lowercase(trim(particles%active_force_model)) /= 'none') then
+            if (manager%domain%get_mpi_communicator_size() > 1) &
+                error stop 'active particles: MPI parcel migration is not implemented'
+            if (particles%heating .or. particles%evaporating) &
+                error stop 'active particles: heating and evaporation are unsupported'
+            if (manager%domain%get_domain_dimensions() == 2 .and. &
+                particles%active_layer_thickness <= 0.0_dp) &
+                error stop 'active particles: 2D requires positive layer thickness'
+        end if
 
         call manager%get_cons_field_pointer_by_name( &
             scalar_pointer, vector_pointer, tensor_pointer, 'temperature')
@@ -172,11 +187,15 @@ contains
         constructor%gas_species_source%v_ptr => &
             constructor%gas_species_source_store
 
-        constructor%material_index = &
-            constructor%chemistry%chem_ptr%get_chemical_specie_index( &
-                trim(particles%material))
-        if (constructor%material_index <= 0) then
-            error stop 'lagrangian particles: material species was not found'
+        ! An inert active solid (e.g. magnetite) need not be a gas species.
+        ! The index is only required by the passive heat/evaporation backend.
+        if (lowercase(trim(particles%active_force_model)) == 'none') then
+            constructor%material_index = &
+                constructor%chemistry%chem_ptr%get_chemical_specie_index( &
+                    trim(particles%material))
+            if (constructor%material_index <= 0) then
+                error stop 'lagrangian particles: material species was not found'
+            end if
         end if
 
         if (particles%output_interval > 0.0_dp) then
@@ -184,9 +203,16 @@ contains
                 phase_number, '.dat'
             open(newunit=constructor%output_unit, file=trim(output_name), &
                 status='replace', form='formatted')
-            write(constructor%output_unit, '(A)') &
-                'VARIABLES="time" "particle" "x" "y" "z" ' // &
-                '"u" "v" "w" "temperature" "mass"'
+            if (lowercase(trim(particles%active_force_model)) == 'none') then
+                write(constructor%output_unit, '(A)') &
+                    'VARIABLES="time" "particle" "x" "y" "z" ' // &
+                    '"u" "v" "w" "temperature" "mass"'
+            else
+                write(constructor%output_unit, '(A)') &
+                    'VARIABLES="time" "particle" "x" "y" "z" ' // &
+                    '"u" "v" "w" "temperature" "mass" ' // &
+                    '"nx" "ny" "nz" "Fx" "Fy" "Fz" "xu" "yu" "zu"'
+            end if
         end if
     end function constructor
 
@@ -202,6 +228,10 @@ contains
         integer, dimension(3) :: lattice, index
         integer :: ix, iy, iz
         integer :: dimensions, number_of_particles, particle, dim
+        integer :: attempts, seed_size
+        integer, dimension(:), allocatable :: seed_vector
+        real(dp), dimension(3) :: center, random_direction
+        real(dp) :: radial_fraction
         character(len=24) :: initialization
         logical :: outside
         integer, dimension(3) :: cell
@@ -220,9 +250,22 @@ contains
             if (dimensions < 3) lattice(3) = 1
             if (dimensions < 2) lattice(2) = 1
             number_of_particles = product(lattice)
+        case ('random_sphere')
+            number_of_particles = this%parameters%initial_particle_count
+            if (number_of_particles <= 0 .or. &
+                this%parameters%initial_region_radius <= 0.0_dp) &
+                error stop 'active particles: random_sphere requires count and radius'
         case default
-            error stop 'lagrangian particles: initialization must be none, single, or lattice'
+            error stop 'lagrangian particles: unknown initialization'
         end select
+
+        if (this%parameters%active_random_seed > 0) then
+            call random_seed(size=seed_size)
+            allocate(seed_vector(seed_size))
+            seed_vector = this%parameters%active_random_seed + &
+                31 * this%phase_number + 37 * (/ (ix-1, ix=1,seed_size) /)
+            call random_seed(put=seed_vector)
+        end if
 
         if (allocated(this%particles)) deallocate(this%particles)
         allocate(this%particles(number_of_particles))
@@ -248,8 +291,18 @@ contains
         end do
 
         lattice = this%parameters%initial_lattice
+        if (initialization == 'single') lattice = 1
+        if (initialization == 'random_sphere') lattice = (/number_of_particles,1,1/)
         if (dimensions < 3) lattice(3) = 1
         if (dimensions < 2) lattice(2) = 1
+        center = this%parameters%initial_position
+        if (this%parameters%coordinates_are_relative) then
+            do dim = 1, dimensions
+                center(dim) = lengths(dim,1) + center(dim) * &
+                    (lengths(dim,2)-lengths(dim,1))
+            end do
+        end if
+        if (dimensions < 3) center(3) = 0.0_dp
         particle = 0
         do iz = 1, lattice(3)
             index(3) = iz
@@ -269,6 +322,21 @@ contains
                                     this%parameters%initial_position(dim)
                             end if
                         end do
+                    else if (initialization == 'random_sphere') then
+                        do attempts = 1, 1000
+                            call sample_isotropic_direction(dimensions, random_direction)
+                            call random_number(radial_fraction)
+                            if (dimensions == 2) then
+                                radial_fraction = sqrt(radial_fraction)
+                            else
+                                radial_fraction = radial_fraction**(1.0_dp/3.0_dp)
+                            end if
+                            position = center + this%parameters%initial_region_radius * &
+                                radial_fraction * random_direction
+                            cell = this%locate_particle_cell(position, outside)
+                            if (.not.outside) exit
+                        end do
+                        if (outside) error stop 'active particles: sphere outside fluid domain'
                     else
                         do dim = 1, dimensions
                             position(dim) = lower(dim) + &
@@ -276,20 +344,25 @@ contains
                                 (upper(dim) - lower(dim)) / real(lattice(dim),dp)
                         end do
                     end if
-                    if (dimensions < 3) position(3) = 0.5_dp * &
-                        (lengths(3,1) + lengths(3,2))
+                    if (dimensions < 3) position(3) = 0.0_dp
                     if (dimensions < 2) position(2) = 0.5_dp * &
                         (lengths(2,1) + lengths(2,2))
 
                     this%particles(particle)%coordinates = position
                     this%particles(particle)%previous_coordinates = position
                     this%particles(particle)%initial_coordinates = position
+                    this%particles(particle)%unwrapped_coordinates = position
                     this%particles(particle)%velocity = &
                         this%parameters%initial_velocity
                     this%particles(particle)%temperature = &
                         this%parameters%initial_temperature
                     this%particles(particle)%mass = &
                         this%particle_mass_from_diameter(this%parameters%diameter)
+                    if (lowercase(trim(this%parameters%active_force_model)) /= 'none') then
+                        call sample_isotropic_direction(dimensions, &
+                            this%particles(particle)%orientation)
+                        this%particles(particle)%next_reorientation = 0.0_dp
+                    end if
                     cell = this%locate_particle_cell(position, outside)
                     this%particles(particle)%active = .not.outside
                     if (.not.this%particles(particle)%active) then
@@ -301,7 +374,7 @@ contains
 
         this%next_output_time = 0.0_dp
         call this%reset_coupling_sources()
-        if (this%output_unit > 0) call this%write_snapshot(0.0_dp)
+        if (this%output_unit /= -1) call this%write_snapshot(0.0_dp)
     end subroutine set_initial_distributions
 
 
@@ -316,7 +389,10 @@ contains
 
         real(dp), dimension(3) :: dx, gas_velocity, velocity_old
         real(dp), dimension(3) :: velocity_new, drag_impulse, position_trial
+        real(dp), dimension(3) :: acceleration, active_force
         real(dp) :: substep, speed_ratio, relative_speed, beta, exponential
+        real(dp) :: lost_fraction, drag_time, step_time
+        logical :: active_dynamics
         real(dp) :: gas_density, gas_viscosity, gas_conductivity
         real(dp) :: particle_diameter, reynolds, nusselt, heat_transfer_rate
         real(dp) :: heat, heat_to_boiling, evaporated_mass, vapor_enthalpy
@@ -330,6 +406,7 @@ contains
         end if
 
         dimensions = this%domain%get_domain_dimensions()
+        active_dynamics = lowercase(trim(this%parameters%active_force_model)) /= 'none'
         dx = this%mesh%mesh_ptr%get_cell_edges_length()
         call this%reset_coupling_sources()
 
@@ -350,6 +427,17 @@ contains
                     abs(this%particles(particle)%velocity(dim)) / dx(dim))
             end do
             subcycles = max(1, ceiling(time_step * speed_ratio / parcel_cfl_target))
+            if (active_dynamics) then
+                if (this%parameters%active_max_substep > 0.0_dp) &
+                    subcycles = max(subcycles, &
+                        ceiling(time_step / this%parameters%active_max_substep))
+                select case (lowercase(trim(this%parameters%active_force_model)))
+                case ('axis_cone','velocity_cone')
+                    subcycles = max(subcycles, ceiling(time_step / &
+                        this%parameters%active_reorientation_interval))
+                end select
+            end if
+            if (subcycles > 10000000) error stop 'active particles: excessive subcycles'
             substep = time_step / real(subcycles, dp)
 
             do subcycle = 1, subcycles
@@ -378,40 +466,64 @@ contains
                     gas_density, gas_viscosity, particle_diameter, &
                     this%particles(particle)%mass, relative_speed)
 
-                ! Analytical solution of dv_p/dt = -beta (v_p-v_g) + g.
-                ! The inertial option controls two-way drag feedback, not the
-                ! parcel equation of motion; this preserves the legacy meaning.
-                if (beta > sqrt(tiny(1.0_dp))) then
-                    exponential = exp(-beta * substep)
-                    do dim = 1, dimensions
-                        velocity_new(dim) = gas_velocity(dim) + &
-                            (velocity_old(dim) - gas_velocity(dim) - &
-                            this%gravity(dim) / beta) * exponential + &
-                            this%gravity(dim) / beta
-                    end do
-                else
-                    velocity_new = velocity_old + this%gravity * substep
+                ! External propulsion acts on the solid.  Its hydrodynamic
+                ! reaction is represented ONLY by the Stokes drag impulse.
+                ! This is an externally forced bead model, NOT a force-free
+                ! microswimmer stresslet/dipole model.
+                active_force = 0.0_dp
+                acceleration = this%gravity
+                if (active_dynamics) then
+                    ! Gravity corrected for buoyancy of a spherical solid.
+                    acceleration = this%gravity * &
+                        (1.0_dp - gas_density/this%parameters%material_density)
+                    step_time = time + real(subcycle-1,dp) * substep
+                    call this%update_active_orientation(particle, step_time, substep)
+                    active_force = this%parameters%active_force_magnitude * &
+                        this%particles(particle)%orientation
+                    acceleration = acceleration + &
+                        active_force / this%particles(particle)%mass
                 end if
+                this%particles(particle)%active_force = active_force
 
-                ! Separate the gravity impulse from the particle momentum change;
-                ! only the drag impulse is an interphase exchange.
-                do dim = 1, dimensions
-                    drag_impulse(dim) = this%particles(particle)%mass * ( &
-                        velocity_new(dim) - velocity_old(dim) - &
-                        this%gravity(dim) * substep)
-                    position_trial(dim) = &
-                        this%particles(particle)%coordinates(dim) + &
-                        0.5_dp * substep * &
-                        (velocity_old(dim) + velocity_new(dim))
-                end do
+                ! Exact frozen-flow/constant-acceleration velocity update.
+                ! The response factors use a Taylor expansion for beta*dt << 1.
+                call exponential_response(beta, substep, exponential, &
+                    lost_fraction, drag_time)
+                velocity_new = gas_velocity + exponential * &
+                    (velocity_old - gas_velocity) + drag_time * acceleration
+                drag_impulse = this%particles(particle)%mass * ( &
+                    -lost_fraction * (velocity_old - gas_velocity) + &
+                    (drag_time-substep) * acceleration)
+                position_trial = this%particles(particle)%coordinates + &
+                    0.5_dp * substep * (velocity_old + velocity_new)
 
                 this%particles(particle)%previous_coordinates = &
                     this%particles(particle)%coordinates
+                this%particles(particle)%unwrapped_coordinates = &
+                    this%particles(particle)%unwrapped_coordinates + &
+                    position_trial - this%particles(particle)%coordinates
                 this%particles(particle)%coordinates = position_trial
                 this%particles(particle)%velocity = velocity_new
+
+                ! Deposit the drag impulse before any escape/wall collision.
+                ! Solid-wall impact momentum belongs to the wall, not the gas.
+                if (active_dynamics) then
+                    volume = this%cell_volume(cell)
+                    if (this%parameters%inertial) then
+                        do dim = 1, dimensions
+                            momentum_src%pr(dim)%cells(cell(1),cell(2),cell(3)) = &
+                                momentum_src%pr(dim)%cells(cell(1),cell(2),cell(3)) - &
+                                drag_impulse(dim) / &
+                                (volume * time_step * gas_density)
+                        end do
+                    end if
+                    call this%apply_particle_boundary(particle)
+                    if (.not.this%particles(particle)%active) exit
+                    cycle ! Active model has no heat, evaporation or chemistry.
+                end if
+
                 call this%apply_particle_boundary(particle)
                 if (.not.this%particles(particle)%active) exit
-
                 volume = this%cell_volume(cell)
                 if (this%parameters%inertial) then
                     do dim = 1, dimensions
@@ -509,7 +621,7 @@ contains
         end do
         end associate
 
-        if (this%output_unit > 0 .and. &
+        if (this%output_unit /= -1 .and. &
             time + time_step >= this%next_output_time) then
             call this%write_snapshot(time + time_step)
             this%next_output_time = this%next_output_time + &
@@ -654,44 +766,62 @@ contains
         integer, intent(in) :: particle_number
 
         real(dp), dimension(:,:), allocatable :: lengths
+        real(dp) :: lower, upper, particle_radius, span
+        real(dp), dimension(3) :: normal, displacement
+        real(dp) :: norm, projection
+        logical, dimension(3) :: periodic
         integer :: dimensions, dim
         character(len=24) :: interaction
-        logical :: outside
-        integer, dimension(3) :: cell
+        logical :: outside, old_outside
+        integer, dimension(3) :: cell, old_cell, neighbor
 
         dimensions = this%domain%get_domain_dimensions()
         lengths = this%domain%get_domain_lengths()
         interaction = lowercase(trim(this%parameters%boundary_interaction))
+        periodic = this%domain%get_periodic_directions()
+        particle_radius = 0.0_dp
+        if (lowercase(trim(this%parameters%active_force_model)) /= 'none') &
+            particle_radius = 0.5_dp*this%parameters%diameter
 
         do dim = 1, dimensions
-            if (this%particles(particle_number)%coordinates(dim) < lengths(dim,1)) then
+            if (periodic(dim)) then
+                span = lengths(dim,2)-lengths(dim,1)
+                this%particles(particle_number)%coordinates(dim) = &
+                    lengths(dim,1) + modulo( &
+                    this%particles(particle_number)%coordinates(dim)-lengths(dim,1),span)
+                cycle
+            end if
+            lower = lengths(dim,1) + particle_radius
+            upper = lengths(dim,2) - particle_radius
+            if (lower >= upper) error stop 'active particles: diameter exceeds domain width'
+            if (this%particles(particle_number)%coordinates(dim) < lower) then
                 select case (interaction)
                 case ('reflect')
                     this%particles(particle_number)%coordinates(dim) = &
-                        2.0_dp * lengths(dim,1) - &
+                        2.0_dp * lower - &
                         this%particles(particle_number)%coordinates(dim)
                     this%particles(particle_number)%velocity(dim) = &
                         -this%particles(particle_number)%velocity(dim)
                 case ('stick')
                     this%particles(particle_number)%coordinates(dim) = &
-                        lengths(dim,1) + spacing(lengths(dim,1))
+                        lower + spacing(max(abs(lower),1.0_dp))
                     this%particles(particle_number)%velocity = 0.0_dp
                 case ('escape')
                     this%particles(particle_number)%active = .false.
                     return
                 end select
             else if (this%particles(particle_number)%coordinates(dim) > &
-                lengths(dim,2)) then
+                upper) then
                 select case (interaction)
                 case ('reflect')
                     this%particles(particle_number)%coordinates(dim) = &
-                        2.0_dp * lengths(dim,2) - &
+                        2.0_dp * upper - &
                         this%particles(particle_number)%coordinates(dim)
                     this%particles(particle_number)%velocity(dim) = &
                         -this%particles(particle_number)%velocity(dim)
                 case ('stick')
                     this%particles(particle_number)%coordinates(dim) = &
-                        lengths(dim,2) - spacing(lengths(dim,2))
+                        upper - spacing(max(abs(upper),1.0_dp))
                     this%particles(particle_number)%velocity = 0.0_dp
                 case ('escape')
                     this%particles(particle_number)%active = .false.
@@ -705,10 +835,40 @@ contains
         if (outside) then
             select case (interaction)
             case ('reflect')
+                ! For masked obstacles, estimate a discrete outward normal
+                ! from neighboring solid-cell markers.  Unlike whole-vector
+                ! reversal, this preserves tangential velocity to first order.
+                old_cell = this%locate_particle_cell( &
+                    this%particles(particle_number)%previous_coordinates, old_outside)
+                normal = 0.0_dp
+                if (.not.old_outside) then
+                    do dim = 1, dimensions
+                        neighbor = old_cell
+                        neighbor(dim) = neighbor(dim) + 1
+                        if (this%boundary%bc_ptr%bc_markers( &
+                            neighbor(1),neighbor(2),neighbor(3)) /= 0) normal(dim) = normal(dim)+1.0_dp
+                        neighbor = old_cell
+                        neighbor(dim) = neighbor(dim) - 1
+                        if (this%boundary%bc_ptr%bc_markers( &
+                            neighbor(1),neighbor(2),neighbor(3)) /= 0) normal(dim) = normal(dim)-1.0_dp
+                    end do
+                end if
+                displacement = this%particles(particle_number)%coordinates - &
+                    this%particles(particle_number)%previous_coordinates
+                norm = sqrt(sum(normal**2))
+                if (norm <= 1.0e-14_dp) then
+                    normal = displacement
+                    norm = sqrt(sum(normal**2))
+                end if
+                if (norm > 1.0e-14_dp) then
+                    normal = normal/norm
+                    projection = sum(this%particles(particle_number)%velocity*normal)
+                    if (projection > 0.0_dp) &
+                        this%particles(particle_number)%velocity = &
+                        this%particles(particle_number)%velocity - 2.0_dp*projection*normal
+                end if
                 this%particles(particle_number)%coordinates = &
                     this%particles(particle_number)%previous_coordinates
-                this%particles(particle_number)%velocity = &
-                    -this%particles(particle_number)%velocity
             case ('stick')
                 this%particles(particle_number)%coordinates = &
                     this%particles(particle_number)%previous_coordinates
@@ -727,7 +887,8 @@ contains
         integer :: dimensions
 
         dimensions = this%domain%get_domain_dimensions()
-        if (dimensions == 2) then
+        if (dimensions == 2 .and. &
+            lowercase(trim(this%parameters%active_force_model)) == 'none') then
             mass = 0.25_dp * pi * diameter**2 * &
                 this%parameters%material_density
         else
@@ -743,7 +904,8 @@ contains
         integer :: dimensions
 
         dimensions = this%domain%get_domain_dimensions()
-        if (dimensions == 2) then
+        if (dimensions == 2 .and. &
+            lowercase(trim(this%parameters%active_force_model)) == 'none') then
             diameter = sqrt(4.0_dp * max(mass, 0.0_dp) / &
                 (pi * this%parameters%material_density))
         else
@@ -762,8 +924,22 @@ contains
         integer :: dimensions
 
         dimensions = this%domain%get_domain_dimensions()
+        if (lowercase(trim(this%parameters%active_force_model)) /= 'none') then
+            ! Correct finite Stokes limit as U_rel -> 0 (spherical particles,
+            ! including spheres moving in a modelled 2D fluid slice).
+            reynolds = gas_density * relative_speed * diameter / viscosity
+            if (reynolds < 1000.0_dp) then
+                beta = 3.0_dp*pi*viscosity*diameter / mass * &
+                    (1.0_dp + 0.15_dp*max(reynolds,0.0_dp)**0.687_dp)
+            else
+                projected_area = 0.25_dp*pi*diameter**2
+                beta = 0.22_dp*gas_density*projected_area*relative_speed/mass
+            end if
+            return
+        end if
         if (relative_speed <= sqrt(tiny(1.0_dp))) then
-            if (dimensions == 3) then
+            if (dimensions == 3 .or. &
+                lowercase(trim(this%parameters%active_force_model)) /= 'none') then
                 beta = 3.0_dp * pi * viscosity * diameter / mass
             else
                 beta = 0.0_dp
@@ -772,7 +948,8 @@ contains
         end if
 
         reynolds = gas_density * relative_speed * diameter / viscosity
-        if (dimensions == 2) then
+        if (dimensions == 2 .and. &
+            lowercase(trim(this%parameters%active_force_model)) == 'none') then
             if (reynolds < 1.0_dp) then
                 drag_coefficient = 10.0_dp / max(reynolds, 1.0e-12_dp)**0.8_dp
             else if (reynolds < 1000.0_dp) then
@@ -804,6 +981,9 @@ contains
         character(len=20) :: coordinate_system
 
         volume = this%mesh%mesh_ptr%get_cell_volume()
+        if (this%domain%get_domain_dimensions() == 2 .and. &
+            lowercase(trim(this%parameters%active_force_model)) /= 'none') &
+            volume = volume * this%parameters%active_layer_thickness
         coordinate_system = trim(this%domain%get_coordinate_system_name())
         select case (coordinate_system)
         case ('cartesian')
@@ -824,18 +1004,194 @@ contains
         real(dp), intent(in) :: time
         integer :: particle
 
-        if (this%output_unit <= 0) return
+        if (this%output_unit == -1) return
         do particle = 1, size(this%particles)
             if (.not.this%particles(particle)%active) cycle
-            write(this%output_unit, '(ES14.6,1X,I0,1X,8ES14.6)') &
-                time, particle, this%particles(particle)%coordinates, &
-                this%particles(particle)%velocity, &
-                this%particles(particle)%temperature, &
-                this%particles(particle)%mass
+            if (lowercase(trim(this%parameters%active_force_model)) == 'none') then
+                write(this%output_unit, '(ES14.6,1X,I0,1X,8ES14.6)') &
+                    time, particle, this%particles(particle)%coordinates, &
+                    this%particles(particle)%velocity, &
+                    this%particles(particle)%temperature, &
+                    this%particles(particle)%mass
+            else
+                write(this%output_unit, '(ES14.6,1X,I0,1X,17ES14.6)') &
+                    time, particle, this%particles(particle)%coordinates, &
+                    this%particles(particle)%velocity, &
+                    this%particles(particle)%temperature, &
+                    this%particles(particle)%mass, &
+                    this%particles(particle)%orientation, &
+                    this%particles(particle)%active_force, &
+                    this%particles(particle)%unwrapped_coordinates
+            end if
         end do
         flush(this%output_unit)
     end subroutine write_snapshot
 
+
+
+    !> Orientation update for stationary-axis cones, velocity-centered cones,
+    !> or a physical rotational diffusivity [1/s].  In 3D the latter uses
+    !> a random tangent-plane rotation with variance 2*Dr*dt per component.
+    subroutine update_active_orientation(this, particle, time, dt)
+        class(lagrangian_particles_solver), intent(inout) :: this
+        integer, intent(in) :: particle
+        real(dp), intent(in) :: time, dt
+        integer :: dimensions, dim
+        real(dp), dimension(3) :: axis, random_direction, noise, tangent
+        real(dp) :: normal_norm, angle, z, dot_product
+        character(len=24) :: mode
+
+        dimensions = this%domain%get_domain_dimensions()
+        mode = lowercase(trim(this%parameters%active_force_model))
+        select case(mode)
+        case('fixed')
+            return
+        case('axis_cone','velocity_cone')
+            if (time + 10.0_dp*epsilon(time)*max(abs(time),1.0_dp) < &
+                this%particles(particle)%next_reorientation) return
+            if (mode == 'axis_cone') then
+                axis = this%parameters%active_axis
+            else
+                axis = this%particles(particle)%velocity
+                if (sqrt(sum(axis(1:dimensions)**2)) < 1.0e-14_dp) &
+                    axis = this%particles(particle)%orientation
+            end if
+            axis = normalize_direction(axis, dimensions)
+            call sample_cone_direction(axis, dimensions, &
+                this%parameters%active_cone_half_angle, random_direction)
+            this%particles(particle)%orientation = random_direction
+            this%particles(particle)%next_reorientation = time + &
+                this%parameters%active_reorientation_interval
+        case('rotational_diffusion')
+            if (this%parameters%active_rotational_diffusivity <= 0.0_dp) return
+            if (dimensions == 2) then
+                call standard_normal(z)
+                angle = sqrt(2.0_dp*this%parameters%active_rotational_diffusivity*dt)*z
+                axis = this%particles(particle)%orientation
+                this%particles(particle)%orientation(1) = &
+                    cos(angle)*axis(1) - sin(angle)*axis(2)
+                this%particles(particle)%orientation(2) = &
+                    sin(angle)*axis(1) + cos(angle)*axis(2)
+                this%particles(particle)%orientation(3) = 0.0_dp
+            else
+                do dim = 1,3
+                    call standard_normal(noise(dim))
+                end do
+                axis = this%particles(particle)%orientation
+                dot_product = sum(noise*axis)
+                tangent = noise - dot_product*axis
+                normal_norm = sqrt(sum(tangent**2))
+                if (normal_norm <= 1.0e-14_dp) return
+                angle = sqrt(2.0_dp * &
+                    this%parameters%active_rotational_diffusivity*dt)*normal_norm
+                this%particles(particle)%orientation = &
+                    cos(angle)*axis + sin(angle)*tangent/normal_norm
+            end if
+        case default
+            error stop 'active particles: unknown orientation model'
+        end select
+    end subroutine update_active_orientation
+
+
+    subroutine exponential_response(beta, dt, decay, lost, integral)
+        real(dp), intent(in) :: beta, dt
+        real(dp), intent(out) :: decay, lost, integral
+        real(dp) :: x, x2
+        if (beta <= 0.0_dp) then
+            decay = 1.0_dp
+            lost = 0.0_dp
+            integral = dt
+        else
+            x = beta*dt
+            if (x < 1.0e-4_dp) then
+                x2 = x*x
+                lost = x - 0.5_dp*x2 + x2*x/6.0_dp - x2*x2/24.0_dp
+                decay = 1.0_dp-lost
+                integral = dt*(1.0_dp - 0.5_dp*x + x2/6.0_dp - &
+                    x2*x/24.0_dp + x2*x2/120.0_dp)
+            else
+                decay = exp(-x)
+                lost = 1.0_dp - decay
+                integral = lost/beta
+            end if
+        end if
+    end subroutine exponential_response
+
+
+    subroutine sample_isotropic_direction(dimensions, direction)
+        integer, intent(in) :: dimensions
+        real(dp), dimension(3), intent(out) :: direction
+        real(dp) :: xi, phi, z, r
+        call random_number(xi)
+        phi = 2.0_dp*pi*xi
+        if (dimensions == 2) then
+            direction = (/cos(phi), sin(phi), 0.0_dp/)
+        else
+            call random_number(xi)
+            z = 2.0_dp*xi - 1.0_dp
+            r = sqrt(max(0.0_dp, 1.0_dp-z*z))
+            direction = (/r*cos(phi),r*sin(phi),z/)
+        end if
+    end subroutine sample_isotropic_direction
+
+
+    subroutine sample_cone_direction(axis, dimensions, half_angle, direction)
+        real(dp), dimension(3), intent(in) :: axis
+        integer, intent(in) :: dimensions
+        real(dp), intent(in) :: half_angle
+        real(dp), dimension(3), intent(out) :: direction
+        real(dp), dimension(3) :: e1, e2, helper
+        real(dp) :: xi, phi, costheta, sintheta
+        if (dimensions == 2) then
+            call random_number(xi)
+            phi = half_angle*(2.0_dp*xi-1.0_dp)
+            direction = (/axis(1)*cos(phi)-axis(2)*sin(phi), &
+                axis(1)*sin(phi)+axis(2)*cos(phi), 0.0_dp/)
+        else
+            helper = (/1.0_dp,0.0_dp,0.0_dp/)
+            if (abs(axis(1)) > 0.8_dp) helper = (/0.0_dp,1.0_dp,0.0_dp/)
+            e1 = cross_product(helper,axis)
+            e1 = e1/sqrt(sum(e1*e1))
+            e2 = cross_product(axis,e1)
+            call random_number(xi)
+            costheta = 1.0_dp - xi*(1.0_dp-cos(half_angle))
+            sintheta = sqrt(max(0.0_dp,1.0_dp-costheta*costheta))
+            call random_number(xi)
+            phi = 2.0_dp*pi*xi
+            direction = costheta*axis + sintheta*(cos(phi)*e1+sin(phi)*e2)
+        end if
+    end subroutine sample_cone_direction
+
+
+    pure function cross_product(a,b) result(c)
+        real(dp), dimension(3), intent(in) :: a,b
+        real(dp), dimension(3) :: c
+        c = (/a(2)*b(3)-a(3)*b(2), &
+              a(3)*b(1)-a(1)*b(3), &
+              a(1)*b(2)-a(2)*b(1)/)
+    end function cross_product
+
+
+    function normalize_direction(vector, dimensions) result(normalized)
+        real(dp), dimension(3), intent(in) :: vector
+        integer, intent(in) :: dimensions
+        real(dp), dimension(3) :: normalized
+        real(dp) :: norm
+        normalized = 0.0_dp
+        normalized(1:dimensions) = vector(1:dimensions)
+        norm = sqrt(sum(normalized**2))
+        if (norm <= 1.0e-14_dp) error stop 'active particles: zero orientation axis'
+        normalized = normalized/norm
+    end function normalize_direction
+
+
+    subroutine standard_normal(z)
+        real(dp), intent(out) :: z
+        real(dp) :: u1, u2
+        call random_number(u1)
+        call random_number(u2)
+        z = sqrt(-2.0_dp*log(max(u1,tiny(1.0_dp)))) * cos(2.0_dp*pi*u2)
+    end subroutine standard_normal
 
     subroutine phase_field_names(base_name, short_base, phase, long_name, short_name)
         character(len=*), intent(in) :: base_name, short_base

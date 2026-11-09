@@ -72,6 +72,20 @@ module solver_options_class
 
         ! Lagrangian diagnostics.  A non-positive interval disables snapshots.
         real(dp) :: output_interval = 0.0_dp
+        ! Active particle dynamics; default 'none' preserves passive solver.
+        ! Fixed magnitude is a true force [N], not an acceleration or
+        ! a force rescaled by the square root of the numerical time step.
+        character(len=option_name_length) :: active_force_model = 'none'
+        real(dp) :: active_force_magnitude = 0.0_dp
+        real(dp) :: active_rotational_diffusivity = 0.0_dp  ! 1/s
+        real(dp) :: active_cone_half_angle = 0.0_dp         ! rad
+        real(dp), dimension(3) :: active_axis = (/0.0_dp,0.0_dp,1.0_dp/)
+        real(dp) :: active_reorientation_interval = 0.0_dp ! s
+        real(dp) :: active_max_substep = 0.0_dp            ! s; 0=automatic
+        real(dp) :: active_layer_thickness = 0.0_dp       ! m, required in 2D
+        integer :: active_random_seed = 0                ! 0=runtime default
+        integer :: initial_particle_count = 0           ! random_sphere
+        real(dp) :: initial_region_radius = 0.0_dp       ! m; random_sphere
     end type particles_phase
 
     type :: solver_options
@@ -300,6 +314,17 @@ contains
         real(dp) :: particles_injection_start_time
         real(dp) :: particles_injection_ramp_time
         real(dp) :: particles_output_interval
+        character(len=option_name_length) :: particles_active_force_model
+        real(dp) :: particles_active_force_magnitude
+        real(dp) :: particles_active_rotational_diffusivity
+        real(dp) :: particles_active_cone_half_angle
+        real(dp), dimension(3) :: particles_active_axis
+        real(dp) :: particles_active_reorientation_interval
+        real(dp) :: particles_active_max_substep
+        real(dp) :: particles_active_layer_thickness
+        integer :: particles_active_random_seed
+        integer :: particles_initial_particle_count
+        real(dp) :: particles_initial_region_radius
 
         namelist /dispersed_phase/ particles_model, &
             particles_initial_condition, particles_boundary_interaction, &
@@ -313,7 +338,13 @@ contains
             particles_initial_region_max, particles_initial_lattice, &
             particles_inlet_mass_loading, particles_inlet_temperature, &
             particles_inlet_velocity, particles_injection_start_time, &
-            particles_injection_ramp_time, particles_output_interval
+            particles_injection_ramp_time, particles_output_interval, &
+            particles_active_force_model, particles_active_force_magnitude, &
+            particles_active_rotational_diffusivity, &
+            particles_active_cone_half_angle, particles_active_axis, &
+            particles_active_reorientation_interval, particles_active_max_substep, &
+            particles_active_layer_thickness, particles_active_random_seed, &
+            particles_initial_particle_count, particles_initial_region_radius
 
         open(newunit=io_unit, file=solver_data_file_name, status='old', &
             form='formatted')
@@ -347,6 +378,17 @@ contains
             particles_injection_start_time = 0.0_dp
             particles_injection_ramp_time = 0.0_dp
             particles_output_interval = 0.0_dp
+            particles_active_force_model = 'none'
+            particles_active_force_magnitude = 0.0_dp
+            particles_active_rotational_diffusivity = 0.0_dp
+            particles_active_cone_half_angle = 0.0_dp
+            particles_active_axis = (/0.0_dp,0.0_dp,1.0_dp/)
+            particles_active_reorientation_interval = 0.0_dp
+            particles_active_max_substep = 0.0_dp
+            particles_active_layer_thickness = 0.0_dp
+            particles_active_random_seed = 0
+            particles_initial_particle_count = 0
+            particles_initial_region_radius = 0.0_dp
 
             read(unit=io_unit, nml=dispersed_phase)
 
@@ -378,6 +420,17 @@ contains
                 p%injection_start_time = particles_injection_start_time
                 p%injection_ramp_time = particles_injection_ramp_time
                 p%output_interval = particles_output_interval
+                p%active_force_model = particles_active_force_model
+                p%active_force_magnitude = particles_active_force_magnitude
+                p%active_rotational_diffusivity = particles_active_rotational_diffusivity
+                p%active_cone_half_angle = particles_active_cone_half_angle
+                p%active_axis = particles_active_axis
+                p%active_reorientation_interval = particles_active_reorientation_interval
+                p%active_max_substep = particles_active_max_substep
+                p%active_layer_thickness = particles_active_layer_thickness
+                p%active_random_seed = particles_active_random_seed
+                p%initial_particle_count = particles_initial_particle_count
+                p%initial_region_radius = particles_initial_region_radius
             end associate
 
             call constructor_file%validate_phase(phase)
@@ -768,6 +821,17 @@ contains
         real(dp) :: particles_injection_start_time
         real(dp) :: particles_injection_ramp_time
         real(dp) :: particles_output_interval
+        character(len=option_name_length) :: particles_active_force_model
+        real(dp) :: particles_active_force_magnitude
+        real(dp) :: particles_active_rotational_diffusivity
+        real(dp) :: particles_active_cone_half_angle
+        real(dp), dimension(3) :: particles_active_axis
+        real(dp) :: particles_active_reorientation_interval
+        real(dp) :: particles_active_max_substep
+        real(dp) :: particles_active_layer_thickness
+        integer :: particles_active_random_seed
+        integer :: particles_initial_particle_count
+        real(dp) :: particles_initial_region_radius
 
         namelist /dispersed_phase/ particles_model, &
             particles_initial_condition, particles_boundary_interaction, &
@@ -781,7 +845,13 @@ contains
             particles_initial_region_max, particles_initial_lattice, &
             particles_inlet_mass_loading, particles_inlet_temperature, &
             particles_inlet_velocity, particles_injection_start_time, &
-            particles_injection_ramp_time, particles_output_interval
+            particles_injection_ramp_time, particles_output_interval, &
+            particles_active_force_model, particles_active_force_magnitude, &
+            particles_active_rotational_diffusivity, &
+            particles_active_cone_half_angle, particles_active_axis, &
+            particles_active_reorientation_interval, particles_active_max_substep, &
+            particles_active_layer_thickness, particles_active_random_seed, &
+            particles_initial_particle_count, particles_initial_region_radius
 
         phase = this%particles_phase_counter + 1
         if (phase > this%additional_particles_phases) then
@@ -826,6 +896,17 @@ contains
             particles_injection_start_time = p%injection_start_time
             particles_injection_ramp_time = p%injection_ramp_time
             particles_output_interval = p%output_interval
+            particles_active_force_model = p%active_force_model
+            particles_active_force_magnitude = p%active_force_magnitude
+            particles_active_rotational_diffusivity = p%active_rotational_diffusivity
+            particles_active_cone_half_angle = p%active_cone_half_angle
+            particles_active_axis = p%active_axis
+            particles_active_reorientation_interval = p%active_reorientation_interval
+            particles_active_max_substep = p%active_max_substep
+            particles_active_layer_thickness = p%active_layer_thickness
+            particles_active_random_seed = p%active_random_seed
+            particles_initial_particle_count = p%initial_particle_count
+            particles_initial_region_radius = p%initial_region_radius
         end associate
 
         open(newunit=io_unit, file=solver_data_file_name, status='old', &
@@ -856,7 +937,7 @@ contains
             end select
 
             select case (initialization)
-            case ('field', 'uniform', 'none', 'single', 'lattice')
+            case ('field', 'uniform', 'none', 'single', 'lattice', 'random_sphere')
             case default
                 error stop 'solver_options: unknown dispersed-phase initialization'
             end select
@@ -868,7 +949,7 @@ contains
             end if
             if ((model == 'lagrangian' .or. model == 'parcel') .and. &
                 initialization /= 'single' .and. initialization /= 'lattice' .and. &
-                initialization /= 'none') then
+                initialization /= 'random_sphere' .and. initialization /= 'none') then
                 error stop 'solver_options: Lagrangian phase requires single, lattice, or none'
             end if
 
@@ -877,6 +958,35 @@ contains
             case default
                 error stop 'solver_options: unknown particle boundary interaction'
             end select
+
+            select case (lowercase(trim(p%active_force_model)))
+            case ('none')
+            case ('fixed','axis_cone','velocity_cone','rotational_diffusion')
+                if (model /= 'lagrangian' .and. model /= 'parcel') &
+                    error stop 'solver_options: active force requires Lagrangian model'
+                if (p%heating .or. p%evaporating) &
+                    error stop 'solver_options: active model is dynamics only'
+                if (p%active_force_magnitude < 0.0_dp) &
+                    error stop 'solver_options: negative active force'
+                if (p%active_max_substep < 0.0_dp) &
+                    error stop 'solver_options: negative active max substep'
+                if (p%active_rotational_diffusivity < 0.0_dp) &
+                    error stop 'solver_options: negative rotational diffusivity'
+                if (p%active_cone_half_angle < 0.0_dp .or. &
+                    p%active_cone_half_angle > acos(-1.0_dp)) &
+                    error stop 'solver_options: invalid cone half-angle'
+                if (lowercase(trim(p%active_force_model)) == 'axis_cone' .or. &
+                    lowercase(trim(p%active_force_model)) == 'velocity_cone') then
+                    if (p%active_reorientation_interval <= 0.0_dp) &
+                        error stop 'solver_options: cone requires reorientation interval'
+                end if
+            case default
+                error stop 'solver_options: unknown active force model'
+            end select
+            if (initialization == 'random_sphere') then
+                if (p%initial_particle_count <= 0 .or. p%initial_region_radius <= 0.0_dp) &
+                    error stop 'solver_options: invalid random_sphere placement'
+            end if
 
             if (len_trim(p%material) == 0) then
                 error stop 'solver_options: particle material must be specified'
