@@ -307,6 +307,10 @@ contains
         write(log_unit,'(A)') &
             ' Molar masses source     : NASA/CHEMKIN thermo elemental composition'
         write(log_unit,'(A)') &
+            ' Atomic weight convention: cantera-3.2.0-conventional-v1'
+        write(log_unit,'(A)') &
+            ' Atomic weights status   : H C N O AR HE harmonized; other entries unchanged'
+        write(log_unit,'(A)') &
             '************************************************************************************* '
     end subroutine write_log
 
@@ -1413,11 +1417,18 @@ contains
 
 
     real(dp) function atomic_molar_mass(element_symbol) result(mass)
-        ! Standard atomic weights in kg/mol.  Values are deliberately defined
-        ! once, at elemental level, so every species is internally consistent.
-        ! Conventional values are used for the elements most common in
-        ! combustion mechanisms; E is the molar mass of an electron for
-        ! compatibility with thermo databases that explicitly include charge.
+        ! Standard atomic weights in kg/mol, convention
+        ! 'cantera-3.2.0-conventional-v1'.  Values are deliberately defined once,
+        ! at elemental level, so every species is internally consistent.
+        ! Reference: Cantera v3.2.0 src/thermo/Elements.cpp built-in defaults.
+        ! H, C, N, O, Ar and He are the only harmonized entries; H O N Ar He are
+        ! additionally corroborated by archived runtime output, and C is verified
+        ! from the tagged source with installed-runtime corroboration pending.
+        ! No claim is made that the other NRG table entries match Cantera: they
+        ! are unaudited and intentionally unchanged, NOT synchronized.
+        ! D and E have no Cantera built-in default element and keep their values.
+        ! E is the molar mass of an electron, retained for thermo databases
+        ! that explicitly include charge.
         character(len=*), intent(in) :: element_symbol
         character(len=len(element_symbol)) :: element
 
@@ -1425,7 +1436,7 @@ contains
 
         select case(trim(element))
         case('H')
-            mass=1.00794e-3_dp
+            mass=1.008e-3_dp
         case('D')
             mass=2.01410177812e-3_dp
         case('HE')
@@ -1437,11 +1448,11 @@ contains
         case('B')
             mass=10.811e-3_dp
         case('C')
-            mass=12.0107e-3_dp
+            mass=12.011e-3_dp
         case('N')
-            mass=14.0067e-3_dp
+            mass=14.007e-3_dp
         case('O')
-            mass=15.9994e-3_dp
+            mass=15.999e-3_dp
         case('F')
             mass=18.998403163e-3_dp
         case('NE')
@@ -1461,7 +1472,7 @@ contains
         case('CL')
             mass=35.453e-3_dp
         case('AR')
-            mass=39.948e-3_dp
+            mass=39.95e-3_dp
         case('K')
             mass=39.0983e-3_dp
         case('CA')
