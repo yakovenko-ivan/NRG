@@ -937,7 +937,8 @@ contains
             end select
 
             select case (initialization)
-            case ('field', 'uniform', 'none', 'single', 'lattice', 'random_sphere')
+            case ('field', 'uniform', 'none', 'single', 'lattice', &
+                  'random_sphere', 'random_sphere_nonoverlap')
             case default
                 error stop 'solver_options: unknown dispersed-phase initialization'
             end select
@@ -949,8 +950,10 @@ contains
             end if
             if ((model == 'lagrangian' .or. model == 'parcel') .and. &
                 initialization /= 'single' .and. initialization /= 'lattice' .and. &
-                initialization /= 'random_sphere' .and. initialization /= 'none') then
-                error stop 'solver_options: Lagrangian phase requires single, lattice, or none'
+                initialization /= 'random_sphere' .and. &
+                initialization /= 'random_sphere_nonoverlap' .and. &
+                initialization /= 'none') then
+                error stop 'solver_options: invalid Lagrangian particle initialization'
             end if
 
             select case (interaction)

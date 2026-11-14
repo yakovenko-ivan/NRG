@@ -3708,13 +3708,23 @@ contains
                                                 this%thermo%thermo_ptr%mixture_enthalpy_molar( &
                                                 T_ref,mole_fractions))/average_molar_mass
 
+                                        ! Reflect normal velocity at either wall type.
+                                        ! For no-slip, also reflect tangential components.
+                                        ! For free-slip, copy tangential components.
                                         do dim1 = 1, dimensions
-                                            if(dim1 == dim) then
-                                            v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) &
-                                                = -v%pr(dim1)%cells(i,j,k)
+                                            if (dim1 == dim .or. &
+                                                .not. bc%boundary_types(bound_number)%is_slip()) then
+                                                v%pr(dim1)%cells( &
+                                                    i+sign*I_m(dim,1), &
+                                                    j+sign*I_m(dim,2), &
+                                                    k+sign*I_m(dim,3)) = &
+                                                    -v%pr(dim1)%cells(i,j,k)
                                             else
-                                                v%pr(dim1)%cells(i+sign*I_m(dim,1),j+sign*I_m(dim,2),k+sign*I_m(dim,3)) &
-                                                    =  v%pr(dim1)%cells(i,j,k)
+                                                v%pr(dim1)%cells( &
+                                                    i+sign*I_m(dim,1), &
+                                                    j+sign*I_m(dim,2), &
+                                                    k+sign*I_m(dim,3)) = &
+                                                    v%pr(dim1)%cells(i,j,k)
                                             end if
                                         end do
 

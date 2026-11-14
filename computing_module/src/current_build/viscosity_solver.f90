@@ -338,7 +338,8 @@ contains
             viscosity => this%dynamic_viscosity%s_ptr, &
             velocity => this%velocity%v_ptr, &
             stress => this%stress%t_ptr, &
-            stress_power_flux => this%stress_power_flux%v_ptr)
+            stress_power_flux => this%stress_power_flux%v_ptr, &
+            markers => this%boundary%bc_ptr%bc_markers)
 
             !$omp parallel default(shared) private(normal,component,i,j,k,dim, &
             !$omp& loop,viscosity_face,divergence_face,normal_derivative, &
@@ -353,6 +354,13 @@ contains
                 do k = loop(3,1), loop(3,2)
                     do j = loop(2,1), loop(2,2)
                         do i = loop(1,1), loop(1,2)
+                            ! No viscous stress exists across a solid-solid face.
+                            ! Solid values away from fluid are intentionally unset.
+                            if (markers(i,j,k) /= 0 .and. &
+                                markers(i-I_m(normal,1), &
+                                        j-I_m(normal,2), &
+                                        k-I_m(normal,3)) /= 0) cycle
+
                             viscosity_face = this%positive_harmonic_mean( &
                                 viscosity%cells(i,j,k), &
                                 viscosity%cells( &

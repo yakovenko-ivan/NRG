@@ -228,12 +228,12 @@ contains
         integer, dimension(3) :: lattice, index
         integer :: ix, iy, iz
         integer :: dimensions, number_of_particles, particle, dim
-        integer :: attempts, seed_size
+        integer :: attempts, seed_size, prior_particle, max_attempts
         integer, dimension(:), allocatable :: seed_vector
         real(dp), dimension(3) :: center, random_direction
-        real(dp) :: radial_fraction
+        real(dp) :: radial_fraction, exclusion_distance_sq
         character(len=24) :: initialization
-        logical :: outside
+        logical :: outside, overlapping
         integer, dimension(3) :: cell
 
         dimensions = this%domain%get_domain_dimensions()
@@ -250,7 +250,7 @@ contains
             if (dimensions < 3) lattice(3) = 1
             if (dimensions < 2) lattice(2) = 1
             number_of_particles = product(lattice)
-        case ('random_sphere')
+        case ('random_sphere', 'random_sphere_nonoverlap')
             number_of_particles = this%parameters%initial_particle_count
             if (number_of_particles <= 0 .or. &
                 this%parameters%initial_region_radius <= 0.0_dp) &
@@ -292,7 +292,9 @@ contains
 
         lattice = this%parameters%initial_lattice
         if (initialization == 'single') lattice = 1
-        if (initialization == 'random_sphere') lattice = (/number_of_particles,1,1/)
+        if (initialization == 'random_sphere' .or. &
+            initialization == 'random_sphere_nonoverlap') &
+            lattice = (/number_of_particles,1,1/)
         if (dimensions < 3) lattice(3) = 1
         if (dimensions < 2) lattice(2) = 1
         center = this%parameters%initial_position
@@ -322,8 +324,16 @@ contains
                                     this%parameters%initial_position(dim)
                             end if
                         end do
-                    else if (initialization == 'random_sphere') then
-                        do attempts = 1, 1000
+                    else if (initialization == 'random_sphere' .or. &
+                             initialization == 'random_sphere_nonoverlap') then
+                        max_attempts = 1000
+                        if (initialization == 'random_sphere_nonoverlap') then
+                            max_attempts = 100000
+                            ! Small clearance also survives ES14.6 snapshot rounding.
+                            exclusion_distance_sq = &
+                                (this%parameters%diameter * (1.0_dp + 1.0e-4_dp))**2
+                        end if
+                        do attempts = 1, max_attempts
                             call sample_isotropic_direction(dimensions, random_direction)
                             call random_number(radial_fraction)
                             if (dimensions == 2) then
@@ -334,9 +344,25 @@ contains
                             position = center + this%parameters%initial_region_radius * &
                                 radial_fraction * random_direction
                             cell = this%locate_particle_cell(position, outside)
-                            if (.not.outside) exit
+                            if (outside) cycle
+                            if (initialization == 'random_sphere_nonoverlap') then
+                                overlapping = .false.
+                                do prior_particle = 1, particle - 1
+                                    if (sum((position(1:dimensions) - &
+                                        this%particles(prior_particle)% &
+                                        coordinates(1:dimensions))**2) < &
+                                        exclusion_distance_sq) then
+                                        overlapping = .true.
+                                        exit
+                                    end if
+                                end do
+                                if (overlapping) cycle
+                            end if
+                            exit
                         end do
-                        if (outside) error stop 'active particles: sphere outside fluid domain'
+                        if (attempts > max_attempts) then
+                            error stop 'active particles: unable to place nonoverlapping particles'
+                        end if
                     else
                         do dim = 1, dimensions
                             position(dim) = lower(dim) + &

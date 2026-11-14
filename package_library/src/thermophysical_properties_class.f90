@@ -660,7 +660,7 @@ contains
             sum_harmonic=sum_harmonic+mole_fraction/mu_specie
         end do
         if (sum_harmonic>1.0e-10_dp) then
-            mu_mix=0.5_dp*(sum_arithmetic+1.0_dp/sum_harmonic)
+            mu_mix=0.5_dp*(sum_arithmetic+1.0_dp/sum_harmonic) * 45.0_dp ! Viscosity of water, for active matter problems
         end if
     end function mixture_dynamic_viscosity
 
